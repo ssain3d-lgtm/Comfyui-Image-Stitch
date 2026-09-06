@@ -1,6 +1,6 @@
 # Comfyui-Image-Stitch
 
-**Multi Stitch Images** for ComfyUI — paste many images into one node, crop / rotate / flip each image, drag thumbnails to reorder them, then output a classic stitched strip or a configurable grid.
+**Multi Stitch Images** for ComfyUI — paste many images into one node, crop / rotate / flip each image, click an image to edit it, drag its dedicated `≡` handle to reorder, then output a classic stitched strip or a configurable grid.
 
 **[한국어](#-한국어) · [English](#-english)**
 
@@ -13,14 +13,17 @@
 `Multi Stitch Images`는 여러 이미지를 한 노드에 바로 붙여 넣고 편집한 뒤 하나의 `IMAGE`로 합치는 ComfyUI 커스텀 노드입니다.
 
 - **Ctrl+V 다중 이미지 붙여넣기**
-- **썸네일 Drag Reorder**
+- 이미지 클릭 → **즉시 Edit**
+- 전용 **`≡` Drag Handle**로 이미지 순서 변경
 - 이미지별 **Crop / 90° Rotate / Flip H / Flip V**
+- Free Crop용 **상/하/좌/우 + 모서리 핸들**
 - **Strip / Grid** 레이아웃
 - `direction`: `right / down / left / up`
 - `match_image_size`
 - `spacing_width`
 - 기본색 + **Custom spacing color**
 - 노드 내부 **예상 최종 해상도 표시**
+- 초대형 결과 생성 전 **Output Size Safety Guard**
 - 일반 `IMAGE` 출력 → `Preview Image`, `Save Image`, `VAE Encode` 등에 바로 연결
 - 추가 Python 패키지 불필요
 
@@ -78,15 +81,15 @@ cd Comfyui-Image-Stitch
 git pull
 ```
 
-그 다음 ComfyUI를 재시작합니다.
+그 다음 ComfyUI를 완전히 재시작하고, 프론트엔드 변경이 보이지 않으면 브라우저에서 `Ctrl+F5`를 한 번 실행하세요.
 
 ## 사용법 — Step by Step
 
 1. **`Multi Stitch Images` 노드를 추가**합니다.
 2. 노드를 한 번 클릭해 **선택**합니다.
 3. 이미지 파일/브라우저 이미지/스크린샷을 복사한 뒤 **Ctrl+V** 합니다.
-4. 썸네일을 **드래그해서 순서 변경**합니다.
-5. 썸네일을 **클릭**해 Crop / Rotate / Flip을 편집합니다.
+4. 편집할 이미지는 **썸네일 이미지 영역을 한 번 클릭**합니다.
+5. 순서를 바꾸려면 썸네일 하단 중앙의 **`≡` 핸들만 잡고 드래그**합니다.
 6. `layout_mode`를 선택합니다.
    - `strip` → 기존 Stitch Images처럼 한 줄/한 열로 연결
    - `grid` → 여러 행/열로 자동 배치
@@ -99,10 +102,11 @@ git pull
 
 ![Multi Stitch Images Korean editor](docs/crop-editor-ko.svg)
 
-썸네일을 짧게 클릭하면 이미지별 편집기가 열립니다.
+썸네일 이미지 영역을 한 번 클릭하면 이미지별 편집기가 열립니다.
 
 - Crop 내부 드래그 → 영역 이동
-- 모서리 드래그 → Crop 크기 조절
+- **상/하/좌/우 검정 막대 핸들** → 해당 변만 조절
+- **모서리 검정 핸들** → 가로/세로 동시 조절
 - Crop 바깥 드래그 → 새 Crop 영역 생성
 - 비율 프리셋: `Free / Original / 1:1 / 4:3 / 3:2 / 16:9 / 9:16`
 - `↶ 90° / ↷ 90°`
@@ -114,12 +118,15 @@ Crop / 회전 / 반전 정보만 workflow에 저장하는 **비파괴 방식**�
 
 ## Drag Reorder
 
-썸네일 중앙을 누른 뒤 원하는 위치로 드래그합니다.
+Edit 클릭과 Reorder 제스처를 서로 분리했습니다.
 
-- 짧게 클릭 → 이미지 편집기
-- 일정 거리 이상 이동 → Drag Reorder
-- 드래그 대상 → 파란 테두리 표시
+- **이미지 영역 클릭** → Edit 즉시 열기
+- 썸네일 하단 중앙의 **`≡`만 드래그** → 순서 변경
+- Drag 판정 거리는 ComfyUI Canvas 좌표가 아닌 **실제 화면 픽셀 기준**이라 Zoom 배율에 영향을 덜 받습니다.
+- 현재 드롭 대상 → 파란 테두리 표시
 - `‹ / ›` 버튼으로 한 칸씩 이동도 가능
+
+이 방식은 이미지 클릭이 Drag로 잘못 판정되어 편집기가 안 열리는 문제를 줄이기 위한 설계입니다.
 
 ## Strip / Grid
 
@@ -163,6 +170,20 @@ white / black / red / green / blue / custom
 
 `custom`을 선택한 뒤 **Custom color** 버튼을 누르면 브라우저 색상 선택기가 열립니다.
 
+## Output Size Safety Guard
+
+여러 장의 고해상도 이미지를 `match_image_size = false`로 길게 붙이면 결과 Tensor가 매우 커질 수 있습니다. 이 노드는 소스 이미지를 전부 Tensor로 디코딩하기 전에 최종 크기를 먼저 계산합니다.
+
+기본 안전 한도:
+
+```text
+최종 출력: 128 MiPixels 이하
+한 변 최대: 131,072 px
+이미지 수: 최대 256장
+```
+
+한도를 초과하면 예상 해상도 / MP / float32 메모리 크기를 표시하고 실행을 중단합니다. 이 경우 이미지 수를 줄이거나, Crop/Resize를 하거나, Grid를 사용하거나, `match_image_size = true`를 사용하세요.
+
 ## 붙여넣기 / 저장 방식
 
 최신 ComfyUI의 이미지 paste routing을 이용합니다. 노드는 `previewMediaType = "image"`와 `pasteFiles()`를 제공하여 전역 Ctrl+V 가로채기를 최소화합니다.
@@ -192,14 +213,17 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 `Multi Stitch Images` is a ComfyUI custom node for pasting many images directly into one node, editing each image, and composing the result into a single `IMAGE` output.
 
 - **Paste multiple images with Ctrl+V**
-- **Drag thumbnails to reorder**
+- Click an image → **open Edit immediately**
+- Dedicated **`≡` drag handle** for reordering
 - Per-image **Crop / 90° Rotate / Flip H / Flip V**
+- **Top / bottom / left / right + corner handles** for Free Crop
 - **Strip / Grid** layouts
 - `direction`: `right / down / left / up`
 - `match_image_size`
 - `spacing_width`
 - Built-in colors + **Custom spacing color**
 - **Estimated final resolution** displayed inside the node
+- **Output Size Safety Guard** before giant tensors are allocated
 - Standard `IMAGE` output → `Preview Image`, `Save Image`, `VAE Encode`, etc.
 - No extra Python packages required
 
@@ -255,15 +279,15 @@ cd Comfyui-Image-Stitch
 git pull
 ```
 
-Then restart ComfyUI.
+Then fully restart ComfyUI. If frontend changes are still cached, refresh the browser once with `Ctrl+F5`.
 
 ## Usage — Step by Step
 
 1. Add the **`Multi Stitch Images`** node.
 2. Click the node once so it is **selected**.
 3. Copy image files, a browser image, or a screenshot and press **Ctrl+V**.
-4. **Drag thumbnails** to reorder them.
-5. **Click a thumbnail** to Crop / Rotate / Flip it.
+4. **Single-click the image area** of a thumbnail to Crop / Rotate / Flip it.
+5. To reorder, drag only the **`≡` handle** at the bottom center of the thumbnail.
 6. Choose `layout_mode`.
    - `strip` → classic one-row / one-column stitching
    - `grid` → automatic multi-row / multi-column layout
@@ -276,10 +300,11 @@ Then restart ComfyUI.
 
 ![Multi Stitch Images English editor](docs/crop-editor-en.svg)
 
-Short-click a thumbnail to open the editor.
+Single-click the thumbnail image area to open the editor.
 
 - Drag inside the crop → move the crop
-- Drag a corner → resize the crop
+- Drag the **black top / bottom / left / right handle** → resize one edge
+- Drag a **black corner handle** → resize two edges
 - Drag outside the crop → draw a new crop
 - Aspect presets: `Free / Original / 1:1 / 4:3 / 3:2 / 16:9 / 9:16`
 - `↶ 90° / ↷ 90°`
@@ -291,10 +316,11 @@ Crop / rotation / flip settings are stored **non-destructively** in the workflow
 
 ## Drag Reorder
 
-Press a thumbnail and drag it to another thumbnail position.
+Editing and reordering use separate gestures.
 
-- Short click → open editor
-- Move beyond the drag threshold → reorder mode
+- **Click image area** → open editor immediately
+- Drag the bottom-center **`≡` handle** → reorder
+- Drag threshold is measured in **real browser pixels**, not ComfyUI graph coordinates, so canvas zoom does not make normal clicks behave like drags.
 - Current drop target → blue border
 - `‹ / ›` buttons remain available for one-step movement
 
@@ -340,6 +366,20 @@ white / black / red / green / blue / custom
 
 Choose `custom`, then click **Custom color** to open the browser color picker.
 
+## Output Size Safety Guard
+
+A long strip of high-resolution images can create a very large float32 tensor, especially with `match_image_size = false`. The node estimates the final canvas before decoding all source images into tensors.
+
+Default safety limits:
+
+```text
+Final output: max 128 MiPixels
+Maximum side: 131,072 px
+Images per node: max 256
+```
+
+If the limit would be exceeded, execution stops with the estimated resolution, megapixels, and approximate float32 output memory. Reduce the image count, Crop/Resize the sources, use Grid, or enable `match_image_size`.
+
 ## Paste / storage behavior
 
 The node uses current ComfyUI image paste routing through `previewMediaType = "image"` and `pasteFiles()`, minimizing global Ctrl+V interception.
@@ -362,16 +402,18 @@ If you move the workflow to another machine, copy the referenced input images as
 
 ---
 
-## Compatibility
+## Compatibility / Testing
 
 - Designed for current ComfyUI custom-node / canvas APIs and native image clipboard routing.
 - Uses dependencies normally included with ComfyUI: **PyTorch, Pillow, NumPy**.
 - Does **not** modify ComfyUI core files.
-- Backend safety limit: **256 images per node**.
+- Backend limit: **256 images per node**.
+- Output safety limit: **128 MiPixels / 131,072 px per side**.
+- GitHub Actions checks Python syntax, JavaScript syntax, Strip directions, Grid placement, Crop/rotation dimensions, custom colors, unsafe paths, and the output-size guard.
 
 ## Credits
 
-The classic strip controls and expected behavior follow ComfyUI's built-in **Stitch Images** node, which was upstreamed from **Kijai's ComfyUI-KJNodes**. This project adds multi-image paste, non-destructive editing, drag reorder, Grid composition, and custom spacing colors around that model.
+The classic strip controls and expected behavior follow ComfyUI's built-in **Stitch Images** node, which was upstreamed from **Kijai's ComfyUI-KJNodes**. This project adds multi-image paste, non-destructive editing, dedicated drag-handle reordering, Grid composition, custom spacing colors, and output safety checks around that model.
 
 ## License
 
