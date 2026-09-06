@@ -19,6 +19,12 @@ _COLOR_MAP = {
     "blue": (0.0, 0.0, 1.0),
 }
 
+# A ComfyUI IMAGE is float32 RGB, so 128 MiPixels is already about 1.5 GiB
+# for the final tensor alone. This guard is intentionally conservative enough
+# to stop accidental giant strips/grids before all source images are decoded.
+_MAX_OUTPUT_PIXELS = 128 * 1024 * 1024
+_MAX_OUTPUT_SIDE = 131_072
+
 
 def _safe_input_path(item: dict) -> Path:
     """Resolve an uploaded ComfyUI input image without allowing path traversal."""
@@ -94,18 +100,37 @@ def _apply_transform(image: Image.Image, item: dict) -> Image.Image:
     return image
 
 
+def _crop_box(width: int, height: int, crop: object) -> tuple[int, int, int, int]:
+    x, y, w, h = _normalize_crop(crop)
+    left = max(0, min(width - 1, int(round(x * width))))
+    top = max(0, min(height - 1, int(round(y * height))))
+    right = max(left + 1, min(width, int(round((x + w) * width))))
+    bottom = max(top + 1, min(height, int(round((y + h) * height))))
+    return left, top, right, bottom
+
+
+def _item_output_dimensions(item: dict) -> tuple[int, int]:
+    """Return exact post-EXIF/rotate/crop dimensions without decoding to a tensor."""
+    path = _safe_input_path(item)
+    with Image.open(path) as source:
+        image = ImageOps.exif_transpose(source)
+        width, height = image.size
+
+    rotation, _, _ = _normalize_transform(item)
+    if rotation in {90, 270}:
+        width, height = height, width
+
+    left, top, right, bottom = _crop_box(width, height, item.get("crop"))
+    return right - left, bottom - top
+
+
 def _load_image(item: dict) -> torch.Tensor:
     path = _safe_input_path(item)
     with Image.open(path) as source:
         image = ImageOps.exif_transpose(source).convert("RGB")
         image = _apply_transform(image, item)
-        x, y, w, h = _normalize_crop(item.get("crop"))
-
         width, height = image.size
-        left = max(0, min(width - 1, int(round(x * width))))
-        top = max(0, min(height - 1, int(round(y * height))))
-        right = max(left + 1, min(width, int(round((x + w) * width))))
-        bottom = max(top + 1, min(height, int(round((y + h) * height))))
+        left, top, right, bottom = _crop_box(width, height, item.get("crop"))
 
         if (left, top, right, bottom) != (0, 0, width, height):
             image = image.crop((left, top, right, bottom))
@@ -161,6 +186,73 @@ def _resolve_color(spacing_color: str, custom_spacing_color: str) -> tuple[float
     if spacing_color == "custom":
         return _parse_hex_color(custom_spacing_color)
     return _COLOR_MAP.get(spacing_color, _COLOR_MAP["white"])
+
+
+def _estimate_output_dimensions(
+    dimensions: list[tuple[int, int]],
+    layout_mode: str,
+    direction: str,
+    match_image_size: bool,
+    grid_columns: int,
+    spacing_width: int,
+) -> tuple[int, int]:
+    """Estimate the exact canvas size using the same resize rules as composition."""
+    if not dimensions:
+        raise ValueError("Multi Stitch Images: paste or add at least one image first.")
+
+    direction = direction if direction in {"right", "down", "left", "up"} else "right"
+    layout_mode = layout_mode if layout_mode in {"strip", "grid"} else "strip"
+    spacing_width = max(0, int(spacing_width))
+    dims = [(max(1, int(w)), max(1, int(h))) for w, h in dimensions]
+
+    if layout_mode == "grid":
+        cols = max(1, min(int(grid_columns), len(dims)))
+        rows = math.ceil(len(dims) / cols)
+        if match_image_size:
+            cell_w, cell_h = dims[0]
+        else:
+            cell_w = max(w for w, _ in dims)
+            cell_h = max(h for _, h in dims)
+        return (
+            cols * cell_w + spacing_width * (cols - 1),
+            rows * cell_h + spacing_width * (rows - 1),
+        )
+
+    if match_image_size and len(dims) > 1:
+        first_w, first_h = dims[0]
+        prepared = [dims[0]]
+        for w, h in dims[1:]:
+            if direction in {"left", "right"}:
+                prepared.append((max(1, int(round(w * (first_h / h)))), first_h))
+            else:
+                prepared.append((first_w, max(1, int(round(h * (first_w / w))))))
+        dims = prepared
+
+    if direction in {"left", "right"}:
+        return (
+            sum(w for w, _ in dims) + spacing_width * (len(dims) - 1),
+            max(h for _, h in dims),
+        )
+    return (
+        max(w for w, _ in dims),
+        sum(h for _, h in dims) + spacing_width * (len(dims) - 1),
+    )
+
+
+def _validate_output_dimensions(width: int, height: int) -> None:
+    pixels = int(width) * int(height)
+    if width <= _MAX_OUTPUT_SIDE and height <= _MAX_OUTPUT_SIDE and pixels <= _MAX_OUTPUT_PIXELS:
+        return
+
+    megapixels = pixels / 1_000_000
+    approx_gib = pixels * 3 * 4 / (1024 ** 3)
+    limit_mp = _MAX_OUTPUT_PIXELS / 1_000_000
+    raise ValueError(
+        "Multi Stitch Images: estimated output "
+        f"{width:,} × {height:,} ({megapixels:.1f} MP, ~{approx_gib:.2f} GiB float32) "
+        f"exceeds the safety limit ({limit_mp:.1f} MP / {_MAX_OUTPUT_SIDE:,} px per side). "
+        "Reduce image count, crop/resize the sources, use Grid, or enable match_image_size."
+    )
 
 
 def _compose_strip(
@@ -256,8 +348,6 @@ def _compose_grid(
 
     for index, img in enumerate(prepared):
         row, col = _grid_position(index, rows, cols, direction)
-        # Column-major flow can produce a final column index beyond cols only when
-        # the user asks for fewer cells than images; clamp defensively.
         if row >= rows or col >= cols:
             continue
         h, w = img.shape[1], img.shape[2]
@@ -287,6 +377,17 @@ def _compose(
     layout_mode = layout_mode if layout_mode in {"strip", "grid"} else "strip"
     spacing_width = max(0, int(spacing_width))
     color_tuple = _resolve_color(spacing_color, custom_spacing_color)
+
+    dimensions = [(int(img.shape[2]), int(img.shape[1])) for img in images]
+    out_w, out_h = _estimate_output_dimensions(
+        dimensions,
+        layout_mode,
+        direction,
+        match_image_size,
+        grid_columns,
+        spacing_width,
+    )
+    _validate_output_dimensions(out_w, out_h)
 
     if layout_mode == "grid":
         return _compose_grid(
@@ -333,8 +434,8 @@ class MultiStitchImages:
     FUNCTION = "stitch"
     CATEGORY = "image/transform"
     DESCRIPTION = (
-        "Paste multiple images directly into this node with Ctrl+V, drag thumbnails to reorder, "
-        "click a thumbnail to crop/rotate/flip, then output a strip or grid."
+        "Paste multiple images directly into this node with Ctrl+V, click an image to edit, "
+        "drag its ≡ handle to reorder, then output a strip or grid."
     )
 
     def stitch(
@@ -358,7 +459,19 @@ class MultiStitchImages:
         if len(items) > 256:
             raise ValueError("Multi Stitch Images: maximum 256 images per node.")
 
-        images = [_load_image(item) for item in items if isinstance(item, dict)]
+        valid_items = [item for item in items if isinstance(item, dict)]
+        dimensions = [_item_output_dimensions(item) for item in valid_items]
+        out_w, out_h = _estimate_output_dimensions(
+            dimensions,
+            layout_mode,
+            direction,
+            match_image_size,
+            grid_columns,
+            spacing_width,
+        )
+        _validate_output_dimensions(out_w, out_h)
+
+        images = [_load_image(item) for item in valid_items]
         return (
             _compose(
                 images,
