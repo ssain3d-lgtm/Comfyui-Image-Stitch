@@ -3,6 +3,7 @@ import { openCropEditor } from "./crop_editor.js";
 import {
     getWidget,
     hideWidget,
+    imageUrl,
     isCropped,
     isTransformed,
     loadTransformedThumb,
@@ -306,6 +307,79 @@ function localPos(node, event, pos, graphCanvas) {
         }
     } catch (_) {}
     return Array.isArray(pos) ? pos : [0, 0];
+}
+
+function notify(summary, detail, severity) {
+    const toast = app.extensionManager?.toast;
+    if (toast?.add) {
+        toast.add({ severity: severity || "success", summary, detail, life: 3000 });
+    } else if (severity === "error") {
+        alert(`${summary}\n${detail}`);
+    }
+}
+
+async function originalPngBlob(item) {
+    const response = await fetch(imageUrl(item));
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+    const blob = await response.blob();
+    if (blob.type === "image/png") return blob;
+
+    // Clipboard image support is effectively PNG-only, so re-encode anything
+    // else. This still copies the full original frame, not the edited crop.
+    const bitmap = await createImageBitmap(blob);
+    const canvas = document.createElement("canvas");
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    canvas.getContext("2d").drawImage(bitmap, 0, 0);
+    bitmap.close?.();
+    return await new Promise((resolve, reject) => {
+        canvas.toBlob(
+            (out) => (out ? resolve(out) : reject(new Error("could not encode the image as PNG"))),
+            "image/png",
+        );
+    });
+}
+
+async function copyOriginalImage(node, index) {
+    const item = node._msImages?.[index];
+    if (!item) return;
+
+    if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
+        notify(
+            "Copy failed",
+            "The clipboard API needs a secure context (https:// or localhost).",
+            "error",
+        );
+        return;
+    }
+
+    try {
+        try {
+            // Handing over the pending promise keeps the click's user gesture
+            // alive across the fetch, which Safari requires.
+            await navigator.clipboard.write([
+                new ClipboardItem({ "image/png": originalPngBlob(item) }),
+            ]);
+        } catch (_) {
+            // Browsers that reject a pending promise inside ClipboardItem.
+            const blob = await originalPngBlob(item);
+            await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+        }
+        notify("Copied", `Original image #${index + 1} copied to the clipboard.`);
+    } catch (error) {
+        notify("Copy failed", String(error?.message || error), "error");
+    }
+}
+
+function thumbIndexAt(node, graphCanvas) {
+    const mouse = graphCanvas?.graph_mouse || graphCanvas?.canvas_mouse;
+    if (node.flags?.collapsed || !Array.isArray(mouse)) return -1;
+    const x = mouse[0] - node.pos[0];
+    const y = mouse[1] - node.pos[1];
+    for (let i = 0; i < (node._msImages?.length || 0); i++) {
+        if (inRect(x, y, thumbLayout(node, i))) return i;
+    }
+    return -1;
 }
 
 function clientPos(event) {
@@ -667,7 +741,8 @@ app.registerExtension({
 
         const mouseDown = nodeType.prototype.onMouseDown;
         nodeType.prototype.onMouseDown = function (event, pos, graphCanvas) {
-            if (!this.flags?.collapsed && this._msImages?.length) {
+            const primary = event?.button === undefined || event.button === 0;
+            if (primary && !this.flags?.collapsed && this._msImages?.length) {
                 const [x, y] = localPos(this, event, pos, graphCanvas);
 
                 for (let i = 0; i < this._msImages.length; i++) {
@@ -696,6 +771,22 @@ app.registerExtension({
                 }
             }
             return mouseDown?.apply(this, arguments) ?? false;
+        };
+
+        const extraMenu = nodeType.prototype.getExtraMenuOptions;
+        nodeType.prototype.getExtraMenuOptions = function (graphCanvas, options) {
+            const r = extraMenu?.apply(this, arguments);
+            const index = thumbIndexAt(this, graphCanvas);
+            if (index >= 0 && Array.isArray(options)) {
+                options.unshift(
+                    {
+                        content: `Copy original image #${index + 1}`,
+                        callback: () => copyOriginalImage(this, index),
+                    },
+                    null,
+                );
+            }
+            return r;
         };
 
         const mouseMove = nodeType.prototype.onMouseMove;

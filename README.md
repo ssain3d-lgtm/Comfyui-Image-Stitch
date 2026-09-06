@@ -15,6 +15,7 @@
 - **Ctrl+V 다중 이미지 붙여넣기**
 - 이미지 클릭 → **즉시 Edit**
 - 전용 **`≡` Drag Handle**로 이미지 순서 변경
+- 썸네일 **우클릭 → 원본 이미지 클립보드 복사**
 - 이미지별 **Crop / 90° Rotate / Flip H / Flip V**
 - Free Crop용 **상/하/좌/우 + 모서리 핸들**
 - **Strip / Grid** 레이아웃
@@ -90,6 +91,7 @@ git pull
 3. 이미지 파일/브라우저 이미지/스크린샷을 복사한 뒤 **Ctrl+V** 합니다.
 4. 편집할 이미지는 **썸네일 이미지 영역을 한 번 클릭**합니다.
 5. 순서를 바꾸려면 썸네일 하단 중앙의 **`≡` 핸들만 잡고 드래그**합니다.
+   - 썸네일을 **우클릭**하면 `Copy original image #N` 메뉴가 나옵니다. 클릭하면 **편집 전 원본 이미지 전체**가 클립보드에 복사됩니다.
 6. `layout_mode`를 선택합니다.
    - `strip` → 기존 Stitch Images처럼 한 줄/한 열로 연결
    - `grid` → 여러 행/열로 자동 배치
@@ -124,6 +126,7 @@ Edit 클릭과 Reorder 제스처를 서로 분리했습니다.
 
 - **이미지 영역 클릭** → Edit 즉시 열기
 - 썸네일 하단 중앙의 **`≡`만 드래그** → 순서 변경
+- 썸네일 **우클릭** → `Copy original image #N` → **원본 이미지 복사**
 - Drag 판정 거리는 ComfyUI Canvas 좌표가 아닌 **실제 화면 픽셀 기준**이라 Zoom 배율에 영향을 덜 받습니다.
 - 현재 드롭 대상 → 파란 테두리 표시
 - `‹ / ›` 버튼으로 한 칸씩 이동도 가능
@@ -217,6 +220,7 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 - **Paste multiple images with Ctrl+V**
 - Click an image → **open Edit immediately**
 - Dedicated **`≡` drag handle** for reordering
+- **Right-click a thumbnail to copy the original image** to the clipboard
 - Per-image **Crop / 90° Rotate / Flip H / Flip V**
 - **Top / bottom / left / right + corner handles** for Free Crop
 - **Strip / Grid** layouts
@@ -290,6 +294,7 @@ Then fully restart ComfyUI. If frontend changes are still cached, refresh the br
 3. Copy image files, a browser image, or a screenshot and press **Ctrl+V**.
 4. **Single-click the image area** of a thumbnail to Crop / Rotate / Flip it.
 5. To reorder, drag only the **`≡` handle** at the bottom center of the thumbnail.
+   - **Right-click** a thumbnail for `Copy original image #N`. It copies the **whole original image, before any edits**, to the clipboard.
 6. Choose `layout_mode`.
    - `strip` → classic one-row / one-column stitching
    - `grid` → automatic multi-row / multi-column layout
@@ -324,6 +329,7 @@ Editing and reordering use separate gestures.
 
 - **Click image area** → open editor immediately
 - Drag the bottom-center **`≡` handle** → reorder
+- **Right-click** a thumbnail → `Copy original image #N` → copies the original image
 - Drag threshold is measured in **real browser pixels**, not ComfyUI graph coordinates, so canvas zoom does not make normal clicks behave like drags.
 - Current drop target → blue border
 - `‹ / ›` buttons remain available for one-step movement
