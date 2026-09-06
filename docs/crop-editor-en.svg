@@ -8,19 +8,24 @@
   <rect x="350" y="108" width="480" height="52" fill="#000" opacity=".56"/><rect x="350" y="448" width="480" height="52" fill="#000" opacity=".56"/><rect x="350" y="160" width="64" height="288" fill="#000" opacity=".56"/><rect x="766" y="160" width="64" height="288" fill="#000" opacity=".56"/>
   <rect x="414" y="160" width="352" height="288" fill="none" stroke="#fff" stroke-width="3"/>
   <line x1="531" y1="160" x2="531" y2="448" stroke="#fff" opacity=".42"/><line x1="649" y1="160" x2="649" y2="448" stroke="#fff" opacity=".42"/><line x1="414" y1="256" x2="766" y2="256" stroke="#fff" opacity=".42"/><line x1="414" y1="352" x2="766" y2="352" stroke="#fff" opacity=".42"/>
-  <g fill="#fff"><rect x="408" y="154" width="12" height="12"/><rect x="760" y="154" width="12" height="12"/><rect x="408" y="442" width="12" height="12"/><rect x="760" y="442" width="12" height="12"/></g>
+  <g fill="#050505" stroke="#fff" stroke-width="1">
+    <rect x="568" y="160" width="44" height="9" rx="3"/><rect x="568" y="439" width="44" height="9" rx="3"/>
+    <rect x="414" y="282" width="9" height="44" rx="3"/><rect x="757" y="282" width="9" height="44" rx="3"/>
+    <rect x="414" y="160" width="13" height="13" rx="3"/><rect x="753" y="160" width="13" height="13" rx="3"/>
+    <rect x="414" y="435" width="13" height="13" rx="3"/><rect x="753" y="435" width="13" height="13" rx="3"/>
+  </g>
   <g font-family="Segoe UI,Arial" font-size="12" fill="#eee">
     <rect x="72" y="535" width="72" height="31" rx="7" fill="#303134" stroke="#5f6368"/><text x="88" y="555">↶ 90°</text>
     <rect x="152" y="535" width="72" height="31" rx="7" fill="#303134" stroke="#5f6368"/><text x="168" y="555">↷ 90°</text>
     <rect x="232" y="535" width="72" height="31" rx="7" fill="#35435d" stroke="#8ab4f8"/><text x="250" y="555">Flip H</text>
     <rect x="312" y="535" width="72" height="31" rx="7" fill="#303134" stroke="#5f6368"/><text x="330" y="555">Flip V</text>
     <text x="395" y="555" fill="#9aa0a6">Rotate 90° • H</text>
-    <text x="525" y="555" fill="#ccc">Aspect</text><rect x="575" y="535" width="92" height="31" rx="7" fill="#303134" stroke="#5f6368"/><text x="605" y="555">4:3</text>
+    <text x="525" y="555" fill="#ccc">Aspect</text><rect x="575" y="535" width="92" height="31" rx="7" fill="#303134" stroke="#5f6368"/><text x="605" y="555">Free</text>
     <rect x="677" y="535" width="92" height="31" rx="7" fill="#303134" stroke="#5f6368"/><text x="693" y="555">Reset crop</text>
     <rect x="779" y="535" width="82" height="31" rx="7" fill="#303134" stroke="#5f6368"/><text x="796" y="555">Reset all</text>
     <rect x="900" y="535" width="72" height="31" rx="7" fill="#303134" stroke="#5f6368"/><text x="918" y="555">Cancel</text>
     <rect x="982" y="535" width="126" height="31" rx="7" fill="#1a73e8"/><text x="1028" y="555" fill="#fff">Apply</text>
   </g>
-  <text x="72" y="594" font-family="Segoe UI,Arial" font-size="12" fill="#aaa">Crop / rotate / flip are stored non-destructively in the workflow. Rotate or flip resets the crop to the full transformed image.</text>
-  <text x="72" y="617" font-family="Segoe UI,Arial" font-size="12" fill="#8f8f8f">Drag inside crop to move • drag corners to resize • drag outside to draw a new crop • aspect presets included</text>
+  <text x="72" y="594" font-family="Segoe UI,Arial" font-size="12" fill="#aaa">Free crop: drag the black top / bottom / left / right bars or the corner handles for easier resizing.</text>
+  <text x="72" y="617" font-family="Segoe UI,Arial" font-size="12" fill="#8f8f8f">Inside crop: move • black bars/corners: resize • outside: draw a new crop • source image stays unchanged</text>
 </svg>
