@@ -18,7 +18,9 @@ const THUMB_HEIGHT = 92;
 const THUMB_GAP = 7;
 const THUMB_COLS = 3;
 const MIN_NODE_WIDTH = 420;
-const DRAG_THRESHOLD = 12;
+// Deliberately measured in browser/client pixels, not graph coordinates, so
+// ComfyUI zoom cannot turn a normal click into an accidental reorder.
+const DRAG_THRESHOLD_PX = 6;
 
 function visibleWidgetBottom(node) {
     let bottom = 92;
@@ -40,6 +42,15 @@ function thumbLayout(node, index) {
         y: top + row * (THUMB_HEIGHT + THUMB_GAP),
         w: cellW,
         h: THUMB_HEIGHT,
+    };
+}
+
+function thumbActionRects(r) {
+    return {
+        remove: { x: r.x + r.w - 23, y: r.y + 3, w: 20, h: 19 },
+        prev: { x: r.x + 3, y: r.y + r.h - 22, w: 20, h: 19 },
+        drag: { x: r.x + r.w / 2 - 13, y: r.y + r.h - 22, w: 26, h: 19 },
+        next: { x: r.x + r.w - 23, y: r.y + r.h - 22, w: 20, h: 19 },
     };
 }
 
@@ -189,7 +200,7 @@ function drawThumbs(node, ctx) {
     const predicted = predictedSize(node);
     ctx.fillText(
         count
-            ? `${count} image${count === 1 ? "" : "s"}${predicted ? `  •  ~${predicted.w}×${predicted.h}` : ""}  •  single-click edit / drag reorder`
+            ? `${count} image${count === 1 ? "" : "s"}${predicted ? `  •  ~${predicted.w}×${predicted.h}` : ""}  •  click image edit / drag ≡ reorder`
             : "Select this node, then Ctrl+V images",
         9,
         top + 12,
@@ -210,6 +221,7 @@ function drawThumbs(node, ctx) {
 
     items.forEach((item, index) => {
         const r = thumbLayout(node, index);
+        const actions = thumbActionRects(r);
         const press = node._msThumbPress;
         const isSource = press?.dragging && press.index === index;
         const isTarget = press?.dragging && press.target === index;
@@ -263,14 +275,18 @@ function drawThumbs(node, ctx) {
             ctx.fillText(`${t.rotation}°${t.flip_h ? "H" : ""}${t.flip_v ? "V" : ""}`, badgeX + 4, r.y + 17);
         }
 
-        ctx.fillStyle = "rgba(0,0,0,.72)";
-        ctx.fillRect(r.x + r.w - 23, r.y + 3, 20, 19);
-        ctx.fillRect(r.x + 3, r.y + r.h - 22, 20, 19);
-        ctx.fillRect(r.x + r.w - 23, r.y + r.h - 22, 20, 19);
+        ctx.fillStyle = "rgba(0,0,0,.76)";
+        ctx.fillRect(actions.remove.x, actions.remove.y, actions.remove.w, actions.remove.h);
+        ctx.fillRect(actions.prev.x, actions.prev.y, actions.prev.w, actions.prev.h);
+        ctx.fillRect(actions.drag.x, actions.drag.y, actions.drag.w, actions.drag.h);
+        ctx.fillRect(actions.next.x, actions.next.y, actions.next.w, actions.next.h);
         ctx.fillStyle = "#fff";
-        ctx.fillText("×", r.x + r.w - 18, r.y + 17);
-        ctx.fillText("‹", r.x + 9, r.y + r.h - 7);
-        ctx.fillText("›", r.x + r.w - 17, r.y + r.h - 7);
+        ctx.fillText("×", actions.remove.x + 5, actions.remove.y + 14);
+        ctx.fillText("‹", actions.prev.x + 6, actions.prev.y + 15);
+        ctx.textAlign = "center";
+        ctx.fillText("≡", actions.drag.x + actions.drag.w / 2, actions.drag.y + 14);
+        ctx.textAlign = "left";
+        ctx.fillText("›", actions.next.x + 6, actions.next.y + 15);
         ctx.restore();
     });
 
@@ -288,6 +304,12 @@ function localPos(node, event, pos, graphCanvas) {
         }
     } catch (_) {}
     return Array.isArray(pos) ? pos : [0, 0];
+}
+
+function clientPos(event) {
+    const x = Number(event?.clientX);
+    const y = Number(event?.clientY);
+    return Number.isFinite(x) && Number.isFinite(y) ? [x, y] : null;
 }
 
 const inRect = (x, y, r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
@@ -468,7 +490,7 @@ function detachPressFallback(press) {
     press.windowPointerUp = null;
 }
 
-function finishThumbnailPress(node, graphCanvas) {
+function finishThumbnailDrag(node, graphCanvas) {
     const press = node?._msThumbPress;
     if (!press || press.finished) return false;
 
@@ -477,42 +499,49 @@ function finishThumbnailPress(node, graphCanvas) {
     node._msThumbPress = null;
     try { node.captureInput?.(false); } catch (_) {}
 
-    if (press.dragging) {
-        reorderItem(node, press.index, press.target);
-    } else {
-        openEditor(node, press.index);
-    }
+    if (press.dragging) reorderItem(node, press.index, press.target);
 
     node.graph?.setDirtyCanvas(true, false);
     if (graphCanvas) graphCanvas._mouse_down_widget = false;
     return true;
 }
 
-function startThumbnailPress(node, index, x, y, graphCanvas) {
+function startThumbnailDrag(node, index, localX, localY, event, graphCanvas) {
+    const client = clientPos(event);
     const press = {
         index,
         target: index,
-        startX: x,
-        startY: y,
-        currentX: x,
-        currentY: y,
+        startX: localX,
+        startY: localY,
+        currentX: localX,
+        currentY: localY,
+        startClientX: client?.[0] ?? null,
+        startClientY: client?.[1] ?? null,
         dragging: false,
         finished: false,
         graphCanvas,
         windowPointerUp: null,
     };
 
-    // ComfyUI's node-level onMouseUp can occasionally be swallowed by canvas
-    // selection/capture handling. A capture-phase window fallback guarantees that
-    // a normal single click still opens the editor.
+    // Node-level mouseup can be swallowed by canvas capture/selection. Keep a
+    // capture-phase fallback so drag state is always released cleanly.
     press.windowPointerUp = () => {
-        setTimeout(() => finishThumbnailPress(node, graphCanvas), 0);
+        setTimeout(() => finishThumbnailDrag(node, graphCanvas), 0);
     };
     window.addEventListener("pointerup", press.windowPointerUp, true);
     window.addEventListener("mouseup", press.windowPointerUp, true);
 
     node._msThumbPress = press;
     try { node.captureInput?.(true); } catch (_) {}
+}
+
+function dragDistancePx(press, event, localX, localY) {
+    const client = clientPos(event);
+    if (client && press.startClientX != null && press.startClientY != null) {
+        return Math.hypot(client[0] - press.startClientX, client[1] - press.startClientY);
+    }
+    // Old/odd canvas event fallback. This is only used if client coordinates are absent.
+    return Math.hypot(localX - press.startX, localY - press.startY);
 }
 
 function setupNode(node) {
@@ -623,20 +652,21 @@ app.registerExtension({
                     const r = thumbLayout(this, i);
                     if (!inRect(x, y, r)) continue;
 
-                    const remove = { x: r.x + r.w - 23, y: r.y + 3, w: 20, h: 19 };
-                    const prev = { x: r.x + 3, y: r.y + r.h - 22, w: 20, h: 19 };
-                    const next = { x: r.x + r.w - 23, y: r.y + r.h - 22, w: 20, h: 19 };
-
-                    if (inRect(x, y, remove)) {
+                    const actions = thumbActionRects(r);
+                    if (inRect(x, y, actions.remove)) {
                         this._msImages.splice(i, 1);
                         this._msTransformedCache?.clear();
                         changed(this);
-                    } else if (inRect(x, y, prev)) {
+                    } else if (inRect(x, y, actions.prev)) {
                         moveItem(this, i, -1);
-                    } else if (inRect(x, y, next)) {
+                    } else if (inRect(x, y, actions.next)) {
                         moveItem(this, i, 1);
+                    } else if (inRect(x, y, actions.drag)) {
+                        startThumbnailDrag(this, i, x, y, event, graphCanvas);
                     } else {
-                        startThumbnailPress(this, i, x, y, graphCanvas);
+                        // Editing no longer competes with reorder gesture detection.
+                        // The image area is a direct single-click edit target.
+                        openEditor(this, i);
                     }
 
                     stopEvent(event, graphCanvas);
@@ -654,7 +684,7 @@ app.registerExtension({
                 p.currentX = x;
                 p.currentY = y;
 
-                if (!p.dragging && Math.hypot(x - p.startX, y - p.startY) >= DRAG_THRESHOLD) {
+                if (!p.dragging && dragDistancePx(p, event, x, y) >= DRAG_THRESHOLD_PX) {
                     p.dragging = true;
                 }
                 if (p.dragging) p.target = nearestThumbIndex(this, x, y);
@@ -669,7 +699,7 @@ app.registerExtension({
         const mouseUp = nodeType.prototype.onMouseUp;
         nodeType.prototype.onMouseUp = function (event, pos, graphCanvas) {
             if (this._msThumbPress) {
-                finishThumbnailPress(this, graphCanvas);
+                finishThumbnailDrag(this, graphCanvas);
                 stopEvent(event, graphCanvas);
                 return true;
             }
