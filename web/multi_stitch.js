@@ -81,7 +81,7 @@ function setupNode(node){
     node.previewMediaType="image";node.properties||={};
     const widget=getWidget(node,"images_json");hideWidget(widget);const fromWidget=safeJsonParse(widget?.value),fromProps=safeJsonParse(node.properties.multi_stitch_images);
     node._msImages=(fromWidget.length?fromWidget:fromProps).map(item=>({...item,crop:normalizeCrop(item.crop)}));node._msThumbCache=new Map();
-    if(!node.widgets?.some(w=>w.name==="add_images")){node.addWidget("button","add_images","Add images…",()=>chooseFiles(node));node.addWidget("button","clear_images","Clear all",()=>{if(!node._msImages.length||confirm(`Remove all ${node._msImages.length} images from this node?`)){node._msImages=[];node._msThumbCache.clear();changed(node);}});}
+    if(!node.widgets?.some(w=>w.name==="Add images…")){node.addWidget("button","Add images…",null,()=>chooseFiles(node));node.addWidget("button","Clear all",null,()=>{if(!node._msImages.length||confirm(`Remove all ${node._msImages.length} images from this node?`)){node._msImages=[];node._msThumbCache.clear();changed(node);}});}
     node.pasteFiles=(files)=>addFiles(node,files);changed(node);
 }
 
