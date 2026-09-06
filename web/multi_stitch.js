@@ -20,7 +20,7 @@ const DRAG_THRESHOLD = 6;
 function visibleWidgetBottom(node) {
     let bottom = 92;
     for (const widget of node.widgets || []) {
-        if (widget._msHidden) continue;
+        if (widget._msHidden || widget.hidden || widget.options?.hidden) continue;
         if (Number.isFinite(widget.last_y)) bottom = Math.max(bottom, widget.last_y + 28);
     }
     return bottom;
@@ -35,11 +35,20 @@ function thumbLayout(node, index) {
 }
 
 function updateNodeSize(node) {
-    const rows = Math.max(1, Math.ceil((node._msImages?.length || 0) / THUMB_COLS));
+    const count = node._msImages?.length || 0;
+    const rows = Math.max(1, Math.ceil(count / THUMB_COLS));
     const wantedH = visibleWidgetBottom(node) + 26 + rows * THUMB_HEIGHT + (rows - 1) * THUMB_GAP + 12;
     const width = Math.max(MIN_NODE_WIDTH, node.size?.[0] || 0);
-    if (!node.size || node.size[0] < MIN_NODE_WIDTH || node.size[1] < wantedH) {
-        node.setSize?.([width, Math.max(wantedH, node.size?.[1] || 0)]);
+    const currentH = node.size?.[1] || 0;
+
+    // The first release hid internal widgets only on the legacy canvas. In Vue Nodes
+    // those widgets remained visible and could leave a very tall empty node saved in
+    // a workflow. Once the internal widgets are hidden correctly, compact an empty
+    // migrated node if its stored height is obviously oversized.
+    const shouldCompactEmptyMigration = count === 0 && currentH > wantedH + 120;
+
+    if (!node.size || node.size[0] < MIN_NODE_WIDTH || currentH < wantedH || shouldCompactEmptyMigration) {
+        node.setSize?.([width, shouldCompactEmptyMigration ? wantedH : Math.max(wantedH, currentH)]);
     }
 }
 
@@ -148,37 +157,17 @@ function drawThumbs(node, ctx) {
         ctx.fillStyle="#fff";ctx.fillText("×",r.x+r.w-18,r.y+17);ctx.fillText("‹",r.x+9,r.y+r.h-7);ctx.fillText("›",r.x+r.w-17,r.y+r.h-7);
         ctx.restore();
     });
-
-    if(node._msThumbPress?.dragging){
-        const p=node._msThumbPress;
-        ctx.fillStyle="#8ab4f8";ctx.textAlign="center";ctx.font="bold 12px sans-serif";
-        ctx.fillText(`Move #${p.index+1} → #${p.target+1}`,Math.max(85,Math.min(node.size[0]-85,p.currentX)),Math.max(18,p.currentY-10));
-    }
     ctx.restore();
 }
 
-function localPos(node,event,pos,graphCanvas){
-    if(event&&typeof event.canvasX==="number")return[event.canvasX-node.pos[0],event.canvasY-node.pos[1]];
-    try{if(graphCanvas?.convertEventToCanvasOffset){const p=graphCanvas.convertEventToCanvasOffset(event);return[p[0]-node.pos[0],p[1]-node.pos[1]];}}catch(_){}
-    return Array.isArray(pos)?pos:[0,0];
-}
+function localPos(node,event,pos,graphCanvas){if(event&&typeof event.canvasX==="number")return[event.canvasX-node.pos[0],event.canvasY-node.pos[1]];try{if(graphCanvas?.convertEventToCanvasOffset){const p=graphCanvas.convertEventToCanvasOffset(event);return[p[0]-node.pos[0],p[1]-node.pos[1]];}}catch(_){}return Array.isArray(pos)?pos:[0,0];}
 const inRect=(x,y,r)=>x>=r.x&&x<=r.x+r.w&&y>=r.y&&y<=r.y+r.h;
 function stopEvent(event,graphCanvas){if(graphCanvas)graphCanvas._mouse_down_widget=true;try{event?.preventDefault?.();event?.stopPropagation?.();}catch(_){}}
 
 function changed(node){syncImages(node);updateNodeSize(node);}
-function moveItem(node,index,delta){reorderItem(node,index,index+delta);}
-function reorderItem(node,from,to){
-    if(from<0||to<0||from>=node._msImages.length||to>=node._msImages.length||from===to)return;
-    const[item]=node._msImages.splice(from,1);node._msImages.splice(to,0,item);changed(node);
-}
-function nearestThumbIndex(node,x,y){
-    let best=0,bestDist=Infinity;
-    for(let i=0;i<(node._msImages?.length||0);i++){
-        const r=thumbLayout(node,i),cx=r.x+r.w/2,cy=r.y+r.h/2,d=(x-cx)**2+(y-cy)**2;
-        if(d<bestDist){bestDist=d;best=i;}
-    }
-    return best;
-}
+function moveItem(node,index,delta){const target=index+delta;if(target<0||target>=node._msImages.length)return;const[item]=node._msImages.splice(index,1);node._msImages.splice(target,0,item);changed(node);}
+function reorderItem(node,from,to){if(from===to||from<0||to<0||from>=node._msImages.length||to>=node._msImages.length)return;const[item]=node._msImages.splice(from,1);node._msImages.splice(to,0,item);changed(node);}
+function nearestThumbIndex(node,x,y){let best=0,bestD=Infinity;for(let i=0;i<node._msImages.length;i++){const r=thumbLayout(node,i),cx=r.x+r.w/2,cy=r.y+r.h/2,d=(x-cx)**2+(y-cy)**2;if(d<bestD){best=i;bestD=d;}}return best;}
 
 function normalizeItem(item){
     return {
