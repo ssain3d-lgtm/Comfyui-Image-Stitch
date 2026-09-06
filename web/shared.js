@@ -51,7 +51,20 @@ export function getWidget(node, name) {
 
 export function hideWidget(widget) {
     if (!widget) return;
+
+    // ComfyUI has two widget render paths now:
+    // - legacy LiteGraph canvas
+    // - Vue Nodes / Node 2.0
+    //
+    // Overriding draw()/computeSize() only hides a widget on the legacy canvas.
+    // Vue Nodes intentionally uses options.hidden, so keep both mechanisms.
+    // `hidden` is also an accessor backed by options.hidden on current ComfyUI.
     widget._msHidden = true;
+    widget.options ||= {};
+    widget.options.hidden = true;
+    try { widget.hidden = true; } catch (_) {}
+
+    // Legacy-canvas fallback for older ComfyUI builds.
     widget.computeSize = () => [0, -4];
     widget.draw = () => {};
 }
