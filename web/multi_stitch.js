@@ -284,7 +284,7 @@ app.registerExtension({
                     if(inRect(x,y,remove)){this._msImages.splice(i,1);this._msTransformedCache?.clear();changed(this);}
                     else if(inRect(x,y,prev))moveItem(this,i,-1);
                     else if(inRect(x,y,next))moveItem(this,i,1);
-                    else this._msThumbPress={index:i,target:i,startX:x,startY:y,currentX:x,currentY:y,dragging:false};
+                    else { this._msThumbPress={index:i,target:i,startX:x,startY:y,currentX:x,currentY:y,dragging:false}; this.captureInput?.(true); }
                     stopEvent(event,graphCanvas);return true;
                 }
             }
@@ -306,7 +306,7 @@ app.registerExtension({
         const mouseUp=nodeType.prototype.onMouseUp;
         nodeType.prototype.onMouseUp=function(event,pos,graphCanvas){
             if(this._msThumbPress){
-                const p=this._msThumbPress;this._msThumbPress=null;
+                const p=this._msThumbPress;this._msThumbPress=null;this.captureInput?.(false);
                 if(p.dragging)reorderItem(this,p.index,p.target);
                 else openCropEditor(this,p.index).catch(error=>{console.error("[Multi Stitch Images] crop editor",error);alert(error.message||error);});
                 this.graph?.setDirtyCanvas(true,false);stopEvent(event,graphCanvas);return true;
