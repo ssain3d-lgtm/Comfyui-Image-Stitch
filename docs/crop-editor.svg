@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="650" viewBox="0 0 1120 650">
+  <rect width="1120" height="650" fill="#111"/>
+  <rect x="65" y="42" width="990" height="565" rx="15" fill="#202124" stroke="#555"/>
+  <text x="92" y="78" font-family="Segoe UI,Arial" font-size="20" fill="#eee">Crop image 2</text><text x="910" y="78" font-family="Segoe UI,Arial" font-size="13" fill="#aaa">1920 × 1080</text>
+  <rect x="92" y="102" width="936" height="405" fill="#151515"/>
+  <rect x="160" y="120" width="800" height="370" fill="#896f66"/>
+  <circle cx="560" cy="270" r="90" fill="#ebc5a7"/><rect x="490" y="345" width="140" height="125" rx="20" fill="#3b3038"/>
+  <rect x="160" y="120" width="800" height="55" fill="#000" opacity=".56"/><rect x="160" y="435" width="800" height="55" fill="#000" opacity=".56"/><rect x="160" y="175" width="115" height="260" fill="#000" opacity=".56"/><rect x="845" y="175" width="115" height="260" fill="#000" opacity=".56"/>
+  <rect x="275" y="175" width="570" height="260" fill="none" stroke="#fff" stroke-width="3"/>
+  <line x1="465" y1="175" x2="465" y2="435" stroke="#fff" opacity=".42"/><line x1="655" y1="175" x2="655" y2="435" stroke="#fff" opacity=".42"/><line x1="275" y1="262" x2="845" y2="262" stroke="#fff" opacity=".42"/><line x1="275" y1="348" x2="845" y2="348" stroke="#fff" opacity=".42"/>
+  <g fill="#fff"><rect x="269" y="169" width="12" height="12"/><rect x="839" y="169" width="12" height="12"/><rect x="269" y="429" width="12" height="12"/><rect x="839" y="429" width="12" height="12"/></g>
+  <text x="94" y="544" font-family="Segoe UI,Arial" font-size="13" fill="#ccc">Aspect</text><rect x="148" y="524" width="120" height="32" rx="7" fill="#303134" stroke="#5f6368"/><text x="184" y="545" font-family="Segoe UI,Arial" font-size="13" fill="#eee">Free</text>
+  <rect x="282" y="524" width="75" height="32" rx="7" fill="#303134" stroke="#5f6368"/><text x="303" y="545" font-family="Segoe UI,Arial" font-size="13" fill="#eee">Reset</text>
+  <text x="378" y="545" font-family="Segoe UI,Arial" font-size="12" fill="#aaa">Move / resize / draw a new crop • presets: Original, 1:1, 4:3, 3:2, 16:9, 9:16</text>
+  <rect x="822" y="524" width="82" height="32" rx="7" fill="#303134" stroke="#5f6368"/><text x="844" y="545" font-family="Segoe UI,Arial" font-size="13" fill="#eee">Cancel</text>
+  <rect x="916" y="524" width="112" height="32" rx="7" fill="#1a73e8"/><text x="941" y="545" font-family="Segoe UI,Arial" font-size="13" fill="#fff">Apply crop</text>
+  <text x="92" y="584" font-family="Segoe UI,Arial" font-size="12" fill="#8f8f8f">Crop is stored as normalized coordinates. The original input image is not modified.</text>
+</svg>
