@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import sys
 import tempfile
 import types
@@ -146,6 +147,62 @@ class MultiStitchTests(unittest.TestCase):
     def test_empty_input_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "at least one image"):
             ms._estimate_output_dimensions([], "strip", "right", True, 3, 0)
+
+    def test_grid_shape_leaves_no_unused_row_or_column(self):
+        """down/up fill column-first, so the canvas must not keep spare columns.
+
+        Regression: 4 images at grid_columns=3 / direction=down allocated three
+        columns but filled only two, emitting a bare spacing-colour band.
+        """
+        for direction in ("right", "left", "down", "up"):
+            for count in range(1, 24):
+                for grid_columns in range(1, 17):
+                    rows, cols = ms._grid_shape(count, grid_columns, direction)
+                    placed = [
+                        ms._grid_position(i, rows, cols, direction)
+                        for i in range(count)
+                    ]
+                    with self.subTest(d=direction, n=count, gc=grid_columns):
+                        self.assertEqual(len(set(placed)), count, "cells collide")
+                        for row, col in placed:
+                            self.assertTrue(0 <= row < rows and 0 <= col < cols)
+                        self.assertEqual(
+                            {c for _, c in placed}, set(range(cols)), "unused column"
+                        )
+                        self.assertEqual(
+                            {r for r, _ in placed}, set(range(rows)), "unused row"
+                        )
+
+    def test_grid_down_has_no_blank_column(self):
+        images = [solid((1.0, 0.0, 0.0), 4, 4) for _ in range(4)]
+        output = ms._compose(images, "grid", "down", True, 3, 0, "white", "#808080")
+        # Two columns of 4px, not three: no bare white band on the right.
+        self.assertEqual((output.shape[2], output.shape[1]), (8, 8))
+        self.assertRgb(output[0, 0, 4], (1.0, 0.0, 0.0))
+
+    def test_non_finite_rotation_falls_back_to_zero(self):
+        """json.loads accepts Infinity, and round(inf) raises OverflowError."""
+        item = json.loads('{"rotation": Infinity}')
+        self.assertEqual(ms._normalize_transform(item), (0, False, False))
+        for value in (float("-inf"), float("nan"), "abc", None):
+            with self.subTest(rotation=value):
+                self.assertEqual(
+                    ms._normalize_transform({"rotation": value}), (0, False, False)
+                )
+        self.assertEqual(ms._normalize_transform({"rotation": -90}), (270, False, False))
+
+    def test_input_pixel_guard_rejects_oversized_sources(self):
+        """A small canvas can still decode gigabytes of sources first."""
+        dimensions = [(32, 32)] + [(4000, 3000)] * 255
+        # The output guard alone lets this through: match_image_size sizes every
+        # cell from the first (tiny) image.
+        width, height = ms._estimate_output_dimensions(
+            dimensions, "grid", "right", True, 16, 0
+        )
+        ms._validate_output_dimensions(width, height)
+        with self.assertRaisesRegex(ValueError, "source image"):
+            ms._validate_input_pixels(dimensions)
+        ms._validate_input_pixels([(4000, 3000)] * 10)
 
 
 if __name__ == "__main__":

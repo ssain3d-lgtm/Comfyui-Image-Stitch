@@ -20,10 +20,15 @@ _COLOR_MAP = {
 }
 
 # A ComfyUI IMAGE is float32 RGB, so 128 MiPixels is already about 1.5 GiB
-# for the final tensor alone. This guard is intentionally conservative enough
-# to stop accidental giant strips/grids before all source images are decoded.
+# for the final tensor alone. These guards run on metadata only, before any
+# source image is decoded, so an accidental giant strip/grid is rejected
+# cheaply. The output guard bounds the destination canvas; the input guard
+# bounds the source tensors, which stay resident together for the whole
+# composition and can dwarf a small canvas (many large sources downscaled
+# into a tiny grid).
 _MAX_OUTPUT_PIXELS = 128 * 1024 * 1024
 _MAX_OUTPUT_SIDE = 131_072
+_MAX_INPUT_PIXELS = 128 * 1024 * 1024
 
 
 def _safe_input_path(item: dict) -> Path:
@@ -76,9 +81,14 @@ def _normalize_crop(crop: object) -> tuple[float, float, float, float]:
 
 def _normalize_transform(item: dict) -> tuple[int, bool, bool]:
     try:
-        rotation = int(round(float(item.get("rotation", 0)) / 90.0) * 90) % 360
+        degrees = float(item.get("rotation", 0))
     except (TypeError, ValueError):
-        rotation = 0
+        degrees = 0.0
+    # json.loads accepts the non-standard Infinity/NaN literals, and round(inf)
+    # raises OverflowError rather than ValueError, so screen the value first.
+    if not math.isfinite(degrees):
+        degrees = 0.0
+    rotation = int(round(degrees / 90.0) * 90) % 360
     return rotation, bool(item.get("flip_h", False)), bool(item.get("flip_v", False))
 
 
@@ -188,6 +198,22 @@ def _resolve_color(spacing_color: str, custom_spacing_color: str) -> tuple[float
     return _COLOR_MAP.get(spacing_color, _COLOR_MAP["white"])
 
 
+def _grid_shape(count: int, grid_columns: int, direction: str) -> tuple[int, int]:
+    """Rows and columns the grid actually fills, for a given fill direction.
+
+    ``right``/``left`` fill row by row, so ``grid_columns`` is the column count.
+    ``down``/``up`` fill column by column: once ``rows`` is fixed, only
+    ``ceil(count / rows)`` columns receive an image, and any extra column would
+    be emitted as a band of bare spacing colour (4 images at grid_columns=3).
+    """
+    count = max(1, int(count))
+    cols = max(1, min(int(grid_columns), count))
+    rows = math.ceil(count / cols)
+    if direction in {"down", "up"}:
+        cols = math.ceil(count / rows)
+    return rows, cols
+
+
 def _estimate_output_dimensions(
     dimensions: list[tuple[int, int]],
     layout_mode: str,
@@ -206,8 +232,7 @@ def _estimate_output_dimensions(
     dims = [(max(1, int(w)), max(1, int(h))) for w, h in dimensions]
 
     if layout_mode == "grid":
-        cols = max(1, min(int(grid_columns), len(dims)))
-        rows = math.ceil(len(dims) / cols)
+        rows, cols = _grid_shape(len(dims), grid_columns, direction)
         if match_image_size:
             cell_w, cell_h = dims[0]
         else:
@@ -252,6 +277,24 @@ def _validate_output_dimensions(width: int, height: int) -> None:
         f"{width:,} × {height:,} ({megapixels:.1f} MP, ~{approx_gib:.2f} GiB float32) "
         f"exceeds the safety limit ({limit_mp:.1f} MP / {_MAX_OUTPUT_SIDE:,} px per side). "
         "Reduce image count, crop/resize the sources, use Grid, or enable match_image_size."
+    )
+
+
+def _validate_input_pixels(dimensions: list[tuple[int, int]]) -> None:
+    """Bound the source tensors, which are all held in memory at once."""
+    pixels = sum(max(1, int(w)) * max(1, int(h)) for w, h in dimensions)
+    if pixels <= _MAX_INPUT_PIXELS:
+        return
+
+    megapixels = pixels / 1_000_000
+    approx_gib = pixels * 3 * 4 / (1024 ** 3)
+    limit_mp = _MAX_INPUT_PIXELS / 1_000_000
+    raise ValueError(
+        "Multi Stitch Images: the "
+        f"{len(dimensions)} source image(s) total {megapixels:.1f} MP "
+        f"(~{approx_gib:.2f} GiB float32 once decoded), which exceeds the "
+        f"safety limit ({limit_mp:.1f} MP). "
+        "Remove some images, or crop/resize the sources before stitching."
     )
 
 
@@ -330,8 +373,7 @@ def _compose_grid(
     spacing_width: int,
     color_tuple: tuple[float, float, float],
 ) -> torch.Tensor:
-    cols = max(1, min(int(grid_columns), len(images)))
-    rows = math.ceil(len(images) / cols)
+    rows, cols = _grid_shape(len(images), grid_columns, direction)
 
     if match_image_size:
         cell_h, cell_w = images[0].shape[1], images[0].shape[2]
@@ -461,6 +503,7 @@ class MultiStitchImages:
 
         valid_items = [item for item in items if isinstance(item, dict)]
         dimensions = [_item_output_dimensions(item) for item in valid_items]
+        _validate_input_pixels(dimensions)
         out_w, out_h = _estimate_output_dimensions(
             dimensions,
             layout_mode,
