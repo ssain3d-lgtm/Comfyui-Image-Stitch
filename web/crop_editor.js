@@ -1,4 +1,4 @@
-import { imageUrl, normalizeCrop, syncImages } from "./shared.js";
+import { imageUrl, normalizeCrop, normalizeTransform, renderTransformedImage, syncImages } from "./shared.js";
 
 let styleInstalled = false;
 
@@ -8,21 +8,22 @@ function installStyles() {
     const style = document.createElement("style");
     style.textContent = `
 .ms-crop-overlay{position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;padding:24px;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
-.ms-crop-panel{width:min(1120px,96vw);max-height:94vh;background:#202124;border:1px solid #555;border-radius:14px;box-shadow:0 24px 70px rgba(0,0,0,.55);display:flex;flex-direction:column;overflow:hidden;color:#eee}
+.ms-crop-panel{width:min(1140px,96vw);max-height:94vh;background:#202124;border:1px solid #555;border-radius:14px;box-shadow:0 24px 70px rgba(0,0,0,.55);display:flex;flex-direction:column;overflow:hidden;color:#eee}
 .ms-crop-head{display:flex;justify-content:space-between;padding:14px 18px;border-bottom:1px solid #3d3d3d;font-weight:650}
 .ms-crop-stage{min-height:260px;display:flex;align-items:center;justify-content:center;padding:16px;background:#111;overflow:auto}
-.ms-crop-canvas{max-width:100%;max-height:68vh;box-shadow:0 0 0 1px #333;touch-action:none;cursor:crosshair}
+.ms-crop-canvas{max-width:100%;max-height:66vh;box-shadow:0 0 0 1px #333;touch-action:none;cursor:crosshair}
 .ms-crop-controls{display:flex;flex-wrap:wrap;gap:9px;align-items:center;padding:12px 16px;border-top:1px solid #3d3d3d}
 .ms-crop-controls label{display:flex;gap:8px;align-items:center;color:#cfcfcf;font-size:13px}
 .ms-crop-controls select,.ms-crop-controls button{background:#303134;color:#eee;border:1px solid #5f6368;border-radius:7px;padding:7px 11px;font-size:13px}
 .ms-crop-controls button{cursor:pointer}.ms-crop-controls button:hover{background:#3c4043}.ms-crop-controls .primary{background:#1a73e8;border-color:#1a73e8}
-.ms-crop-spacer{flex:1}.ms-crop-hint{font-size:12px;color:#aaa}
+.ms-crop-controls .active{border-color:#8ab4f8;background:#35435d}
+.ms-crop-spacer{flex:1}.ms-crop-hint{font-size:12px;color:#aaa}.ms-transform-state{font-size:12px;color:#9aa0a6;min-width:130px}
 `;
     document.head.appendChild(style);
 }
 
 function ratioValue(name, image) {
-    if (name === "original") return image.naturalWidth / image.naturalHeight;
+    if (name === "original") return image.width / image.height;
     return { "1:1": 1, "4:3": 4 / 3, "3:2": 3 / 2, "16:9": 16 / 9, "9:16": 9 / 16 }[name] || null;
 }
 
@@ -43,25 +44,31 @@ export async function openCropEditor(node, index) {
     if (!item) return;
     installStyles();
 
-    const image = new Image();
-    image.crossOrigin = "anonymous";
-    image.src = imageUrl(item);
+    const source = new Image();
+    source.crossOrigin = "anonymous";
+    source.src = imageUrl(item);
     await new Promise((resolve, reject) => {
-        image.onload = resolve;
-        image.onerror = () => reject(new Error("Could not load image for cropping."));
+        source.onload = resolve;
+        source.onerror = () => reject(new Error("Could not load image for cropping."));
     });
 
     const overlay = document.createElement("div");
     overlay.className = "ms-crop-overlay";
     overlay.innerHTML = `
       <div class="ms-crop-panel" role="dialog" aria-modal="true">
-        <div class="ms-crop-head"><span>Crop image ${index + 1}</span><span style="font-size:12px;color:#aaa">${image.naturalWidth} × ${image.naturalHeight}</span></div>
+        <div class="ms-crop-head"><span>Edit image ${index + 1}</span><span class="dimensions" style="font-size:12px;color:#aaa"></span></div>
         <div class="ms-crop-stage"><canvas class="ms-crop-canvas"></canvas></div>
         <div class="ms-crop-controls">
+          <button class="rotate-left" title="Rotate 90° left">↶ 90°</button>
+          <button class="rotate-right" title="Rotate 90° right">↷ 90°</button>
+          <button class="flip-h">Flip H</button>
+          <button class="flip-v">Flip V</button>
+          <span class="ms-transform-state"></span>
           <label>Aspect <select class="ratio"><option value="free">Free</option><option value="original">Original</option><option>1:1</option><option>4:3</option><option>3:2</option><option>16:9</option><option>9:16</option></select></label>
-          <button class="reset">Reset</button>
-          <span class="ms-crop-hint">Move inside • resize corners • drag outside to draw a new crop</span>
-          <span class="ms-crop-spacer"></span><button class="cancel">Cancel</button><button class="primary apply">Apply crop</button>
+          <button class="reset-crop">Reset crop</button>
+          <button class="reset-all">Reset all</button>
+          <span class="ms-crop-hint">Rotate/flip resets crop • drag image area to crop</span>
+          <span class="ms-crop-spacer"></span><button class="cancel">Cancel</button><button class="primary apply">Apply</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
@@ -69,29 +76,55 @@ export async function openCropEditor(node, index) {
     const canvas = overlay.querySelector("canvas");
     const ctx = canvas.getContext("2d");
     const ratioSelect = overlay.querySelector(".ratio");
-    const maxW = Math.min(1000, innerWidth * 0.82), maxH = Math.min(680, innerHeight * 0.68);
-    const scale = Math.min(1, maxW / image.naturalWidth, maxH / image.naturalHeight);
-    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
-    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+    const dimensions = overlay.querySelector(".dimensions");
+    const transformState = overlay.querySelector(".ms-transform-state");
+    const flipHButton = overlay.querySelector(".flip-h");
+    const flipVButton = overlay.querySelector(".flip-v");
+    const maxW = Math.min(1000, innerWidth * 0.82), maxH = Math.min(660, innerHeight * 0.66);
 
-    const c = normalizeCrop(item.crop);
-    let rect = { x: c.x * image.naturalWidth, y: c.y * image.naturalHeight, w: c.w * image.naturalWidth, h: c.h * image.naturalHeight };
+    let transform = normalizeTransform(item);
+    let working = renderTransformedImage(source, transform);
+    let rect;
+    let scale = 1;
     let drag = null;
-    const handleRadius = Math.max(10, 12 / scale), minSize = Math.max(4, 8 / scale);
+    let handleRadius = 10;
+    let minSize = 4;
+
+    function setCanvasSize() {
+        scale = Math.min(1, maxW / working.width, maxH / working.height);
+        canvas.width = Math.max(1, Math.round(working.width * scale));
+        canvas.height = Math.max(1, Math.round(working.height * scale));
+        handleRadius = Math.max(10, 12 / scale);
+        minSize = Math.max(4, 8 / scale);
+        dimensions.textContent = `${working.width} × ${working.height}`;
+    }
+
+    function fullRect() {
+        return { x: 0, y: 0, w: working.width, h: working.height };
+    }
+
+    const initialCrop = normalizeCrop(item.crop);
+    setCanvasSize();
+    rect = {
+        x: initialCrop.x * working.width,
+        y: initialCrop.y * working.height,
+        w: initialCrop.w * working.width,
+        h: initialCrop.h * working.height,
+    };
 
     const point = (event) => {
         const box = canvas.getBoundingClientRect();
         return {
-            x: Math.max(0, Math.min(image.naturalWidth, (event.clientX - box.left) * image.naturalWidth / box.width)),
-            y: Math.max(0, Math.min(image.naturalHeight, (event.clientY - box.top) * image.naturalHeight / box.height)),
+            x: Math.max(0, Math.min(working.width, (event.clientX - box.left) * working.width / box.width)),
+            y: Math.max(0, Math.min(working.height, (event.clientY - box.top) * working.height / box.height)),
         };
     };
 
     const clamp = (r) => {
-        r.w = Math.max(minSize, Math.min(image.naturalWidth, r.w));
-        r.h = Math.max(minSize, Math.min(image.naturalHeight, r.h));
-        r.x = Math.max(0, Math.min(image.naturalWidth - r.w, r.x));
-        r.y = Math.max(0, Math.min(image.naturalHeight - r.h, r.y));
+        r.w = Math.max(minSize, Math.min(working.width, r.w));
+        r.h = Math.max(minSize, Math.min(working.height, r.h));
+        r.x = Math.max(0, Math.min(working.width - r.w, r.x));
+        r.y = Math.max(0, Math.min(working.height - r.h, r.y));
         return r;
     };
 
@@ -103,10 +136,10 @@ export async function openCropEditor(node, index) {
     };
 
     function render() {
-        const sx = canvas.width / image.naturalWidth, sy = canvas.height / image.naturalHeight;
+        const sx = canvas.width / working.width, sy = canvas.height / working.height;
         const x = rect.x * sx, y = rect.y * sy, w = rect.w * sx, h = rect.h * sy;
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+        ctx.drawImage(working, 0, 0, canvas.width, canvas.height);
         ctx.fillStyle = "rgba(0,0,0,.56)";
         ctx.fillRect(0,0,canvas.width,y); ctx.fillRect(0,y+h,canvas.width,canvas.height-y-h); ctx.fillRect(0,y,x,h); ctx.fillRect(x+w,y,canvas.width-x-w,h);
         ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.strokeRect(x,y,w,h);
@@ -114,6 +147,18 @@ export async function openCropEditor(node, index) {
         ctx.moveTo(x+w/3,y);ctx.lineTo(x+w/3,y+h);ctx.moveTo(x+2*w/3,y);ctx.lineTo(x+2*w/3,y+h);
         ctx.moveTo(x,y+h/3);ctx.lineTo(x+w,y+h/3);ctx.moveTo(x,y+2*h/3);ctx.lineTo(x+w,y+2*h/3);ctx.stroke();
         ctx.fillStyle="#fff"; [[x,y],[x+w,y],[x,y+h],[x+w,y+h]].forEach(([a,b])=>ctx.fillRect(a-4,b-4,8,8));
+        transformState.textContent = `Rotate ${transform.rotation}°${transform.flip_h ? " • H" : ""}${transform.flip_v ? " • V" : ""}`;
+        flipHButton.classList.toggle("active", transform.flip_h);
+        flipVButton.classList.toggle("active", transform.flip_v);
+    }
+
+    function applyTransform(next) {
+        transform = normalizeTransform(next);
+        working = renderTransformedImage(source, transform);
+        setCanvasSize();
+        rect = fullRect();
+        ratioSelect.value = "free";
+        render();
     }
 
     canvas.addEventListener("pointerdown", (event) => {
@@ -134,17 +179,27 @@ export async function openCropEditor(node, index) {
             if(x2<x1)[x1,x2]=[x2,x1];if(y2<y1)[y1,y2]=[y2,y1];
             rect=clamp({x:x1,y:y1,w:Math.max(minSize,x2-x1),h:Math.max(minSize,y2-y1)});
         }
-        const ratio=ratioValue(ratioSelect.value,image); if(ratio&&drag.mode!=="move")rect=clamp(fitRatio(rect,ratio,image.naturalWidth,image.naturalHeight)); render();
+        const ratio=ratioValue(ratioSelect.value,working); if(ratio&&drag.mode!=="move")rect=clamp(fitRatio(rect,ratio,working.width,working.height)); render();
     });
     canvas.addEventListener("pointerup",()=>drag=null); canvas.addEventListener("pointercancel",()=>drag=null);
-    ratioSelect.addEventListener("change",()=>{const ratio=ratioValue(ratioSelect.value,image);if(ratio)rect=clamp(fitRatio(rect,ratio,image.naturalWidth,image.naturalHeight));render();});
+    ratioSelect.addEventListener("change",()=>{const ratio=ratioValue(ratioSelect.value,working);if(ratio)rect=clamp(fitRatio(rect,ratio,working.width,working.height));render();});
+
+    overlay.querySelector(".rotate-left").onclick = () => applyTransform({ ...transform, rotation: transform.rotation - 90 });
+    overlay.querySelector(".rotate-right").onclick = () => applyTransform({ ...transform, rotation: transform.rotation + 90 });
+    flipHButton.onclick = () => applyTransform({ ...transform, flip_h: !transform.flip_h });
+    flipVButton.onclick = () => applyTransform({ ...transform, flip_v: !transform.flip_v });
 
     let keyHandler = null;
     const close = () => { if (keyHandler) document.removeEventListener("keydown", keyHandler); overlay.remove(); };
     overlay.querySelector(".cancel").onclick=close;
-    overlay.querySelector(".reset").onclick=()=>{rect={x:0,y:0,w:image.naturalWidth,h:image.naturalHeight};ratioSelect.value="free";render();};
+    overlay.querySelector(".reset-crop").onclick=()=>{rect=fullRect();ratioSelect.value="free";render();};
+    overlay.querySelector(".reset-all").onclick=()=>applyTransform({rotation:0,flip_h:false,flip_v:false});
     overlay.querySelector(".apply").onclick=()=>{
-        item.crop={x:+(rect.x/image.naturalWidth).toFixed(6),y:+(rect.y/image.naturalHeight).toFixed(6),w:+(rect.w/image.naturalWidth).toFixed(6),h:+(rect.h/image.naturalHeight).toFixed(6)};
+        item.rotation=transform.rotation;
+        item.flip_h=transform.flip_h;
+        item.flip_v=transform.flip_v;
+        item.crop={x:+(rect.x/working.width).toFixed(6),y:+(rect.y/working.height).toFixed(6),w:+(rect.w/working.width).toFixed(6),h:+(rect.h/working.height).toFixed(6)};
+        node._msTransformedCache?.clear();
         syncImages(node); close();
     };
     overlay.addEventListener("mousedown",(e)=>{if(e.target===overlay)close();});
