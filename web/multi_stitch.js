@@ -34,21 +34,42 @@ function thumbLayout(node, index) {
     return { x: 8 + col * (cellW + THUMB_GAP), y: top + row * (THUMB_HEIGHT + THUMB_GAP), w: cellW, h: THUMB_HEIGHT };
 }
 
-function updateNodeSize(node) {
+function requiredNodeHeight(node) {
     const count = node._msImages?.length || 0;
     const rows = Math.max(1, Math.ceil(count / THUMB_COLS));
-    const wantedH = visibleWidgetBottom(node) + 26 + rows * THUMB_HEIGHT + (rows - 1) * THUMB_GAP + 12;
+    return visibleWidgetBottom(node) + 26 + rows * THUMB_HEIGHT + (rows - 1) * THUMB_GAP + 12;
+}
+
+function updateNodeSize(node, allowShrink = false) {
+    if (!node) return;
+    const wantedH = requiredNodeHeight(node);
     const width = Math.max(MIN_NODE_WIDTH, node.size?.[0] || 0);
     const currentH = node.size?.[1] || 0;
+    const needsExpand = currentH + 1 < wantedH;
+    const needsShrink = allowShrink && currentH > wantedH + 2;
+    const needsWidth = !node.size || node.size[0] < MIN_NODE_WIDTH;
 
-    // The first release hid internal widgets only on the legacy canvas. In Vue Nodes
-    // those widgets remained visible and could leave a very tall empty node saved in
-    // a workflow. Once the internal widgets are hidden correctly, compact an empty
-    // migrated node if its stored height is obviously oversized.
-    const shouldCompactEmptyMigration = count === 0 && currentH > wantedH + 120;
+    if (needsExpand || needsShrink || needsWidth) {
+        node.setSize?.([width, needsShrink || needsExpand ? wantedH : currentH]);
+        node.graph?.setDirtyCanvas(true, true);
+    }
+}
 
-    if (!node.size || node.size[0] < MIN_NODE_WIDTH || currentH < wantedH || shouldCompactEmptyMigration) {
-        node.setSize?.([width, shouldCompactEmptyMigration ? wantedH : Math.max(wantedH, currentH)]);
+function scheduleNodeLayout(node, allowShrink = true) {
+    if (!node || node._msLayoutScheduled) return;
+    node._msLayoutScheduled = true;
+    const run = () => {
+        node._msLayoutScheduled = false;
+        syncConditionalWidgets(node);
+        updateNodeSize(node, allowShrink);
+        node.graph?.setDirtyCanvas(true, true);
+    };
+    // Widget last_y values are not reliable during onNodeCreated/onConfigure.
+    // Wait until ComfyUI has arranged the widgets, then size the thumbnail area.
+    if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(() => requestAnimationFrame(run));
+    } else {
+        setTimeout(run, 0);
     }
 }
 
@@ -162,9 +183,9 @@ function drawThumbs(node, ctx) {
 
 function localPos(node,event,pos,graphCanvas){if(event&&typeof event.canvasX==="number")return[event.canvasX-node.pos[0],event.canvasY-node.pos[1]];try{if(graphCanvas?.convertEventToCanvasOffset){const p=graphCanvas.convertEventToCanvasOffset(event);return[p[0]-node.pos[0],p[1]-node.pos[1]];}}catch(_){}return Array.isArray(pos)?pos:[0,0];}
 const inRect=(x,y,r)=>x>=r.x&&x<=r.x+r.w&&y>=r.y&&y<=r.y+r.h;
-function stopEvent(event,graphCanvas){if(graphCanvas)graphCanvas._mouse_down_widget=true;try{event?.preventDefault?.();event?.stopPropagation?.();}catch(_){}}
+function stopEvent(event,graphCanvas){if(graphCanvas)graphCanvas._mouse_down_widget=true;try{event?.preventDefault?.();event?.stopPropagation?.();}catch(_){} }
 
-function changed(node){syncImages(node);updateNodeSize(node);}
+function changed(node){syncImages(node);syncConditionalWidgets(node);updateNodeSize(node,true);scheduleNodeLayout(node,true);}
 function moveItem(node,index,delta){const target=index+delta;if(target<0||target>=node._msImages.length)return;const[item]=node._msImages.splice(index,1);node._msImages.splice(target,0,item);changed(node);}
 function reorderItem(node,from,to){if(from===to||from<0||to<0||from>=node._msImages.length||to>=node._msImages.length)return;const[item]=node._msImages.splice(from,1);node._msImages.splice(to,0,item);changed(node);}
 function nearestThumbIndex(node,x,y){let best=0,bestD=Infinity;for(let i=0;i<node._msImages.length;i++){const r=thumbLayout(node,i),cx=r.x+r.w/2,cy=r.y+r.h/2,d=(x-cx)**2+(y-cy)**2;if(d<bestD){best=i;bestD=d;}}return best;}
@@ -195,6 +216,24 @@ function normalizeHex(value){
     if(/^#[0-9a-f]{6}$/i.test(s))return s.toUpperCase();
     if(/^#[0-9a-f]{3}$/i.test(s))return ("#"+s.slice(1).split("").map(c=>c+c).join("")).toUpperCase();
     return "#808080";
+}
+
+function setWidgetVisible(widget, visible) {
+    if (!widget) return;
+    const hidden = !visible;
+    widget.options ||= {};
+    if (widget.options.hidden === hidden && widget._msDynamicHidden === hidden) return;
+    widget.options.hidden = hidden;
+    try { widget.hidden = hidden; } catch (_) {}
+    widget._msDynamicHidden = hidden;
+    widget.triggerDraw?.();
+}
+
+function syncConditionalWidgets(node) {
+    const layout = getWidget(node, "layout_mode")?.value || "strip";
+    const spacingColor = getWidget(node, "spacing_color")?.value || "white";
+    setWidgetVisible(getWidget(node, "grid_columns"), layout === "grid");
+    setWidgetVisible(node.widgets?.find(w => w.name === "custom_color_picker"), spacingColor === "custom");
 }
 
 function updateCustomColorButton(node){
@@ -232,8 +271,10 @@ function setupNode(node){
         const picker=node.addWidget("button","custom_color_picker",null,()=>chooseCustomColor(node));picker.serialize=false;
     }
     updateCustomColorButton(node);
+    syncConditionalWidgets(node);
     node.pasteFiles=(files)=>addFiles(node,files);
     changed(node);
+    scheduleNodeLayout(node,true);
 }
 
 app.registerExtension({
@@ -250,7 +291,7 @@ app.registerExtension({
             this._msImages=(restored.length?restored:props).map(normalizeItem);
             hideWidget(widget);hideWidget(getWidget(this,"custom_spacing_color"));
             this._msThumbCache||=new Map();this._msTransformedCache||=new Map();
-            updateCustomColorButton(this);changed(this);return r;
+            updateCustomColorButton(this);syncConditionalWidgets(this);changed(this);scheduleNodeLayout(this,true);return r;
         };
 
         const serialize=nodeType.prototype.onSerialize;
@@ -261,7 +302,24 @@ app.registerExtension({
         };
 
         const draw=nodeType.prototype.onDrawForeground;
-        nodeType.prototype.onDrawForeground=function(ctx){draw?.apply(this,arguments);drawThumbs(this,ctx);};
+        nodeType.prototype.onDrawForeground=function(ctx){
+            draw?.apply(this,arguments);
+            syncConditionalWidgets(this);
+            // By draw time ComfyUI has real widget positions. Expand immediately so
+            // the hint/placeholder/thumbnails never live outside the node body.
+            updateNodeSize(this,false);
+            drawThumbs(this,ctx);
+        };
+
+        const widgetChanged=nodeType.prototype.onWidgetChanged;
+        nodeType.prototype.onWidgetChanged=function(name,value,oldValue,widget){
+            const r=widgetChanged?.apply(this,arguments);
+            if(name==="layout_mode"||name==="spacing_color"){
+                syncConditionalWidgets(this);
+                scheduleNodeLayout(this,true);
+            }
+            return r;
+        };
 
         const mouseDown=nodeType.prototype.onMouseDown;
         nodeType.prototype.onMouseDown=function(event,pos,graphCanvas){
