@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Python test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest numpy pillow
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Python syntax check
+        run: python -m compileall -q __init__.py multi_stitch.py tests
+
+      - name: JavaScript syntax check
+        run: |
+          node --check web/shared.js
+          node --check web/multi_stitch.js
+          node --check web/crop_editor.js
+
+      - name: Backend unit tests
+        run: python -m pytest -q
