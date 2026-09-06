@@ -2,7 +2,7 @@
 
 **Multi Stitch Images** for ComfyUI — paste many images into one node, crop/rotate/flip each image, drag thumbnails to reorder them, then output either a classic stitched strip or a configurable grid.
 
-> 한국어 설명이 먼저 나오고, 아래에 English documentation이 이어집니다.
+> 한국어 설명이 먼저 나오고, The English documentation follows below.
 
 ![Multi Stitch Images example](docs/example-node.svg)
 
