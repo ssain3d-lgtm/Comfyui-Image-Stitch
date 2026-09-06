@@ -25,6 +25,34 @@ export function normalizeTransform(item) {
     };
 }
 
+function rotateCrop(crop, rotation) {
+    const { x, y, w, h } = crop;
+    if (rotation === 90) return { x: 1 - y - h, y: x, w: h, h: w };
+    if (rotation === 180) return { x: 1 - x - w, y: 1 - y - h, w, h };
+    if (rotation === 270) return { x: y, y: 1 - x - w, w: h, h: w };
+    return { x, y, w, h };
+}
+
+// A crop is stored relative to the *transformed* image. renderTransformedImage
+// rotates clockwise and then flips, so mapping a crop between the source and a
+// view of it follows that order forwards and reverses it backwards. This lets
+// the editor carry a crop across a rotate/flip instead of discarding it.
+export function cropSourceToView(crop, transform) {
+    const t = normalizeTransform(transform);
+    let out = rotateCrop(crop, t.rotation);
+    if (t.flip_h) out = { ...out, x: 1 - out.x - out.w };
+    if (t.flip_v) out = { ...out, y: 1 - out.y - out.h };
+    return out;
+}
+
+export function cropViewToSource(crop, transform) {
+    const t = normalizeTransform(transform);
+    let out = { ...crop };
+    if (t.flip_v) out = { ...out, y: 1 - out.y - out.h };
+    if (t.flip_h) out = { ...out, x: 1 - out.x - out.w };
+    return rotateCrop(out, (360 - t.rotation) % 360);
+}
+
 export function isCropped(crop) {
     const c = normalizeCrop(crop);
     return Math.abs(c.x) > CROPPED_EPSILON || Math.abs(c.y) > CROPPED_EPSILON ||
@@ -36,12 +64,17 @@ export function isTransformed(item) {
     return t.rotation !== 0 || t.flip_h || t.flip_v;
 }
 
+// Returns null when the value cannot be read as an image list, so callers can
+// tell "genuinely empty" from "unreadable" and avoid overwriting the original.
 export function safeJsonParse(value) {
     try {
         const data = JSON.parse(value || "[]");
-        return Array.isArray(data) ? data : [];
-    } catch (_) {
-        return [];
+        if (Array.isArray(data)) return data;
+        console.warn("[Multi Stitch Images] image list is not an array, ignoring:", value);
+        return null;
+    } catch (error) {
+        console.warn("[Multi Stitch Images] could not parse the image list:", error, value);
+        return null;
     }
 }
 

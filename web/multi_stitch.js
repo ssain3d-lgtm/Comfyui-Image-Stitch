@@ -201,7 +201,9 @@ function drawThumbs(node, ctx) {
     ctx.fillText(
         count
             ? `${count} image${count === 1 ? "" : "s"}${predicted ? `  •  ~${predicted.w}×${predicted.h}` : ""}  •  click image edit / drag ≡ reorder`
-            : "Select this node, then Ctrl+V images",
+            : node._msUnreadable
+                ? "Image list unreadable — kept as-is. Add or Clear all to replace."
+                : "Select this node, then Ctrl+V images",
         9,
         top + 12,
     );
@@ -323,6 +325,8 @@ function stopEvent(event, graphCanvas) {
 }
 
 function changed(node) {
+    // A real edit replaces whatever unreadable text was preserved on load.
+    node._msUnreadable = null;
     syncImages(node);
     syncConditionalWidgets(node);
     updateNodeSize(node, true);
@@ -555,7 +559,7 @@ function setupNode(node) {
 
     const fromWidget = safeJsonParse(imagesWidget?.value);
     const fromProps = safeJsonParse(node.properties.multi_stitch_images);
-    node._msImages = (fromWidget.length ? fromWidget : fromProps).map(normalizeItem);
+    node._msImages = (fromWidget?.length ? fromWidget : fromProps ?? fromWidget ?? []).map(normalizeItem);
     node._msThumbCache = new Map();
     node._msTransformedCache = new Map();
 
@@ -601,16 +605,32 @@ app.registerExtension({
         nodeType.prototype.onConfigure = function (info) {
             const r = configured?.apply(this, arguments);
             const widget = getWidget(this, "images_json");
-            const restored = safeJsonParse(widget?.value);
-            const props = safeJsonParse(info?.properties?.multi_stitch_images || this.properties?.multi_stitch_images);
-            this._msImages = (restored.length ? restored : props).map(normalizeItem);
+            const rawWidget = widget?.value;
+            const rawProps = info?.properties?.multi_stitch_images || this.properties?.multi_stitch_images;
+            const restored = safeJsonParse(rawWidget);
+            const props = safeJsonParse(rawProps);
+            // Both sources unreadable: keep the stored text as-is instead of
+            // replacing it with "[]", which would destroy a recoverable list on
+            // the next save. The backend reports the same input as corrupted.
+            const unreadable = restored === null && props === null;
+            this._msUnreadable = unreadable ? (rawWidget || rawProps || "") : null;
+            const items = restored?.length ? restored : props ?? restored ?? [];
+            this._msImages = items.map(normalizeItem);
             hideWidget(widget);
             hideWidget(getWidget(this, "custom_spacing_color"));
             this._msThumbCache ||= new Map();
             this._msTransformedCache ||= new Map();
             updateCustomColorButton(this);
             syncConditionalWidgets(this);
-            changed(this);
+            if (this._msUnreadable) {
+                console.warn(
+                    "[Multi Stitch Images] keeping the unreadable image list stored on the node;" +
+                    " add or clear images to replace it.",
+                );
+                updateNodeSize(this, true);
+            } else {
+                changed(this);
+            }
             scheduleNodeLayout(this, true);
             return r;
         };
@@ -618,7 +638,9 @@ app.registerExtension({
         const serialize = nodeType.prototype.onSerialize;
         nodeType.prototype.onSerialize = function (data) {
             serialize?.apply(this, arguments);
-            const serialized = JSON.stringify(this._msImages || []);
+            const serialized = this._msUnreadable && !(this._msImages || []).length
+                ? this._msUnreadable
+                : JSON.stringify(this._msImages || []);
             data.properties ||= {};
             data.properties.multi_stitch_images = serialized;
             const widget = getWidget(this, "images_json");

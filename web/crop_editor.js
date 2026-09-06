@@ -1,4 +1,6 @@
 import {
+    cropSourceToView,
+    cropViewToSource,
     imageUrl,
     normalizeCrop,
     normalizeTransform,
@@ -278,11 +280,30 @@ export async function openCropEditor(node, index) {
     }
 
     function applyTransform(next) {
+        // Carry the crop through the transform instead of discarding it: map it
+        // back to the source image, then forward into the new view.
+        const previous = transform;
+        const sourceCrop = cropViewToSource({
+            x: rect.x / working.width,
+            y: rect.y / working.height,
+            w: rect.w / working.width,
+            h: rect.h / working.height,
+        }, previous);
+
         transform = normalizeTransform(next);
         working = renderTransformedImage(source, transform);
         setCanvasSize();
-        rect = fullRect();
-        ratioSelect.value = "free";
+
+        const mapped = normalizeCrop(cropSourceToView(sourceCrop, transform));
+        rect = clamp({
+            x: mapped.x * working.width,
+            y: mapped.y * working.height,
+            w: mapped.w * working.width,
+            h: mapped.h * working.height,
+        });
+
+        // A quarter turn swaps the axes, so a locked aspect no longer applies.
+        if ((previous.rotation - transform.rotation) % 180 !== 0) ratioSelect.value = "free";
         canvas.style.cursor = "crosshair";
         render();
     }

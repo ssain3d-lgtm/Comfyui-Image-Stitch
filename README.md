@@ -114,6 +114,8 @@ git pull
 - `Reset crop`
 - `Reset all`
 
+회전 / 반전은 **잡아둔 Crop 영역을 그대로 유지**합니다. Crop은 이미지 내용을 따라 함께 회전·반전되므로, 편집 순서에 상관없이 같은 영역이 선택된 상태로 남습니다. Crop을 전체로 되돌리려면 `Reset crop`을 사용하세요.
+
 Crop / 회전 / 반전 정보만 workflow에 저장하는 **비파괴 방식**이라 원본 이미지 파일은 수정하지 않습니다.
 
 ## Drag Reorder
@@ -311,6 +313,8 @@ Single-click the thumbnail image area to open the editor.
 - `Flip H / Flip V`
 - `Reset crop`
 - `Reset all`
+
+Rotating or flipping **keeps the crop you drew**. The crop travels with the image content, so the same region stays selected no matter what order you edit in. Use `Reset crop` to go back to the full frame.
 
 Crop / rotation / flip settings are stored **non-destructively** in the workflow. The source image file is not modified.
 
