@@ -15,10 +15,25 @@ export function normalizeCrop(crop) {
     return { x, y, w, h };
 }
 
+export function normalizeTransform(item) {
+    const raw = Number(item?.rotation) || 0;
+    const rotation = ((Math.round(raw / 90) * 90) % 360 + 360) % 360;
+    return {
+        rotation,
+        flip_h: !!item?.flip_h,
+        flip_v: !!item?.flip_v,
+    };
+}
+
 export function isCropped(crop) {
     const c = normalizeCrop(crop);
     return Math.abs(c.x) > CROPPED_EPSILON || Math.abs(c.y) > CROPPED_EPSILON ||
         Math.abs(c.w - 1) > CROPPED_EPSILON || Math.abs(c.h - 1) > CROPPED_EPSILON;
+}
+
+export function isTransformed(item) {
+    const t = normalizeTransform(item);
+    return t.rotation !== 0 || t.flip_h || t.flip_v;
 }
 
 export function safeJsonParse(value) {
@@ -36,7 +51,6 @@ export function getWidget(node, name) {
 
 export function hideWidget(widget) {
     if (!widget) return;
-    // Keep the widget type intact so ComfyUI still serializes its value into the API prompt.
     widget._msHidden = true;
     widget.computeSize = () => [0, -4];
     widget.draw = () => {};
@@ -79,6 +93,47 @@ export function loadThumb(node, item) {
     return state;
 }
 
+export function transformedDimensions(width, height, item) {
+    const { rotation } = normalizeTransform(item);
+    return rotation === 90 || rotation === 270
+        ? { width: height, height: width }
+        : { width, height };
+}
+
+export function renderTransformedImage(source, item) {
+    const sw = source.naturalWidth || source.videoWidth || source.width;
+    const sh = source.naturalHeight || source.videoHeight || source.height;
+    const { rotation, flip_h, flip_v } = normalizeTransform(item);
+    const dims = transformedDimensions(sw, sh, item);
+
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, dims.width);
+    canvas.height = Math.max(1, dims.height);
+    const ctx = canvas.getContext("2d");
+
+    ctx.save();
+    ctx.translate(canvas.width / 2, canvas.height / 2);
+    ctx.scale(flip_h ? -1 : 1, flip_v ? -1 : 1);
+    ctx.rotate(rotation * Math.PI / 180);
+    ctx.drawImage(source, -sw / 2, -sh / 2, sw, sh);
+    ctx.restore();
+    return canvas;
+}
+
+export function loadTransformedThumb(node, item) {
+    const raw = loadThumb(node, item);
+    if (!raw.ready || raw.failed) return raw;
+
+    node._msTransformedCache ||= new Map();
+    const t = normalizeTransform(item);
+    const key = `${item.type || "input"}:${item.subfolder || ""}/${item.filename}:r${t.rotation}:h${t.flip_h ? 1 : 0}:v${t.flip_v ? 1 : 0}`;
+    if (node._msTransformedCache.has(key)) return node._msTransformedCache.get(key);
+
+    const state = { image: renderTransformedImage(raw.image, t), ready: true, failed: false };
+    node._msTransformedCache.set(key, state);
+    return state;
+}
+
 function uniqueUploadName(file) {
     const rawExt = (file.name || "image.png").split(".").pop().toLowerCase();
     const ext = /^[a-z0-9]{2,5}$/.test(rawExt) ? rawExt : "png";
@@ -100,5 +155,8 @@ export async function uploadFile(file) {
         subfolder: data.subfolder || "multi_stitch",
         type: data.type || "input",
         crop: defaultCrop(),
+        rotation: 0,
+        flip_h: false,
+        flip_v: false,
     };
 }
