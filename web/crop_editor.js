@@ -1,10 +1,17 @@
-import { imageUrl, normalizeCrop, normalizeTransform, renderTransformedImage, syncImages } from "./shared.js";
+import {
+    imageUrl,
+    normalizeCrop,
+    normalizeTransform,
+    renderTransformedImage,
+    syncImages,
+} from "./shared.js";
 
 let styleInstalled = false;
 
 function installStyles() {
     if (styleInstalled) return;
     styleInstalled = true;
+
     const style = document.createElement("style");
     style.textContent = `
 .ms-crop-overlay{position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;padding:24px;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
@@ -24,24 +31,52 @@ function installStyles() {
 
 function ratioValue(name, image) {
     if (name === "original") return image.width / image.height;
-    return { "1:1": 1, "4:3": 4 / 3, "3:2": 3 / 2, "16:9": 16 / 9, "9:16": 9 / 16 }[name] || null;
+    return {
+        "1:1": 1,
+        "4:3": 4 / 3,
+        "3:2": 3 / 2,
+        "16:9": 16 / 9,
+        "9:16": 9 / 16,
+    }[name] || null;
 }
 
 function fitRatio(rect, ratio, imageW, imageH) {
     if (!ratio) return rect;
+
     let w = rect.w;
     let h = w / ratio;
-    if (h > rect.h) { h = rect.h; w = h * ratio; }
+    if (h > rect.h) {
+        h = rect.h;
+        w = h * ratio;
+    }
+
     return {
         x: Math.max(0, Math.min(imageW - w, rect.x + (rect.w - w) / 2)),
         y: Math.max(0, Math.min(imageH - h, rect.y + (rect.h - h) / 2)),
-        w, h,
+        w,
+        h,
     };
+}
+
+function cursorForMode(mode) {
+    return {
+        nw: "nwse-resize",
+        se: "nwse-resize",
+        ne: "nesw-resize",
+        sw: "nesw-resize",
+        n: "ns-resize",
+        s: "ns-resize",
+        e: "ew-resize",
+        w: "ew-resize",
+        move: "move",
+        new: "crosshair",
+    }[mode] || "crosshair";
 }
 
 export async function openCropEditor(node, index) {
     const item = node._msImages[index];
     if (!item) return;
+
     installStyles();
 
     const source = new Image();
@@ -56,7 +91,10 @@ export async function openCropEditor(node, index) {
     overlay.className = "ms-crop-overlay";
     overlay.innerHTML = `
       <div class="ms-crop-panel" role="dialog" aria-modal="true">
-        <div class="ms-crop-head"><span>Edit image ${index + 1}</span><span class="dimensions" style="font-size:12px;color:#aaa"></span></div>
+        <div class="ms-crop-head">
+          <span>Edit image ${index + 1}</span>
+          <span class="dimensions" style="font-size:12px;color:#aaa"></span>
+        </div>
         <div class="ms-crop-stage"><canvas class="ms-crop-canvas"></canvas></div>
         <div class="ms-crop-controls">
           <button class="rotate-left" title="Rotate 90° left">↶ 90°</button>
@@ -64,11 +102,23 @@ export async function openCropEditor(node, index) {
           <button class="flip-h">Flip H</button>
           <button class="flip-v">Flip V</button>
           <span class="ms-transform-state"></span>
-          <label>Aspect <select class="ratio"><option value="free">Free</option><option value="original">Original</option><option>1:1</option><option>4:3</option><option>3:2</option><option>16:9</option><option>9:16</option></select></label>
+          <label>Aspect
+            <select class="ratio">
+              <option value="free">Free</option>
+              <option value="original">Original</option>
+              <option>1:1</option>
+              <option>4:3</option>
+              <option>3:2</option>
+              <option>16:9</option>
+              <option>9:16</option>
+            </select>
+          </label>
           <button class="reset-crop">Reset crop</button>
           <button class="reset-all">Reset all</button>
-          <span class="ms-crop-hint">Rotate/flip resets crop • drag image area to crop</span>
-          <span class="ms-crop-spacer"></span><button class="cancel">Cancel</button><button class="primary apply">Apply</button>
+          <span class="ms-crop-hint">Free: drag black edge bars/corners • inside: move • outside: new crop</span>
+          <span class="ms-crop-spacer"></span>
+          <button class="cancel">Cancel</button>
+          <button class="primary apply">Apply</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
@@ -80,7 +130,9 @@ export async function openCropEditor(node, index) {
     const transformState = overlay.querySelector(".ms-transform-state");
     const flipHButton = overlay.querySelector(".flip-h");
     const flipVButton = overlay.querySelector(".flip-v");
-    const maxW = Math.min(1000, innerWidth * 0.82), maxH = Math.min(660, innerHeight * 0.66);
+
+    const maxW = Math.min(1000, innerWidth * 0.82);
+    const maxH = Math.min(660, innerHeight * 0.66);
 
     let transform = normalizeTransform(item);
     let working = renderTransformedImage(source, transform);
@@ -88,13 +140,16 @@ export async function openCropEditor(node, index) {
     let scale = 1;
     let drag = null;
     let handleRadius = 10;
+    let edgeHit = 12;
     let minSize = 4;
 
     function setCanvasSize() {
         scale = Math.min(1, maxW / working.width, maxH / working.height);
         canvas.width = Math.max(1, Math.round(working.width * scale));
         canvas.height = Math.max(1, Math.round(working.height * scale));
-        handleRadius = Math.max(10, 12 / scale);
+
+        handleRadius = Math.max(10, 14 / scale);
+        edgeHit = Math.max(10, 12 / scale);
         minSize = Math.max(4, 8 / scale);
         dimensions.textContent = `${working.width} × ${working.height}`;
     }
@@ -129,24 +184,94 @@ export async function openCropEditor(node, index) {
     };
 
     const hit = (p) => {
-        for (const [name, x, y] of [["nw",rect.x,rect.y],["ne",rect.x+rect.w,rect.y],["sw",rect.x,rect.y+rect.h],["se",rect.x+rect.w,rect.y+rect.h]]) {
+        const x1 = rect.x;
+        const y1 = rect.y;
+        const x2 = rect.x + rect.w;
+        const y2 = rect.y + rect.h;
+
+        for (const [name, x, y] of [
+            ["nw", x1, y1],
+            ["ne", x2, y1],
+            ["sw", x1, y2],
+            ["se", x2, y2],
+        ]) {
             if (Math.hypot(p.x - x, p.y - y) <= handleRadius) return name;
         }
-        return p.x >= rect.x && p.x <= rect.x + rect.w && p.y >= rect.y && p.y <= rect.y + rect.h ? "move" : "new";
+
+        const withinX = p.x >= x1 - edgeHit && p.x <= x2 + edgeHit;
+        const withinY = p.y >= y1 - edgeHit && p.y <= y2 + edgeHit;
+
+        if (withinX && Math.abs(p.y - y1) <= edgeHit) return "n";
+        if (withinX && Math.abs(p.y - y2) <= edgeHit) return "s";
+        if (withinY && Math.abs(p.x - x1) <= edgeHit) return "w";
+        if (withinY && Math.abs(p.x - x2) <= edgeHit) return "e";
+
+        if (p.x >= x1 && p.x <= x2 && p.y >= y1 && p.y <= y2) return "move";
+        return "new";
     };
 
+    function drawBlackHandle(cx, cy, w, h) {
+        ctx.save();
+        ctx.fillStyle = "#050505";
+        ctx.strokeStyle = "rgba(255,255,255,.92)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(cx - w / 2, cy - h / 2, w, h, Math.min(3, h / 2, w / 2));
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+    }
+
     function render() {
-        const sx = canvas.width / working.width, sy = canvas.height / working.height;
-        const x = rect.x * sx, y = rect.y * sy, w = rect.w * sx, h = rect.h * sy;
+        const sx = canvas.width / working.width;
+        const sy = canvas.height / working.height;
+
+        const x = rect.x * sx;
+        const y = rect.y * sy;
+        const w = rect.w * sx;
+        const h = rect.h * sy;
+
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(working, 0, 0, canvas.width, canvas.height);
+
         ctx.fillStyle = "rgba(0,0,0,.56)";
-        ctx.fillRect(0,0,canvas.width,y); ctx.fillRect(0,y+h,canvas.width,canvas.height-y-h); ctx.fillRect(0,y,x,h); ctx.fillRect(x+w,y,canvas.width-x-w,h);
-        ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.strokeRect(x,y,w,h);
-        ctx.strokeStyle = "rgba(255,255,255,.45)"; ctx.lineWidth = 1; ctx.beginPath();
-        ctx.moveTo(x+w/3,y);ctx.lineTo(x+w/3,y+h);ctx.moveTo(x+2*w/3,y);ctx.lineTo(x+2*w/3,y+h);
-        ctx.moveTo(x,y+h/3);ctx.lineTo(x+w,y+h/3);ctx.moveTo(x,y+2*h/3);ctx.lineTo(x+w,y+2*h/3);ctx.stroke();
-        ctx.fillStyle="#fff"; [[x,y],[x+w,y],[x,y+h],[x+w,y+h]].forEach(([a,b])=>ctx.fillRect(a-4,b-4,8,8));
+        ctx.fillRect(0, 0, canvas.width, y);
+        ctx.fillRect(0, y + h, canvas.width, canvas.height - y - h);
+        ctx.fillRect(0, y, x, h);
+        ctx.fillRect(x + w, y, canvas.width - x - w, h);
+
+        ctx.strokeStyle = "#fff";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x, y, w, h);
+
+        ctx.strokeStyle = "rgba(255,255,255,.45)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x + w / 3, y);
+        ctx.lineTo(x + w / 3, y + h);
+        ctx.moveTo(x + 2 * w / 3, y);
+        ctx.lineTo(x + 2 * w / 3, y + h);
+        ctx.moveTo(x, y + h / 3);
+        ctx.lineTo(x + w, y + h / 3);
+        ctx.moveTo(x, y + 2 * h / 3);
+        ctx.lineTo(x + w, y + 2 * h / 3);
+        ctx.stroke();
+
+        const barLong = Math.max(34, Math.min(48, Math.min(w, h) * 0.18));
+        const barThick = 9;
+        const inset = 5;
+
+        drawBlackHandle(x + w / 2, y + inset, barLong, barThick);
+        drawBlackHandle(x + w / 2, y + h - inset, barLong, barThick);
+        drawBlackHandle(x + inset, y + h / 2, barThick, barLong);
+        drawBlackHandle(x + w - inset, y + h / 2, barThick, barLong);
+
+        const cornerSize = 13;
+        drawBlackHandle(x + inset, y + inset, cornerSize, cornerSize);
+        drawBlackHandle(x + w - inset, y + inset, cornerSize, cornerSize);
+        drawBlackHandle(x + inset, y + h - inset, cornerSize, cornerSize);
+        drawBlackHandle(x + w - inset, y + h - inset, cornerSize, cornerSize);
+
         transformState.textContent = `Rotate ${transform.rotation}°${transform.flip_h ? " • H" : ""}${transform.flip_v ? " • V" : ""}`;
         flipHButton.classList.toggle("active", transform.flip_h);
         flipVButton.classList.toggle("active", transform.flip_v);
@@ -158,50 +283,156 @@ export async function openCropEditor(node, index) {
         setCanvasSize();
         rect = fullRect();
         ratioSelect.value = "free";
+        canvas.style.cursor = "crosshair";
         render();
     }
 
-    canvas.addEventListener("pointerdown", (event) => {
-        const p = point(event); drag = { mode: hit(p), start: p, original: { ...rect } };
-        if (drag.mode === "new") rect = { x: p.x, y: p.y, w: minSize, h: minSize };
-        canvas.setPointerCapture(event.pointerId); render();
-    });
-    canvas.addEventListener("pointermove", (event) => {
-        if (!drag) return;
-        const p = point(event), o = drag.original;
-        if (drag.mode === "move") rect = clamp({ ...o, x: o.x + p.x - drag.start.x, y: o.y + p.y - drag.start.y });
-        else if (drag.mode === "new") {
-            const x1=Math.min(drag.start.x,p.x), y1=Math.min(drag.start.y,p.y), x2=Math.max(drag.start.x,p.x), y2=Math.max(drag.start.y,p.y);
-            rect=clamp({x:x1,y:y1,w:Math.max(minSize,x2-x1),h:Math.max(minSize,y2-y1)});
-        } else {
-            let x1=o.x,y1=o.y,x2=o.x+o.w,y2=o.y+o.h;
-            if(drag.mode.includes("w"))x1=p.x;if(drag.mode.includes("e"))x2=p.x;if(drag.mode.includes("n"))y1=p.y;if(drag.mode.includes("s"))y2=p.y;
-            if(x2<x1)[x1,x2]=[x2,x1];if(y2<y1)[y1,y2]=[y2,y1];
-            rect=clamp({x:x1,y:y1,w:Math.max(minSize,x2-x1),h:Math.max(minSize,y2-y1)});
-        }
-        const ratio=ratioValue(ratioSelect.value,working); if(ratio&&drag.mode!=="move")rect=clamp(fitRatio(rect,ratio,working.width,working.height)); render();
-    });
-    canvas.addEventListener("pointerup",()=>drag=null); canvas.addEventListener("pointercancel",()=>drag=null);
-    ratioSelect.addEventListener("change",()=>{const ratio=ratioValue(ratioSelect.value,working);if(ratio)rect=clamp(fitRatio(rect,ratio,working.width,working.height));render();});
+    function resizeFromDrag(p, original, mode) {
+        let x1 = original.x;
+        let y1 = original.y;
+        let x2 = original.x + original.w;
+        let y2 = original.y + original.h;
 
-    overlay.querySelector(".rotate-left").onclick = () => applyTransform({ ...transform, rotation: transform.rotation - 90 });
-    overlay.querySelector(".rotate-right").onclick = () => applyTransform({ ...transform, rotation: transform.rotation + 90 });
+        if (mode.includes("w")) x1 = p.x;
+        if (mode.includes("e")) x2 = p.x;
+        if (mode.includes("n")) y1 = p.y;
+        if (mode.includes("s")) y2 = p.y;
+
+        if (x2 < x1) [x1, x2] = [x2, x1];
+        if (y2 < y1) [y1, y2] = [y2, y1];
+
+        return clamp({
+            x: x1,
+            y: y1,
+            w: Math.max(minSize, x2 - x1),
+            h: Math.max(minSize, y2 - y1),
+        });
+    }
+
+    canvas.addEventListener("pointerdown", (event) => {
+        const p = point(event);
+        const mode = hit(p);
+        drag = { mode, start: p, original: { ...rect } };
+
+        if (mode === "new") {
+            rect = { x: p.x, y: p.y, w: minSize, h: minSize };
+        }
+
+        canvas.style.cursor = cursorForMode(mode);
+        canvas.setPointerCapture(event.pointerId);
+        event.preventDefault();
+        render();
+    });
+
+    canvas.addEventListener("pointermove", (event) => {
+        const p = point(event);
+
+        if (!drag) {
+            canvas.style.cursor = cursorForMode(hit(p));
+            return;
+        }
+
+        const o = drag.original;
+
+        if (drag.mode === "move") {
+            rect = clamp({
+                ...o,
+                x: o.x + p.x - drag.start.x,
+                y: o.y + p.y - drag.start.y,
+            });
+        } else if (drag.mode === "new") {
+            const x1 = Math.min(drag.start.x, p.x);
+            const y1 = Math.min(drag.start.y, p.y);
+            const x2 = Math.max(drag.start.x, p.x);
+            const y2 = Math.max(drag.start.y, p.y);
+            rect = clamp({
+                x: x1,
+                y: y1,
+                w: Math.max(minSize, x2 - x1),
+                h: Math.max(minSize, y2 - y1),
+            });
+        } else {
+            rect = resizeFromDrag(p, o, drag.mode);
+        }
+
+        const ratio = ratioValue(ratioSelect.value, working);
+        if (ratio && drag.mode !== "move") {
+            rect = clamp(fitRatio(rect, ratio, working.width, working.height));
+        }
+
+        render();
+    });
+
+    const endDrag = (event) => {
+        if (event?.pointerId != null && canvas.hasPointerCapture?.(event.pointerId)) {
+            try { canvas.releasePointerCapture(event.pointerId); } catch (_) {}
+        }
+        drag = null;
+        if (event) canvas.style.cursor = cursorForMode(hit(point(event)));
+    };
+
+    canvas.addEventListener("pointerup", endDrag);
+    canvas.addEventListener("pointercancel", () => {
+        drag = null;
+        canvas.style.cursor = "crosshair";
+    });
+    canvas.addEventListener("pointerleave", (event) => {
+        if (!drag) canvas.style.cursor = cursorForMode(hit(point(event)));
+    });
+
+    ratioSelect.addEventListener("change", () => {
+        const ratio = ratioValue(ratioSelect.value, working);
+        if (ratio) rect = clamp(fitRatio(rect, ratio, working.width, working.height));
+        render();
+    });
+
+    overlay.querySelector(".rotate-left").onclick = () => {
+        applyTransform({ ...transform, rotation: transform.rotation - 90 });
+    };
+    overlay.querySelector(".rotate-right").onclick = () => {
+        applyTransform({ ...transform, rotation: transform.rotation + 90 });
+    };
     flipHButton.onclick = () => applyTransform({ ...transform, flip_h: !transform.flip_h });
     flipVButton.onclick = () => applyTransform({ ...transform, flip_v: !transform.flip_v });
 
     let keyHandler = null;
-    const close = () => { if (keyHandler) document.removeEventListener("keydown", keyHandler); overlay.remove(); };
-    overlay.querySelector(".cancel").onclick=close;
-    overlay.querySelector(".reset-crop").onclick=()=>{rect=fullRect();ratioSelect.value="free";render();};
-    overlay.querySelector(".reset-all").onclick=()=>applyTransform({rotation:0,flip_h:false,flip_v:false});
-    overlay.querySelector(".apply").onclick=()=>{
-        item.rotation=transform.rotation;
-        item.flip_h=transform.flip_h;
-        item.flip_v=transform.flip_v;
-        item.crop={x:+(rect.x/working.width).toFixed(6),y:+(rect.y/working.height).toFixed(6),w:+(rect.w/working.width).toFixed(6),h:+(rect.h/working.height).toFixed(6)};
-        node._msTransformedCache?.clear();
-        syncImages(node); close();
+    const close = () => {
+        if (keyHandler) document.removeEventListener("keydown", keyHandler);
+        overlay.remove();
     };
-    overlay.addEventListener("mousedown",(e)=>{if(e.target===overlay)close();});
-    keyHandler=(e)=>{if(e.key==="Escape")close();};document.addEventListener("keydown",keyHandler);render();
+
+    overlay.querySelector(".cancel").onclick = close;
+    overlay.querySelector(".reset-crop").onclick = () => {
+        rect = fullRect();
+        ratioSelect.value = "free";
+        render();
+    };
+    overlay.querySelector(".reset-all").onclick = () => {
+        applyTransform({ rotation: 0, flip_h: false, flip_v: false });
+    };
+    overlay.querySelector(".apply").onclick = () => {
+        item.rotation = transform.rotation;
+        item.flip_h = transform.flip_h;
+        item.flip_v = transform.flip_v;
+        item.crop = {
+            x: +(rect.x / working.width).toFixed(6),
+            y: +(rect.y / working.height).toFixed(6),
+            w: +(rect.w / working.width).toFixed(6),
+            h: +(rect.h / working.height).toFixed(6),
+        };
+        node._msTransformedCache?.clear();
+        syncImages(node);
+        close();
+    };
+
+    overlay.addEventListener("mousedown", (event) => {
+        if (event.target === overlay) close();
+    });
+
+    keyHandler = (event) => {
+        if (event.key === "Escape") close();
+    };
+    document.addEventListener("keydown", keyHandler);
+
+    render();
 }
