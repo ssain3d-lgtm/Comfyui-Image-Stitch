@@ -1,30 +1,40 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="590" viewBox="0 0 1120 590">
-  <rect width="1120" height="590" fill="#171717"/>
-  <rect x="55" y="38" width="450" height="510" rx="14" fill="#292929" stroke="#4d4d4d"/>
-  <rect x="55" y="38" width="450" height="42" rx="14" fill="#343434"/>
-  <text x="78" y="66" font-family="Segoe UI,Arial" font-size="20" fill="#e8e8e8">Multi Stitch Images</text>
-  <circle cx="486" cy="59" r="6" fill="#7fc8ff"/>
-  <g font-family="Segoe UI,Arial" font-size="14" fill="#d8d8d8">
-    <text x="78" y="110">direction</text><rect x="180" y="91" width="292" height="27" rx="13" fill="#202020" stroke="#575757"/><text x="385" y="110">right</text>
-    <text x="78" y="145">match_image_size</text><rect x="349" y="127" width="123" height="27" rx="13" fill="#202020" stroke="#575757"/><text x="397" y="145">true</text>
-    <text x="78" y="180">spacing_width</text><rect x="180" y="161" width="292" height="27" rx="13" fill="#202020" stroke="#575757"/><text x="430" y="180">0</text>
-    <text x="78" y="215">spacing_color</text><rect x="180" y="196" width="292" height="27" rx="13" fill="#202020" stroke="#575757"/><text x="410" y="215">white</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="680" viewBox="0 0 1180 680">
+  <rect width="1180" height="680" fill="#171717"/>
+  <rect x="45" y="30" width="500" height="620" rx="14" fill="#292929" stroke="#4d4d4d"/>
+  <rect x="45" y="30" width="500" height="42" rx="14" fill="#343434"/>
+  <text x="68" y="58" font-family="Segoe UI,Arial" font-size="20" fill="#e8e8e8">Multi Stitch Images</text>
+  <circle cx="526" cy="51" r="6" fill="#7fc8ff"/>
+  <g font-family="Segoe UI,Arial" font-size="13" fill="#d8d8d8">
+    <text x="68" y="98">layout_mode</text><rect x="205" y="80" width="310" height="26" rx="13" fill="#202020" stroke="#575757"/><text x="465" y="98">grid</text>
+    <text x="68" y="130">direction</text><rect x="205" y="112" width="310" height="26" rx="13" fill="#202020" stroke="#575757"/><text x="460" y="130">right</text>
+    <text x="68" y="162">match_image_size</text><rect x="390" y="144" width="125" height="26" rx="13" fill="#202020" stroke="#575757"/><text x="441" y="162">true</text>
+    <text x="68" y="194">grid_columns</text><rect x="205" y="176" width="310" height="26" rx="13" fill="#202020" stroke="#575757"/><text x="482" y="194">3</text>
+    <text x="68" y="226">spacing_width</text><rect x="205" y="208" width="310" height="26" rx="13" fill="#202020" stroke="#575757"/><text x="482" y="226">8</text>
+    <text x="68" y="258">spacing_color</text><rect x="205" y="240" width="310" height="26" rx="13" fill="#202020" stroke="#575757"/><text x="453" y="258">custom</text>
   </g>
-  <rect x="78" y="238" width="190" height="30" rx="7" fill="#3b3b3b" stroke="#626262"/><text x="128" y="258" font-family="Segoe UI,Arial" font-size="13" fill="#fff">Add images…</text>
-  <rect x="282" y="238" width="190" height="30" rx="7" fill="#3b3b3b" stroke="#626262"/><text x="347" y="258" font-family="Segoe UI,Arial" font-size="13" fill="#fff">Clear all</text>
-  <text x="78" y="292" font-family="Segoe UI,Arial" font-size="12" fill="#aaa">3 images  •  ~2304×768  •  click image to crop</text>
-  <g>
-    <rect x="78" y="306" width="124" height="96" fill="#121212" stroke="#777"/><rect x="84" y="312" width="112" height="84" fill="#5e7890"/><circle cx="140" cy="351" r="22" fill="#e7c2a6"/><rect x="125" y="370" width="30" height="23" rx="5" fill="#283a55"/><rect x="84" y="312" width="25" height="19" fill="#000" opacity=".72"/><text x="93" y="327" fill="#fff" font-family="Segoe UI" font-size="12">1</text>
-    <rect x="211" y="306" width="124" height="96" fill="#121212" stroke="#f6b73c"/><rect x="217" y="312" width="112" height="84" fill="#997b70"/><circle cx="273" cy="349" r="21" fill="#ecc7aa"/><rect x="258" y="367" width="30" height="26" rx="5" fill="#492d33"/><rect x="217" y="312" width="25" height="19" fill="#000" opacity=".72"/><text x="226" y="327" fill="#fff" font-family="Segoe UI" font-size="12">2</text><text x="252" y="327" fill="#f6b73c" font-family="Segoe UI" font-size="13">✂</text>
-    <rect x="344" y="306" width="124" height="96" fill="#121212" stroke="#777"/><rect x="350" y="312" width="112" height="84" fill="#657b61"/><circle cx="406" cy="350" r="21" fill="#e7c0a4"/><rect x="390" y="369" width="32" height="24" rx="5" fill="#314633"/><rect x="350" y="312" width="25" height="19" fill="#000" opacity=".72"/><text x="359" y="327" fill="#fff" font-family="Segoe UI" font-size="12">3</text>
+  <rect x="68" y="282" width="139" height="30" rx="7" fill="#3b3b3b" stroke="#626262"/><text x="99" y="302" font-family="Segoe UI,Arial" font-size="12" fill="#fff">Add images…</text>
+  <rect x="218" y="282" width="120" height="30" rx="7" fill="#3b3b3b" stroke="#626262"/><text x="257" y="302" font-family="Segoe UI,Arial" font-size="12" fill="#fff">Clear all</text>
+  <rect x="349" y="282" width="166" height="30" rx="7" fill="#3b3b3b" stroke="#626262"/><text x="370" y="302" font-family="Segoe UI,Arial" font-size="12" fill="#fff">Custom color: #6A55CC</text>
+  <text x="68" y="338" font-family="Segoe UI,Arial" font-size="12" fill="#aaa">5 images • ~1792×1032 • click edit / drag reorder</text>
+  <g font-family="Segoe UI,Arial" font-size="11">
+    <rect x="68" y="352" width="137" height="92" fill="#121212" stroke="#777"/><rect x="74" y="358" width="125" height="80" fill="#5e7890"/><circle cx="137" cy="391" r="20" fill="#e7c2a6"/><rect x="74" y="358" width="24" height="18" fill="#000" opacity=".72"/><text x="82" y="371" fill="#fff">1</text>
+    <rect x="215" y="352" width="137" height="92" fill="#121212" stroke="#8ab4f8" stroke-width="3"/><rect x="221" y="358" width="125" height="80" fill="#997b70"/><circle cx="283" cy="391" r="20" fill="#ecc7aa"/><rect x="221" y="358" width="24" height="18" fill="#000" opacity=".72"/><text x="229" y="371" fill="#fff">2</text><text x="252" y="371" fill="#f6b73c">✂ 90°</text>
+    <rect x="362" y="352" width="137" height="92" fill="#121212" stroke="#777"/><rect x="368" y="358" width="125" height="80" fill="#657b61"/><circle cx="431" cy="391" r="20" fill="#e7c0a4"/><rect x="368" y="358" width="24" height="18" fill="#000" opacity=".72"/><text x="376" y="371" fill="#fff">3</text>
+    <rect x="68" y="454" width="137" height="92" fill="#121212" stroke="#777"/><rect x="74" y="460" width="125" height="80" fill="#77658c"/><circle cx="137" cy="493" r="20" fill="#e2bea2"/><rect x="74" y="460" width="24" height="18" fill="#000" opacity=".72"/><text x="82" y="473" fill="#fff">4</text><text x="105" y="473" fill="#f6b73c">H</text>
+    <rect x="215" y="454" width="137" height="92" fill="#121212" stroke="#777"/><rect x="221" y="460" width="125" height="80" fill="#806b57"/><circle cx="283" cy="493" r="20" fill="#e9c6aa"/><rect x="221" y="460" width="24" height="18" fill="#000" opacity=".72"/><text x="229" y="473" fill="#fff">5</text>
   </g>
-  <text x="78" y="439" font-family="Segoe UI,Arial" font-size="14" fill="#cfcfcf">1. Select node</text><text x="78" y="465" font-family="Segoe UI,Arial" font-size="14" fill="#cfcfcf">2. Ctrl+V one or multiple images</text><text x="78" y="491" font-family="Segoe UI,Arial" font-size="14" fill="#cfcfcf">3. Click thumbnail → non-destructive crop</text><text x="78" y="517" font-family="Segoe UI,Arial" font-size="14" fill="#cfcfcf">4. Connect IMAGE → Preview Image</text>
+  <text x="68" y="578" font-family="Segoe UI,Arial" font-size="13" fill="#cfcfcf">Ctrl+V → drag reorder → click edit → Grid/Strip → Preview Image</text>
+  <text x="68" y="604" font-family="Segoe UI,Arial" font-size="12" fill="#8f8f8f">Blue border: current drag target • Orange badge: crop/rotation/flip</text>
 
-  <path d="M525 288 C585 288 600 288 650 288" stroke="#77bdf2" stroke-width="4" fill="none"/><circle cx="650" cy="288" r="7" fill="#77bdf2"/>
-  <rect x="650" y="135" width="410" height="310" rx="14" fill="#292929" stroke="#4d4d4d"/><rect x="650" y="135" width="410" height="42" rx="14" fill="#343434"/><text x="674" y="163" font-family="Segoe UI,Arial" font-size="20" fill="#e8e8e8">Preview Image</text>
-  <rect x="680" y="205" width="350" height="197" fill="#0d0d0d"/>
-  <rect x="690" y="215" width="103" height="177" fill="#5e7890"/><circle cx="742" cy="277" r="24" fill="#e7c2a6"/>
-  <rect x="799" y="215" width="103" height="177" fill="#997b70"/><circle cx="850" cy="277" r="24" fill="#ecc7aa"/>
-  <rect x="908" y="215" width="112" height="177" fill="#657b61"/><circle cx="964" cy="277" r="24" fill="#e7c0a4"/>
-  <text x="713" y="430" font-family="Segoe UI,Arial" font-size="13" fill="#aaa">Stitched output</text>
+  <path d="M565 335 C615 335 625 335 665 335" stroke="#77bdf2" stroke-width="4" fill="none"/><circle cx="665" cy="335" r="7" fill="#77bdf2"/>
+  <rect x="665" y="120" width="470" height="420" rx="14" fill="#292929" stroke="#4d4d4d"/><rect x="665" y="120" width="470" height="42" rx="14" fill="#343434"/><text x="688" y="148" font-family="Segoe UI,Arial" font-size="20" fill="#e8e8e8">Preview Image</text>
+  <rect x="700" y="195" width="400" height="300" fill="#6A55CC"/>
+  <g>
+    <rect x="708" y="203" width="124" height="136" fill="#5e7890"/><circle cx="770" cy="255" r="23" fill="#e7c2a6"/>
+    <rect x="838" y="203" width="124" height="136" fill="#997b70"/><circle cx="900" cy="255" r="23" fill="#ecc7aa"/>
+    <rect x="968" y="203" width="124" height="136" fill="#657b61"/><circle cx="1030" cy="255" r="23" fill="#e7c0a4"/>
+    <rect x="708" y="347" width="124" height="140" fill="#77658c"/><circle cx="770" cy="398" r="23" fill="#e2bea2"/>
+    <rect x="838" y="347" width="124" height="140" fill="#806b57"/><circle cx="900" cy="398" r="23" fill="#e9c6aa"/>
+  </g>
+  <text x="807" y="523" font-family="Segoe UI,Arial" font-size="13" fill="#aaa">Grid mode • 3 columns • custom spacing color</text>
 </svg>
