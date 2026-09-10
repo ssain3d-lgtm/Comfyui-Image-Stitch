@@ -3,7 +3,7 @@ name = "comfyui-image-stitch"
 description = "Multi Stitch Images for ComfyUI — paste many images into one node, crop / rotate / flip each image, reorder them, then output a stitched strip or grid."
 version = "1.0.0"
 license = { file = "LICENSE" }
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = []
 
 [project.urls]

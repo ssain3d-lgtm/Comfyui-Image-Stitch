@@ -163,7 +163,21 @@ grid_columns = 3
 - `down` → 위 → 아래, 좌 → 우
 - `up` → 아래 → 위, 좌 → 우
 
-`match_image_size = true`이면 첫 번째 편집 이미지 크기를 셀 기준으로 사용하고 다른 이미지는 종횡비를 유지한 채 Fit 합니다.
+`match_image_size = true`이면 **목록의 첫 번째 이미지**(편집 여부와 무관) 크기를 셀 기준으로 사용하고 다른 이미지는 종횡비를 유지한 채 Fit 합니다. Strip에서도 같은 기준을 씁니다. `direction`이 `left` / `up`이면 그 첫 번째 이미지가 화면상 **마지막**에 그려집니다.
+
+## 파라미터
+
+| 위젯 | 값 | 기본값 |
+| --- | --- | --- |
+| `direction` | `right` / `down` / `left` / `up` | `right` |
+| `match_image_size` | `true` / `false` | `true` |
+| `spacing_width` | `0` – `1024` (step 2) | `0` |
+| `spacing_color` | `white` / `black` / `red` / `green` / `blue` / `custom` | `white` |
+| `layout_mode` | `strip` / `grid` | `strip` |
+| `grid_columns` | `1` – `16` | `3` |
+| `custom_spacing_color` | `#RRGGBB` (숨김 위젯, 버튼으로 설정) | `#808080` |
+
+`spacing_width`는 홀수도 동작합니다 — step 2는 위젯의 증감 단위일 뿐입니다. 목록에 없는 값을 API로 직접 넣으면 조용히 기본값으로 바뀌지 않고 **에러가 발생**합니다.
 
 ## Spacing Color
 
@@ -173,16 +187,21 @@ grid_columns = 3
 white / black / red / green / blue / custom
 ```
 
-`custom`을 선택한 뒤 **Custom color** 버튼을 누르면 브라우저 색상 선택기가 열립니다.
+`custom`을 선택한 뒤 **`Custom color: #808080`** 버튼(현재 값이 함께 표시됩니다)을 누르면 브라우저 색상 선택기가 열립니다. 위젯 이름은 `custom_color_picker`입니다.
+
+`spacing_color`는 **배경색 전체**에 적용됩니다 — 이미지 사이 구분선과, 크기가 다른 이미지 주변의 여백(레터박스)이 같은 색으로 채워집니다. Strip / Grid 어느 쪽에서도 동일합니다.
+
+투명 영역이 있는 PNG는 이 배경색 위에 합성됩니다.
 
 ## Output Size Safety Guard
 
-여러 장의 고해상도 이미지를 `match_image_size = false`로 길게 붙이면 결과 Tensor가 매우 커질 수 있습니다. 이 노드는 소스 이미지를 전부 Tensor로 디코딩하기 전에 최종 크기를 먼저 계산합니다.
+여러 장의 고해상도 이미지를 `match_image_size = false`로 길게 붙이면 결과 Tensor가 매우 커질 수 있습니다. 이 노드는 소스 이미지를 전부 Tensor로 디코딩하기 **전에** 파일 메타데이터만으로 최종 크기와 **소스 이미지 합계 크기**를 함께 계산합니다. 작은 결과물이라도 원본이 거대하면 차단됩니다.
 
 기본 안전 한도:
 
 ```text
-최종 출력: 128 MiPixels 이하
+최종 출력: 134.2 MP (128 MiPixels) 이하
+소스 이미지 합계: 134.2 MP (128 MiPixels) 이하
 한 변 최대: 131,072 px
 이미지 수: 최대 256장
 ```
@@ -364,7 +383,21 @@ Grid fill order follows `direction`.
 - `down` → top-to-bottom, then left-to-right
 - `up` → bottom-to-top, then left-to-right
 
-With `match_image_size = true`, the first edited image defines the cell size and the remaining images are fit into that cell while preserving aspect ratio.
+With `match_image_size = true`, the **first image in the list** — edited or not — defines the cell size, and the remaining images are fit into that cell while preserving aspect ratio. Strip mode uses the same reference. With `direction` set to `left` / `up` that first image is drawn **last** on screen.
+
+## Parameters
+
+| Widget | Values | Default |
+| --- | --- | --- |
+| `direction` | `right` / `down` / `left` / `up` | `right` |
+| `match_image_size` | `true` / `false` | `true` |
+| `spacing_width` | `0` – `1024` (step 2) | `0` |
+| `spacing_color` | `white` / `black` / `red` / `green` / `blue` / `custom` | `white` |
+| `layout_mode` | `strip` / `grid` | `strip` |
+| `grid_columns` | `1` – `16` | `3` |
+| `custom_spacing_color` | `#RRGGBB` (hidden widget, set via the button) | `#808080` |
+
+Odd `spacing_width` values work — the step of 2 is only the widget's increment. A value outside the listed set, passed directly through the API, **raises an error** rather than being silently replaced with the default.
 
 ## Spacing Color
 
@@ -374,18 +407,23 @@ Built-in values:
 white / black / red / green / blue / custom
 ```
 
-Choose `custom`, then click **Custom color** to open the browser color picker.
+Choose `custom`, then click the **`Custom color: #808080`** button — it shows the current value — to open the browser color picker. The widget is named `custom_color_picker`.
+
+`spacing_color` is the **whole background**: it fills both the separators between images and the letterbox padding around images of a different size, identically in Strip and Grid.
+
+A PNG with transparency is composited onto that background color.
 
 ## Output Size Safety Guard
 
-A long strip of high-resolution images can create a very large float32 tensor, especially with `match_image_size = false`. The node estimates the final canvas before decoding all source images into tensors.
+A long strip of high-resolution images can create a very large float32 tensor, especially with `match_image_size = false`. From file metadata alone — **before** any source is decoded — the node estimates both the final canvas and the **combined size of the sources**, so a small output built from huge originals is rejected too.
 
 Default safety limits:
 
 ```text
-Final output: max 128 MiPixels
-Maximum side: 131,072 px
-Images per node: max 256
+Final output:        max 134.2 MP (128 MiPixels)
+Source images total: max 134.2 MP (128 MiPixels)
+Maximum side:        131,072 px
+Images per node:     max 256
 ```
 
 If the limit would be exceeded, execution stops with the estimated resolution, megapixels, and approximate float32 output memory. Reduce the image count, Crop/Resize the sources, use Grid, or enable `match_image_size`.
@@ -415,11 +453,11 @@ If you move the workflow to another machine, copy the referenced input images as
 ## Compatibility / Testing
 
 - Designed for current ComfyUI custom-node / canvas APIs and native image clipboard routing.
-- Uses dependencies normally included with ComfyUI: **PyTorch, Pillow, NumPy**.
+- Requires **Python 3.10+** and the dependencies normally included with ComfyUI: **PyTorch, Pillow, NumPy**. No extra packages.
 - Does **not** modify ComfyUI core files.
 - Backend limit: **256 images per node**.
-- Output safety limit: **128 MiPixels / 131,072 px per side**.
-- GitHub Actions checks Python syntax, JavaScript syntax, Strip directions, Grid placement, Crop/rotation dimensions, custom colors, unsafe paths, and the output-size guard.
+- Output safety limit: **134.2 MP (128 MiPixels) / 131,072 px per side**, plus the same cap on the combined source size.
+- GitHub Actions runs the suite on Python 3.10 and 3.12: a package-import smoke test (so a node that would not load in ComfyUI fails CI), `INPUT_TYPES` widget order against the `stitch()` signature, per-pixel rotation/flip checks across all 16 transform combinations, Strip directions, Grid placement with no unused row or column, Crop/rotation dimensions, spacing-colour fill in both layouts, transparency compositing, rejected enum values, unsafe paths, the image-count cap, and the output/input size guards. Every `web/*.js` file is syntax-checked.
 
 ## Credits
 

@@ -1,6 +1,7 @@
 import json
 import math
 import re
+from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
@@ -29,6 +30,9 @@ _COLOR_MAP = {
 _MAX_OUTPUT_PIXELS = 128 * 1024 * 1024
 _MAX_OUTPUT_SIDE = 131_072
 _MAX_INPUT_PIXELS = 128 * 1024 * 1024
+
+_DIRECTIONS = ("right", "down", "left", "up")
+_LAYOUT_MODES = ("strip", "grid")
 
 
 def _safe_input_path(item: dict) -> Path:
@@ -119,10 +123,43 @@ def _crop_box(width: int, height: int, crop: object) -> tuple[int, int, int, int
     return left, top, right, bottom
 
 
+@contextmanager
+def _open_image(path: Path):
+    """Open a source file, reporting Pillow failures in the node's own voice."""
+    try:
+        with Image.open(path) as image:
+            yield image
+    except Image.DecompressionBombError as exc:
+        raise ValueError(
+            f"Multi Stitch Images: '{path.name}' exceeds Pillow's decompression-bomb "
+            f"limit ({Image.MAX_IMAGE_PIXELS:,} px). Resize it before stitching."
+        ) from exc
+    except (OSError, ValueError) as exc:
+        if isinstance(exc, ValueError) and str(exc).startswith("Multi Stitch Images:"):
+            raise
+        raise ValueError(
+            f"Multi Stitch Images: could not read '{path.name}' ({exc})."
+        ) from exc
+
+
+def _flatten_alpha(image: Image.Image, background: tuple[float, float, float]) -> Image.Image:
+    """Composite transparency onto the node background instead of discarding it.
+
+    Dropping the alpha channel with a plain convert("RGB") exposes whatever RGB
+    happened to be stored under fully transparent pixels, which is common in
+    pasted screenshots and cut-outs.
+    """
+    if image.mode not in {"RGBA", "LA", "PA"} and "transparency" not in image.info:
+        return image.convert("RGB")
+    rgba = image.convert("RGBA")
+    solid = Image.new("RGBA", rgba.size, tuple(round(c * 255) for c in background) + (255,))
+    return Image.alpha_composite(solid, rgba).convert("RGB")
+
+
 def _item_output_dimensions(item: dict) -> tuple[int, int]:
     """Return exact post-EXIF/rotate/crop dimensions without decoding to a tensor."""
     path = _safe_input_path(item)
-    with Image.open(path) as source:
+    with _open_image(path) as source:
         image = ImageOps.exif_transpose(source)
         width, height = image.size
 
@@ -134,10 +171,13 @@ def _item_output_dimensions(item: dict) -> tuple[int, int]:
     return right - left, bottom - top
 
 
-def _load_image(item: dict) -> torch.Tensor:
+def _load_image(
+    item: dict,
+    background: tuple[float, float, float] = (1.0, 1.0, 1.0),
+) -> torch.Tensor:
     path = _safe_input_path(item)
-    with Image.open(path) as source:
-        image = ImageOps.exif_transpose(source).convert("RGB")
+    with _open_image(path) as source:
+        image = _flatten_alpha(ImageOps.exif_transpose(source), background)
         image = _apply_transform(image, item)
         width, height = image.size
         left, top, right, bottom = _crop_box(width, height, item.get("crop"))
@@ -195,7 +235,23 @@ def _parse_hex_color(value: str) -> tuple[float, float, float]:
 def _resolve_color(spacing_color: str, custom_spacing_color: str) -> tuple[float, float, float]:
     if spacing_color == "custom":
         return _parse_hex_color(custom_spacing_color)
-    return _COLOR_MAP.get(spacing_color, _COLOR_MAP["white"])
+    if spacing_color not in _COLOR_MAP:
+        raise ValueError(_choice_error("spacing_color", spacing_color, (*_COLOR_MAP, "custom")))
+    return _COLOR_MAP[spacing_color]
+
+
+def _choice_error(name: str, value: object, allowed: tuple[str, ...]) -> str:
+    return (
+        f"Multi Stitch Images: {name} must be one of "
+        f"{', '.join(allowed)}, got {value!r}."
+    )
+
+
+def _require_choice(name: str, value: object, allowed: tuple[str, ...]) -> str:
+    """Reject an out-of-range enum instead of quietly substituting a default."""
+    if value not in allowed:
+        raise ValueError(_choice_error(name, value, allowed))
+    return value
 
 
 def _grid_shape(count: int, grid_columns: int, direction: str) -> tuple[int, int]:
@@ -226,8 +282,8 @@ def _estimate_output_dimensions(
     if not dimensions:
         raise ValueError("Multi Stitch Images: paste or add at least one image first.")
 
-    direction = direction if direction in {"right", "down", "left", "up"} else "right"
-    layout_mode = layout_mode if layout_mode in {"strip", "grid"} else "strip"
+    direction = _require_choice("direction", direction, _DIRECTIONS)
+    layout_mode = _require_choice("layout_mode", layout_mode, _LAYOUT_MODES)
     spacing_width = max(0, int(spacing_width))
     dims = [(max(1, int(w)), max(1, int(h))) for w, h in dimensions]
 
@@ -304,7 +360,6 @@ def _compose_strip(
     match_image_size: bool,
     spacing_width: int,
     color_tuple: tuple[float, float, float],
-    spacing_color_name: str,
 ) -> torch.Tensor:
     first_h, first_w = images[0].shape[1], images[0].shape[2]
     if match_image_size:
@@ -316,12 +371,13 @@ def _compose_strip(
     if direction in {"left", "up"}:
         prepared = list(reversed(prepared))
 
+    # spacing_color is the node's background: it fills both the separator bars
+    # and the letterbox padding. Upstream ImageStitch pads named RGB colours
+    # with black instead, which made strip and grid disagree for the same
+    # setting (red separators over a black background in strip, red everywhere
+    # in grid).
     color = torch.tensor(color_tuple, dtype=prepared[0].dtype, device=prepared[0].device)
-    if spacing_color_name in {"white", "black", "custom"}:
-        pad_color = color
-    else:
-        # Keep built-in Stitch Images behavior for classic named RGB spacing colors.
-        pad_color = torch.zeros(3, dtype=prepared[0].dtype, device=prepared[0].device)
+    pad_color = color
 
     if direction in {"left", "right"}:
         out_h = max(img.shape[1] for img in prepared)
@@ -415,8 +471,8 @@ def _compose(
     if not images:
         raise ValueError("Multi Stitch Images: paste or add at least one image first.")
 
-    direction = direction if direction in {"right", "down", "left", "up"} else "right"
-    layout_mode = layout_mode if layout_mode in {"strip", "grid"} else "strip"
+    direction = _require_choice("direction", direction, _DIRECTIONS)
+    layout_mode = _require_choice("layout_mode", layout_mode, _LAYOUT_MODES)
     spacing_width = max(0, int(spacing_width))
     color_tuple = _resolve_color(spacing_color, custom_spacing_color)
 
@@ -447,7 +503,6 @@ def _compose(
         match_image_size,
         spacing_width,
         color_tuple,
-        spacing_color,
     )
 
 
@@ -514,7 +569,8 @@ class MultiStitchImages:
         )
         _validate_output_dimensions(out_w, out_h)
 
-        images = [_load_image(item) for item in valid_items]
+        background = _resolve_color(spacing_color, custom_spacing_color)
+        images = [_load_image(item, background) for item in valid_items]
         return (
             _compose(
                 images,

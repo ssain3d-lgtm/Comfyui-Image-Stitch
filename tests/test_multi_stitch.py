@@ -1,4 +1,6 @@
+import importlib
 import importlib.util
+import inspect
 import json
 import sys
 import tempfile
@@ -43,12 +45,11 @@ class MultiStitchTests(unittest.TestCase):
         self.temp.cleanup()
 
     def assertRgb(self, pixel, expected, atol=1e-6):
+        want = torch.tensor(expected, dtype=torch.float32)
         self.assertTrue(
-            torch.allclose(
-                pixel,
-                torch.tensor(expected, dtype=torch.float32),
-                atol=atol,
-            )
+            torch.allclose(pixel, want, atol=atol),
+            f"expected rgb {tuple(round(v, 4) for v in want.tolist())}, "
+            f"got {tuple(round(v, 4) for v in pixel.tolist())}"
         )
 
     def test_strip_directions_and_spacing(self):
@@ -203,6 +204,178 @@ class MultiStitchTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "source image"):
             ms._validate_input_pixels(dimensions)
         ms._validate_input_pixels([(4000, 3000)] * 10)
+
+    def test_node_loads_as_a_comfyui_package(self):
+        """A broken __init__ or RETURN_TYPES must fail here, not in ComfyUI."""
+        package_root = MODULE_PATH.parent
+        sys.path.insert(0, str(package_root.parent))
+        try:
+            package = importlib.import_module(package_root.name)
+            importlib.reload(package)
+        finally:
+            sys.path.remove(str(package_root.parent))
+
+        self.assertEqual(list(package.NODE_CLASS_MAPPINGS), ["MultiStitchImages"])
+        self.assertEqual(
+            package.NODE_DISPLAY_NAME_MAPPINGS["MultiStitchImages"], "Multi Stitch Images"
+        )
+        self.assertEqual(package.WEB_DIRECTORY, "./web")
+        node = package.NODE_CLASS_MAPPINGS["MultiStitchImages"]
+        self.assertEqual(node.RETURN_TYPES, ("IMAGE",))
+        self.assertEqual(node.FUNCTION, "stitch")
+        self.assertTrue(callable(getattr(node, node.FUNCTION)))
+        for name in package.__all__:
+            self.assertTrue(hasattr(package, name), name)
+
+    def test_input_types_match_the_stitch_signature(self):
+        """The widget order is load-bearing for the documented screenshots."""
+        required = ms.MultiStitchImages.INPUT_TYPES()["required"]
+        self.assertEqual(
+            list(required),
+            [
+                "direction",
+                "match_image_size",
+                "spacing_width",
+                "spacing_color",
+                "images_json",
+                "layout_mode",
+                "grid_columns",
+                "custom_spacing_color",
+            ],
+        )
+        parameters = list(
+            inspect.signature(ms.MultiStitchImages.stitch).parameters
+        )[1:]
+        self.assertEqual(parameters, list(required))
+        self.assertEqual(required["spacing_color"][0][-1], "custom")
+        self.assertEqual(required["direction"][0], list(ms._DIRECTIONS))
+        self.assertEqual(required["layout_mode"][0], list(ms._LAYOUT_MODES))
+
+    def write_png(self, name, rgb, size=(2, 2)):
+        path = self.root / name
+        Image.new("RGB", size, rgb).save(path)
+        return {"filename": name, "type": "input"}
+
+    def test_stitch_end_to_end(self):
+        """Covers the actual node entry point, not just the helpers."""
+        red = self.write_png("r.png", (255, 0, 0))
+        blue = self.write_png("b.png", (0, 0, 255))
+        (output,) = ms.MultiStitchImages().stitch(
+            direction="right",
+            match_image_size=True,
+            spacing_width=0,
+            spacing_color="white",
+            images_json=json.dumps([red, blue]),
+            layout_mode="strip",
+            grid_columns=3,
+            custom_spacing_color="#808080",
+        )
+        self.assertEqual(output.shape, (1, 2, 4, 3))
+        self.assertEqual(output.dtype, torch.float32)
+        self.assertRgb(output[0, 0, 0], (1.0, 0.0, 0.0))
+        self.assertRgb(output[0, 0, 3], (0.0, 0.0, 1.0))
+
+    def test_stitch_rejects_too_many_images(self):
+        item = self.write_png("many.png", (1, 2, 3))
+        node = ms.MultiStitchImages()
+        with self.assertRaisesRegex(ValueError, "maximum 256"):
+            node.stitch(
+                direction="right",
+                match_image_size=True,
+                spacing_width=0,
+                spacing_color="white",
+                images_json=json.dumps([item] * 257),
+                layout_mode="strip",
+                grid_columns=3,
+                custom_spacing_color="#808080",
+            )
+
+    def test_rotation_and_flip_move_the_marked_corner(self):
+        """Dimension-only assertions let a reversed rotation through."""
+        # Distinct corners, so any wrong transform lands a different colour.
+        source = Image.new("RGB", (2, 2))
+        source.putpixel((0, 0), (255, 0, 0))    # top-left
+        source.putpixel((1, 0), (0, 255, 0))    # top-right
+        source.putpixel((0, 1), (0, 0, 255))    # bottom-left
+        source.putpixel((1, 1), (255, 255, 0))  # bottom-right
+        source.save(self.root / "corners.png")
+
+        red, green, blue, yellow = (1.0, 0, 0), (0, 1.0, 0), (0, 0, 1.0), (1.0, 1.0, 0)
+        # Where the originally-top-left red pixel ends up, per transform.
+        expected = {
+            (0, False, False): (0, 0), (0, True, False): (0, 1),
+            (0, False, True): (1, 0), (0, True, True): (1, 1),
+            (90, False, False): (0, 1), (90, True, False): (0, 0),
+            (90, False, True): (1, 1), (90, True, True): (1, 0),
+            (180, False, False): (1, 1), (180, True, False): (1, 0),
+            (180, False, True): (0, 1), (180, True, True): (0, 0),
+            (270, False, False): (1, 0), (270, True, False): (1, 1),
+            (270, False, True): (0, 0), (270, True, True): (0, 1),
+        }
+        for (rotation, flip_h, flip_v), (row, col) in expected.items():
+            with self.subTest(rotation=rotation, flip_h=flip_h, flip_v=flip_v):
+                tensor = ms._load_image({
+                    "filename": "corners.png", "type": "input",
+                    "rotation": rotation, "flip_h": flip_h, "flip_v": flip_v,
+                })
+                self.assertRgb(tensor[0, row, col], red)
+                # The other three corners must still be the other three colours.
+                seen = {tuple(round(v, 3) for v in tensor[0, r, c].tolist())
+                        for r in (0, 1) for c in (0, 1)}
+                self.assertEqual(seen, {red, green, blue, yellow})
+
+    def test_spacing_color_fills_bars_and_letterbox_in_both_layouts(self):
+        """strip and grid used to disagree for red/green/blue."""
+        tall = solid((0.0, 0.0, 0.0), 4, 2)
+        wide = solid((0.0, 0.0, 0.0), 2, 2)
+        for name, rgb in (
+            ("white", (1.0, 1.0, 1.0)), ("black", (0.0, 0.0, 0.0)),
+            ("red", (1.0, 0.0, 0.0)), ("green", (0.0, 1.0, 0.0)),
+            ("blue", (0.0, 0.0, 1.0)),
+        ):
+            with self.subTest(spacing_color=name):
+                strip = ms._compose([tall, wide], "strip", "right", False, 3, 1, name, "#808080")
+                grid = ms._compose([tall, wide], "grid", "right", False, 3, 1, name, "#808080")
+                self.assertRgb(strip[0, 3, 3], rgb)  # letterbox under the short image
+                self.assertRgb(strip[0, 0, 2], rgb)  # separator bar
+                self.assertRgb(grid[0, 3, 3], rgb)
+        custom = ms._compose([tall, wide], "strip", "right", False, 3, 1, "custom", "#336699")
+        self.assertRgb(custom[0, 3, 3], (0x33 / 255, 0x66 / 255, 0x99 / 255), atol=1e-3)
+
+    def test_transparency_is_composited_onto_the_background(self):
+        path = self.root / "clear.png"
+        Image.new("RGBA", (2, 2), (255, 0, 0, 0)).save(path)
+        item = {"filename": "clear.png", "type": "input"}
+        # Dropping alpha would expose the hidden red instead of the background.
+        self.assertRgb(ms._load_image(item, (1.0, 1.0, 1.0))[0, 0, 0], (1.0, 1.0, 1.0))
+        self.assertRgb(ms._load_image(item, (0.0, 0.0, 0.0))[0, 0, 0], (0.0, 0.0, 0.0))
+        Image.new("RGBA", (2, 2), (255, 0, 0, 128)).save(self.root / "half.png")
+        blended = ms._load_image({"filename": "half.png", "type": "input"}, (1.0, 1.0, 1.0))
+        # alpha_composite over white: 255 - 128 = 127 on the zeroed channels.
+        self.assertRgb(blended[0, 0, 0], (1.0, 127 / 255, 127 / 255), atol=1e-4)
+
+    def test_invalid_choices_are_rejected(self):
+        image = solid((1.0, 1.0, 1.0))
+        with self.assertRaisesRegex(ValueError, "direction must be one of"):
+            ms._compose([image], "strip", "sideways", True, 3, 0, "white", "#808080")
+        with self.assertRaisesRegex(ValueError, "layout_mode must be one of"):
+            ms._compose([image], "mosaic", "right", True, 3, 0, "white", "#808080")
+        with self.assertRaisesRegex(ValueError, "spacing_color must be one of"):
+            ms._compose([image], "strip", "right", True, 3, 0, "purple", "#808080")
+
+    def test_unreadable_source_reports_in_the_nodes_voice(self):
+        (self.root / "broken.png").write_bytes(b"not an image")
+        with self.assertRaisesRegex(ValueError, r"Multi Stitch Images: could not read"):
+            ms._load_image({"filename": "broken.png", "type": "input"})
+
+        self.write_png("small.png", (1, 2, 3))
+        limit = Image.MAX_IMAGE_PIXELS
+        Image.MAX_IMAGE_PIXELS = 1
+        try:
+            with self.assertRaisesRegex(ValueError, "decompression-bomb"):
+                ms._item_output_dimensions({"filename": "small.png", "type": "input"})
+        finally:
+            Image.MAX_IMAGE_PIXELS = limit
 
 
 if __name__ == "__main__":

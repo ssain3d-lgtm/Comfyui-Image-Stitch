@@ -6,13 +6,30 @@ export function defaultCrop() {
     return { x: 0, y: 0, w: 1, h: 1 };
 }
 
+// Mirrors the backend _normalize_crop, including its collapsed-crop fallback,
+// so the node preview can never disagree with the rendered output.
 export function normalizeCrop(crop) {
     const c = crop && typeof crop === "object" ? crop : defaultCrop();
-    const x = Math.min(1, Math.max(0, Number(c.x) || 0));
-    const y = Math.min(1, Math.max(0, Number(c.y) || 0));
-    const w = Math.min(1 - x, Math.max(0.000001, Number(c.w) || 1));
-    const h = Math.min(1 - y, Math.max(0.000001, Number(c.h) || 1));
+    const number = (value, fallback) => {
+        const n = Number(value);
+        return Number.isFinite(n) ? n : fallback;
+    };
+    const x = Math.min(Math.max(number(c.x, 0), 0), 1);
+    const y = Math.min(Math.max(number(c.y, 0), 0), 1);
+    const w = Math.min(Math.max(number(c.w, 1), 0), 1 - x);
+    const h = Math.min(Math.max(number(c.h, 1), 0), 1 - y);
+    if (w <= 0.000001 || h <= 0.000001) return defaultCrop();
     return { x, y, w, h };
+}
+
+// Mirrors the backend _grid_shape: down/up fill column-first, so once rows is
+// fixed only ceil(count / rows) columns are actually used.
+export function gridShape(count, gridColumns, direction) {
+    const n = Math.max(1, Math.floor(Number(count) || 1));
+    let cols = Math.max(1, Math.min(Math.floor(Number(gridColumns) || 1), n));
+    const rows = Math.ceil(n / cols);
+    if (direction === "down" || direction === "up") cols = Math.ceil(n / rows);
+    return { rows, cols };
 }
 
 export function normalizeTransform(item) {
@@ -82,24 +99,43 @@ export function getWidget(node, name) {
     return node.widgets?.find((widget) => widget.name === name);
 }
 
-export function hideWidget(widget) {
+// ComfyUI has two widget render paths now:
+// - legacy LiteGraph canvas
+// - Vue Nodes / Node 2.0
+//
+// Vue Nodes uses options.hidden; the legacy canvas keeps drawing regardless, so
+// draw()/computeSize() must be swapped too. Conditionally shown widgets need
+// that swap undone, so record whether the originals were own properties and
+// restore them exactly. Every caller goes through here — a second, partial
+// implementation is what left grid_columns drawing over the thumbnails.
+export function setWidgetHidden(widget, hidden) {
     if (!widget) return;
-
-    // ComfyUI has two widget render paths now:
-    // - legacy LiteGraph canvas
-    // - Vue Nodes / Node 2.0
-    //
-    // Overriding draw()/computeSize() only hides a widget on the legacy canvas.
-    // Vue Nodes intentionally uses options.hidden, so keep both mechanisms.
-    // `hidden` is also an accessor backed by options.hidden on current ComfyUI.
-    widget._msHidden = true;
     widget.options ||= {};
-    widget.options.hidden = true;
-    try { widget.hidden = true; } catch (_) {}
+    widget.options.hidden = hidden;
+    try { widget.hidden = hidden; } catch (_) {}
+    widget._msHidden = hidden;
 
-    // Legacy-canvas fallback for older ComfyUI builds.
-    widget.computeSize = () => [0, -4];
-    widget.draw = () => {};
+    if (hidden) {
+        widget._msPatched ||= {
+            computeSize: Object.prototype.hasOwnProperty.call(widget, "computeSize")
+                ? widget.computeSize : null,
+            draw: Object.prototype.hasOwnProperty.call(widget, "draw") ? widget.draw : null,
+        };
+        widget.computeSize = () => [0, -4];
+        widget.draw = () => {};
+    } else if (widget._msPatched) {
+        const original = widget._msPatched;
+        if (original.computeSize) widget.computeSize = original.computeSize;
+        else delete widget.computeSize;
+        if (original.draw) widget.draw = original.draw;
+        else delete widget.draw;
+        widget._msPatched = null;
+    }
+    widget.triggerDraw?.();
+}
+
+export function hideWidget(widget) {
+    setWidgetHidden(widget, true);
 }
 
 export function syncImages(node) {

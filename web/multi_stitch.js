@@ -2,6 +2,7 @@ import { app } from "../../scripts/app.js";
 import { openCropEditor } from "./crop_editor.js";
 import {
     getWidget,
+    gridShape,
     hideWidget,
     imageUrl,
     isCropped,
@@ -10,6 +11,7 @@ import {
     normalizeCrop,
     normalizeTransform,
     safeJsonParse,
+    setWidgetHidden,
     syncImages,
     uploadFile,
 } from "./shared.js";
@@ -134,11 +136,20 @@ function predictedSize(node) {
     if (!items.length) return null;
 
     const dims = [];
+    let skipped = 0;
     for (const item of items) {
+        // A file that failed to load is left out of the estimate rather than
+        // suppressing it for every other image; one still decoding just means
+        // "not yet", and the next repaint tries again.
+        if (loadTransformedThumb(node, item).failed) {
+            skipped++;
+            continue;
+        }
         const d = transformedCropDims(node, item);
         if (!d) return null;
         dims.push(d);
     }
+    if (!dims.length) return null;
 
     const direction = getWidget(node, "direction")?.value || "right";
     const match = !!getWidget(node, "match_image_size")?.value;
@@ -147,8 +158,7 @@ function predictedSize(node) {
 
     if (layout === "grid") {
         const requested = Math.max(1, Math.min(16, Number(getWidget(node, "grid_columns")?.value) || 3));
-        const cols = Math.min(requested, dims.length);
-        const rows = Math.ceil(dims.length / cols);
+        const { rows, cols } = gridShape(dims.length, requested, direction);
         let cellW, cellH;
         if (match) {
             cellW = dims[0].w;
@@ -160,6 +170,7 @@ function predictedSize(node) {
         return {
             w: cols * cellW + spacing * (cols - 1),
             h: rows * cellH + spacing * (rows - 1),
+            skipped,
         };
     }
 
@@ -181,6 +192,7 @@ function predictedSize(node) {
         ? {
             w: dims.reduce((s, d) => s + d.w, 0) + spacing * (dims.length - 1),
             h: Math.max(...dims.map((d) => d.h)),
+            skipped,
         }
         : {
             w: Math.max(...dims.map((d) => d.w)),
@@ -201,7 +213,7 @@ function drawThumbs(node, ctx) {
     const predicted = predictedSize(node);
     ctx.fillText(
         count
-            ? `${count} image${count === 1 ? "" : "s"}${predicted ? `  •  ~${predicted.w}×${predicted.h}` : ""}  •  click image edit / drag ≡ reorder`
+            ? `${count} image${count === 1 ? "" : "s"}${predicted ? `  •  ~${predicted.w}×${predicted.h}${predicted.skipped ? ` (${predicted.skipped} not loaded)` : ""}` : ""}  •  click image edit / drag ≡ reorder`
             : node._msUnreadable
                 ? "Image list unreadable — kept as-is. Add or Clear all to replace."
                 : "Select this node, then Ctrl+V images",
@@ -438,6 +450,12 @@ function nearestThumbIndex(node, x, y) {
     return best;
 }
 
+function usableItem(item) {
+    // The backend keeps only dict entries with a resolvable filename, so drop
+    // the rest here too instead of rendering them as broken thumbnails.
+    return !!item && typeof item === "object" && typeof item.filename === "string" && !!item.filename;
+}
+
 function normalizeItem(item) {
     return {
         ...item,
@@ -446,9 +464,31 @@ function normalizeItem(item) {
     };
 }
 
+function normalizeItems(list) {
+    const items = Array.isArray(list) ? list : [];
+    const usable = items.filter(usableItem);
+    if (usable.length !== items.length) {
+        console.warn(
+            `[Multi Stitch Images] dropped ${items.length - usable.length} image entr` +
+            `${items.length - usable.length === 1 ? "y" : "ies"} with no filename.`,
+        );
+    }
+    return usable.map(normalizeItem);
+}
+
 async function addFiles(node, files) {
     const images = Array.from(files || []).filter((file) => file && file.type?.startsWith("image/"));
-    if (!images.length || node._msUploading) return;
+    if (!images.length) return;
+    if (node._msUploading) {
+        // Uploads run sequentially and can take seconds, so say why nothing
+        // happened rather than swallowing the paste.
+        notify(
+            "Upload in progress",
+            `Still uploading — ${images.length} image(s) were not added. Try again in a moment.`,
+            "warn",
+        );
+        return;
+    }
 
     node._msUploading = true;
     const originalTitle = node.title;
@@ -470,16 +510,38 @@ async function addFiles(node, files) {
     }
 }
 
-function chooseFiles(node) {
+// An OS file/colour dialog closed with Escape fires no change event, and the
+// `cancel` event is not carried everywhere, so also drop the element once focus
+// returns to the page. removeOnce keeps that idempotent.
+function transientInput(type) {
     const input = document.createElement("input");
-    input.type = "file";
-    input.accept = "image/*";
-    input.multiple = true;
+    input.type = type;
     input.style.display = "none";
     document.body.appendChild(input);
-    input.addEventListener("change", async () => {
-        await addFiles(node, input.files);
+
+    let done = false;
+    const removeOnce = () => {
+        if (done) return;
+        done = true;
+        window.removeEventListener("focus", onFocus, true);
         input.remove();
+    };
+    const onFocus = () => setTimeout(removeOnce, 500);
+    window.addEventListener("focus", onFocus, true);
+    input.addEventListener("cancel", removeOnce, { once: true });
+    return { input, removeOnce };
+}
+
+function chooseFiles(node) {
+    const { input, removeOnce } = transientInput("file");
+    input.accept = "image/*";
+    input.multiple = true;
+    input.addEventListener("change", async () => {
+        try {
+            await addFiles(node, input.files);
+        } finally {
+            removeOnce();
+        }
     }, { once: true });
     input.click();
 }
@@ -496,19 +558,15 @@ function normalizeHex(value) {
 function setWidgetVisible(widget, visible) {
     if (!widget) return;
     const hidden = !visible;
-    widget.options ||= {};
-    if (widget.options.hidden === hidden && widget._msDynamicHidden === hidden) return;
-    widget.options.hidden = hidden;
-    try { widget.hidden = hidden; } catch (_) {}
-    widget._msDynamicHidden = hidden;
-    widget.triggerDraw?.();
+    if (widget._msHidden === hidden) return;
+    setWidgetHidden(widget, hidden);
 }
 
 function syncConditionalWidgets(node) {
     const layout = getWidget(node, "layout_mode")?.value || "strip";
     const spacingColor = getWidget(node, "spacing_color")?.value || "white";
     setWidgetVisible(getWidget(node, "grid_columns"), layout === "grid");
-    setWidgetVisible(node.widgets?.find((w) => w.name === "custom_color_picker"), spacingColor === "custom");
+    setWidgetVisible(getWidget(node, "custom_color_picker"), spacingColor === "custom");
 }
 
 function updateCustomColorButton(node) {
@@ -522,12 +580,8 @@ function chooseCustomColor(node) {
     const widget = getWidget(node, "custom_spacing_color");
     if (!widget) return;
 
-    const input = document.createElement("input");
-    input.type = "color";
+    const { input, removeOnce } = transientInput("color");
     input.value = normalizeHex(widget.value);
-    input.style.position = "fixed";
-    input.style.left = "-1000px";
-    document.body.appendChild(input);
 
     const apply = () => {
         const old = widget.value;
@@ -541,9 +595,8 @@ function chooseCustomColor(node) {
     input.addEventListener("input", apply);
     input.addEventListener("change", () => {
         apply();
-        input.remove();
+        removeOnce();
     }, { once: true });
-    input.addEventListener("cancel", () => input.remove(), { once: true });
     input.click();
 }
 
@@ -562,10 +615,32 @@ function openEditor(node, index) {
 }
 
 function detachPressFallback(press) {
-    if (!press?.windowPointerUp) return;
-    window.removeEventListener("pointerup", press.windowPointerUp, true);
-    window.removeEventListener("mouseup", press.windowPointerUp, true);
-    press.windowPointerUp = null;
+    if (!press) return;
+    if (press.windowPointerUp) {
+        window.removeEventListener("pointerup", press.windowPointerUp, true);
+        window.removeEventListener("mouseup", press.windowPointerUp, true);
+        press.windowPointerUp = null;
+    }
+    if (press.windowPointerMove) {
+        window.removeEventListener("pointermove", press.windowPointerMove, true);
+        press.windowPointerMove = null;
+    }
+}
+
+// Shared by the node's onMouseMove and the window-level pointermove fallback,
+// so both paths advance the same drag state.
+function updateThumbnailDrag(node, x, y, event) {
+    const press = node?._msThumbPress;
+    if (!press || press.finished) return false;
+
+    press.currentX = x;
+    press.currentY = y;
+    if (!press.dragging && dragDistancePx(press, event, x, y) >= DRAG_THRESHOLD_PX) {
+        press.dragging = true;
+    }
+    if (press.dragging) press.target = nearestThumbIndex(node, x, y);
+    node.graph?.setDirtyCanvas(true, false);
+    return true;
 }
 
 function finishThumbnailDrag(node, graphCanvas) {
@@ -575,7 +650,6 @@ function finishThumbnailDrag(node, graphCanvas) {
     press.finished = true;
     detachPressFallback(press);
     node._msThumbPress = null;
-    try { node.captureInput?.(false); } catch (_) {}
 
     if (press.dragging) reorderItem(node, press.index, press.target);
 
@@ -609,8 +683,18 @@ function startThumbnailDrag(node, index, localX, localY, event, graphCanvas) {
     window.addEventListener("pointerup", press.windowPointerUp, true);
     window.addEventListener("mouseup", press.windowPointerUp, true);
 
+    // LGraphNode.captureInput is deprecated and slated for removal, and it was
+    // the only thing keeping onMouseMove alive once the pointer left the node.
+    // Track the pointer on window instead, which needs no LiteGraph internals.
+    press.windowPointerMove = (moveEvent) => {
+        const [mx, my] = localPos(node, moveEvent, null, graphCanvas);
+        updateThumbnailDrag(node, mx, my, moveEvent);
+    };
+    window.addEventListener("pointermove", press.windowPointerMove, true);
+
+    // Releasing any previous press first keeps its window listeners from leaking.
+    if (node._msThumbPress) detachPressFallback(node._msThumbPress);
     node._msThumbPress = press;
-    try { node.captureInput?.(true); } catch (_) {}
 }
 
 function dragDistancePx(press, event, localX, localY) {
@@ -633,7 +717,7 @@ function setupNode(node) {
 
     const fromWidget = safeJsonParse(imagesWidget?.value);
     const fromProps = safeJsonParse(node.properties.multi_stitch_images);
-    node._msImages = (fromWidget?.length ? fromWidget : fromProps ?? fromWidget ?? []).map(normalizeItem);
+    node._msImages = normalizeItems(fromWidget?.length ? fromWidget : fromProps ?? fromWidget);
     node._msThumbCache = new Map();
     node._msTransformedCache = new Map();
 
@@ -689,7 +773,7 @@ app.registerExtension({
             const unreadable = restored === null && props === null;
             this._msUnreadable = unreadable ? (rawWidget || rawProps || "") : null;
             const items = restored?.length ? restored : props ?? restored ?? [];
-            this._msImages = items.map(normalizeItem);
+            this._msImages = normalizeItems(items);
             hideWidget(widget);
             hideWidget(getWidget(this, "custom_spacing_color"));
             this._msThumbCache ||= new Map();
@@ -752,6 +836,7 @@ app.registerExtension({
                     const actions = thumbActionRects(r);
                     if (inRect(x, y, actions.remove)) {
                         this._msImages.splice(i, 1);
+                        this._msThumbCache?.clear();
                         this._msTransformedCache?.clear();
                         changed(this);
                     } else if (inRect(x, y, actions.prev)) {
@@ -793,16 +878,7 @@ app.registerExtension({
         nodeType.prototype.onMouseMove = function (event, pos, graphCanvas) {
             if (this._msThumbPress) {
                 const [x, y] = localPos(this, event, pos, graphCanvas);
-                const p = this._msThumbPress;
-                p.currentX = x;
-                p.currentY = y;
-
-                if (!p.dragging && dragDistancePx(p, event, x, y) >= DRAG_THRESHOLD_PX) {
-                    p.dragging = true;
-                }
-                if (p.dragging) p.target = nearestThumbIndex(this, x, y);
-
-                this.graph?.setDirtyCanvas(true, false);
+                updateThumbnailDrag(this, x, y, event);
                 stopEvent(event, graphCanvas);
                 return true;
             }
