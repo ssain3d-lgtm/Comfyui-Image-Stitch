@@ -38,6 +38,141 @@ export function gridShape(count, gridColumns, direction) {
     return { rows, cols };
 }
 
+export const DIRECTIONS = ["right", "down", "left", "up"];
+export const LAYOUT_MODES = ["strip", "grid"];
+export const OUTPUT_LIMITS = ["none", "max_width", "max_height", "max_long_side"];
+
+// Python's round() is half-to-even; Math.round is half-up. The backend sizes
+// images with int(round(x)), so the preview must round the same way or a
+// value like 2.5 would put the estimate one pixel off the real output.
+export function roundHalfEven(value) {
+    const floor = Math.floor(value);
+    const diff = value - floor;
+    if (diff > 0.5) return floor + 1;
+    if (diff < 0.5) return floor;
+    return floor % 2 === 0 ? floor : floor + 1;
+}
+
+function requireChoice(name, value, allowed) {
+    if (!allowed.includes(value)) throw new RangeError(`${name} must be one of ${allowed.join(", ")}, got ${value}`);
+    return value;
+}
+
+// Mirrors _prepared_strip_dims: sizes after match_image_size, in list order.
+export function preparedStripDims(dims, direction, matchImageSize) {
+    if (!matchImageSize || dims.length <= 1) return dims.map((d) => ({ w: d.w, h: d.h }));
+    const first = dims[0];
+    const prepared = [{ w: first.w, h: first.h }];
+    for (const { w, h } of dims.slice(1)) {
+        if (direction === "left" || direction === "right") {
+            prepared.push({ w: Math.max(1, roundHalfEven(w * (first.h / h))), h: first.h });
+        } else {
+            prepared.push({ w: first.w, h: Math.max(1, roundHalfEven(h * (first.w / w))) });
+        }
+    }
+    return prepared;
+}
+
+// Mirrors _fit_size.
+export function fitSize(w, h, cellW, cellH) {
+    const scale = Math.min(cellH / h, cellW / w);
+    return { w: Math.max(1, roundHalfEven(w * scale)), h: Math.max(1, roundHalfEven(h * scale)) };
+}
+
+// Mirrors _grid_position.
+export function gridPosition(index, rows, cols, direction) {
+    if (direction === "left") {
+        return { row: Math.floor(index / cols), col: cols - 1 - (index % cols) };
+    }
+    if (direction === "down" || direction === "up") {
+        const col = Math.floor(index / rows);
+        let row = index % rows;
+        if (direction === "up") row = rows - 1 - row;
+        return { row, col };
+    }
+    return { row: Math.floor(index / cols), col: index % cols };
+}
+
+// Mirrors the backend _layout exactly: the canvas size and the rect each
+// image occupies, in list order. The preview and the resolution estimate are
+// drawn from this, and a parity test compares it with Python case by case.
+export function layoutPlacements(dimensions, layoutMode, direction, matchImageSize, gridColumns, spacingWidth, cellWidth = 0, cellHeight = 0) {
+    if (!dimensions.length) throw new RangeError("at least one image is required");
+    requireChoice("direction", direction, DIRECTIONS);
+    requireChoice("layout_mode", layoutMode, LAYOUT_MODES);
+    const spacing = Math.max(0, Math.trunc(Number(spacingWidth) || 0));
+    const dims = dimensions.map((d) => ({ w: Math.max(1, Math.trunc(d.w)), h: Math.max(1, Math.trunc(d.h)) }));
+
+    if (layoutMode === "grid") {
+        const { rows, cols } = gridShape(dims.length, gridColumns, direction);
+        let cellW = Math.max(0, Math.trunc(Number(cellWidth) || 0));
+        let cellH = Math.max(0, Math.trunc(Number(cellHeight) || 0));
+        let placed;
+        if (cellW > 0 && cellH > 0) {
+            placed = dims.map((d) => fitSize(d.w, d.h, cellW, cellH));
+        } else if (matchImageSize) {
+            cellW = dims[0].w;
+            cellH = dims[0].h;
+            placed = dims.map((d) => fitSize(d.w, d.h, cellW, cellH));
+        } else {
+            cellW = Math.max(...dims.map((d) => d.w));
+            cellH = Math.max(...dims.map((d) => d.h));
+            placed = dims;
+        }
+        const placements = placed.map(({ w, h }, index) => {
+            const { row, col } = gridPosition(index, rows, cols, direction);
+            return {
+                x: col * (cellW + spacing) + Math.floor((cellW - w) / 2),
+                y: row * (cellH + spacing) + Math.floor((cellH - h) / 2),
+                w,
+                h,
+            };
+        });
+        return {
+            width: cols * cellW + spacing * (cols - 1),
+            height: rows * cellH + spacing * (rows - 1),
+            placements,
+        };
+    }
+
+    const prepared = preparedStripDims(dims, direction, matchImageSize);
+    const order = prepared.map((_, i) => i);
+    if (direction === "left" || direction === "up") order.reverse();
+    const horizontal = direction === "left" || direction === "right";
+    let width, height;
+    if (horizontal) {
+        height = Math.max(...prepared.map((d) => d.h));
+        width = prepared.reduce((sum, d) => sum + d.w, 0) + spacing * (prepared.length - 1);
+    } else {
+        width = Math.max(...prepared.map((d) => d.w));
+        height = prepared.reduce((sum, d) => sum + d.h, 0) + spacing * (prepared.length - 1);
+    }
+    const placements = new Array(prepared.length);
+    let cursor = 0;
+    for (const index of order) {
+        const { w, h } = prepared[index];
+        if (horizontal) {
+            placements[index] = { x: cursor, y: Math.floor((height - h) / 2), w, h };
+            cursor += w + spacing;
+        } else {
+            placements[index] = { x: Math.floor((width - w) / 2), y: cursor, w, h };
+            cursor += h + spacing;
+        }
+    }
+    return { width, height, placements };
+}
+
+// Mirrors _limited_size: the final size after the output cap, never larger.
+export function limitedSize(width, height, outputLimit, outputLimitPx) {
+    requireChoice("output_limit", outputLimit, OUTPUT_LIMITS);
+    if (outputLimit === "none") return { w: width, h: height };
+    const limit = Math.max(1, Math.trunc(Number(outputLimitPx) || 1));
+    const current = { max_width: width, max_height: height, max_long_side: Math.max(width, height) }[outputLimit];
+    if (current <= limit) return { w: width, h: height };
+    const scale = limit / current;
+    return { w: Math.max(1, roundHalfEven(width * scale)), h: Math.max(1, roundHalfEven(height * scale)) };
+}
+
 export function normalizeTransform(item) {
     const raw = Number(item?.rotation) || 0;
     const rotation = ((Math.round(raw / 90) * 90) % 360 + 360) % 360;
@@ -151,6 +286,61 @@ export function syncImages(node) {
     node.properties ||= {};
     node.properties.multi_stitch_images = serialized;
     node.graph?.setDirtyCanvas(true, true);
+}
+
+// Edit history. `_msCommitted` is the last written list; each commit that
+// changes it pushes the previous list onto `past`. Kept in memory only: a
+// reloaded workflow starts with an empty history.
+export const HISTORY_LIMIT = 50;
+
+export function historyOf(node) {
+    node._msHistory ||= { past: [], future: [] };
+    return node._msHistory;
+}
+
+export function resetHistory(node) {
+    const history = historyOf(node);
+    history.past.length = 0;
+    history.future.length = 0;
+    node._msCommitted = JSON.stringify(node._msImages || []);
+}
+
+// Writes the list to the widget/properties and records the change.
+export function commitImages(node) {
+    const now = JSON.stringify(node._msImages || []);
+    if (node._msCommitted === undefined) {
+        node._msCommitted = now;
+    } else if (now !== node._msCommitted) {
+        const history = historyOf(node);
+        history.past.push(node._msCommitted);
+        if (history.past.length > HISTORY_LIMIT) history.past.shift();
+        history.future.length = 0;
+        node._msCommitted = now;
+    }
+    syncImages(node);
+}
+
+function restoreSnapshot(node, snapshot) {
+    node._msImages = JSON.parse(snapshot);
+    node._msCommitted = snapshot;
+    node._msTransformedCache?.clear();
+    syncImages(node);
+}
+
+export function undoImages(node) {
+    const history = historyOf(node);
+    if (!history.past.length) return false;
+    history.future.push(node._msCommitted ?? JSON.stringify(node._msImages || []));
+    restoreSnapshot(node, history.past.pop());
+    return true;
+}
+
+export function redoImages(node) {
+    const history = historyOf(node);
+    if (!history.future.length) return false;
+    history.past.push(node._msCommitted ?? JSON.stringify(node._msImages || []));
+    restoreSnapshot(node, history.future.pop());
+    return true;
 }
 
 export function imageUrl(item) {

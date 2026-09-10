@@ -4,6 +4,7 @@ it with the Python implementation case by case, so the two cannot drift.
 """
 import importlib.util
 import json
+import random
 import shutil
 import subprocess
 import sys
@@ -27,14 +28,19 @@ spec.loader.exec_module(ms)
 NODE = shutil.which("node")
 
 RUNNER = """
-import { normalizeCrop, gridShape, cropSourceToView, cropViewToSource } from "./pkg/web/shared.js";
+import {
+    normalizeCrop, gridShape, cropSourceToView, cropViewToSource, layoutPlacements, limitedSize,
+} from "./pkg/web/shared.js";
 import { readFileSync } from "node:fs";
 const cases = JSON.parse(readFileSync(process.argv[2], "utf8"));
 const out = {
-    crops: cases.crops.map((c) => normalizeCrop(c)),
-    grid: cases.grid.map(([n, gc, d]) => gridShape(n, gc, d)),
-    forward: cases.mapping.map(([c, t]) => cropSourceToView(c, t)),
-    roundtrip: cases.mapping.map(([c, t]) => cropViewToSource(cropSourceToView(c, t), t)),
+    crops: (cases.crops || []).map((c) => normalizeCrop(c)),
+    grid: (cases.grid || []).map(([n, gc, d]) => gridShape(n, gc, d)),
+    forward: (cases.mapping || []).map(([c, t]) => cropSourceToView(c, t)),
+    roundtrip: (cases.mapping || []).map(([c, t]) => cropViewToSource(cropSourceToView(c, t), t)),
+    layout: (cases.layout || []).map(([dims, layout, direction, match, gc, sw, cw, ch]) =>
+        layoutPlacements(dims.map(([w, h]) => ({ w, h })), layout, direction, match, gc, sw, cw, ch)),
+    limit: (cases.limit || []).map(([w, h, mode, px]) => limitedSize(w, h, mode, px)),
 };
 process.stdout.write(JSON.stringify(out));
 """
@@ -133,6 +139,42 @@ class FrontendParityTests(unittest.TestCase):
             with self.subTest(cropSourceToView=(c, t)):
                 self.assertClose(js, dict(zip("xywh", source_to_view(c, t))))
                 self.assertClose(back, dict(zip("xywh", c)))
+
+    def test_layout_and_output_limit_match_python(self):
+        """Placement rects and the output cap are compared exactly, pixel for pixel."""
+        rng = random.Random(4242)
+        layout_cases = []
+        for _ in range(600):
+            count = rng.randint(1, 8)
+            dims = [(rng.randint(1, 60), rng.randint(1, 60)) for _ in range(count)]
+            layout_cases.append([
+                dims, rng.choice(ms._LAYOUT_MODES), rng.choice(ms._DIRECTIONS), rng.choice([True, False]),
+                rng.randint(1, 6), rng.choice([0, 1, 3, 7]), *rng.choice([(0, 0), (25, 15), (40, 40), (7, 0)]),
+            ])
+        # Include sizes that hit exact .5 after scaling, where half-even rounding matters.
+        layout_cases.append([[(4, 1), (5, 2)], "strip", "right", True, 3, 0, 0, 0])
+        layout_cases.append([[(1, 4), (2, 5)], "strip", "down", True, 3, 0, 0, 0])
+        limit_cases = [
+            [w, h, mode, px]
+            for w, h in ((400, 200), (1, 1), (5000, 3), (777, 777), (2048, 1024))
+            for mode in ms._OUTPUT_LIMITS
+            for px in (64, 100, 777, 2048, 16384)
+        ]
+
+        got = self.run_js({"layout": layout_cases, "limit": limit_cases})
+
+        for case, js in zip(layout_cases, got["layout"]):
+            dims, layout, direction, match, columns, spacing, cell_w, cell_h = case
+            width, height, placements = ms._layout(dims, layout, direction, match, columns, spacing, cell_w, cell_h)
+            with self.subTest(layout=case):
+                self.assertEqual((js["width"], js["height"]), (width, height))
+                self.assertEqual(
+                    [(p["x"], p["y"], p["w"], p["h"]) for p in js["placements"]],
+                    [tuple(p) for p in placements],
+                )
+        for (w, h, mode, px), js in zip(limit_cases, got["limit"]):
+            with self.subTest(limit=(w, h, mode, px)):
+                self.assertEqual((js["w"], js["h"]), ms._limited_size(w, h, mode, px))
 
 
 if __name__ == "__main__":

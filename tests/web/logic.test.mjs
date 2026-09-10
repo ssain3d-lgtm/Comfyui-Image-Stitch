@@ -4,7 +4,8 @@
 import assert from "node:assert/strict";
 import { before, beforeEach, describe, it } from "node:test";
 import {
-    imageFiles, installDom, loadExtension, makeNode, paintedText, stageExtension, tick, widget,
+    imageFiles, installDom, item, loadExtension, makeNode, paintedCalls, paintedText, plainNode, setImages,
+    stageExtension, tick, widget,
 } from "./harness.mjs";
 
 const dom = installDom();
@@ -130,10 +131,10 @@ describe("paste and upload", () => {
 
 describe("reorder", () => {
     it("moves a card by its ≡ handle through window events only, then releases every listener", async () => {
-        const node = makeNode(nodeType);
+        const node = plainNode(nodeType);
         let captureCalls = 0;
         node.captureInput = () => { captureCalls += 1; };
-        node._msImages = imageFiles(4).map((f) => ({ filename: f.name, type: "input", crop: { x: 0, y: 0, w: 1, h: 1 }, rotation: 0, flip_h: false, flip_v: false }));
+        setImages(node, imageFiles(4).map((f) => item(f.name)));
 
         const handle = { x: card(0).x + 65, y: card(0).y + 92 - 12 };
         const consumed = nodeType.prototype.onMouseDown.call(node, pointer(handle.x, handle.y, [100, 200]), [handle.x, handle.y], {});
@@ -157,8 +158,8 @@ describe("reorder", () => {
     });
 
     it("lets a right-click through to the context menu instead of treating it as a click", () => {
-        const node = makeNode(nodeType);
-        node._msImages = [{ filename: "a.png", type: "input", crop: { x: 0, y: 0, w: 1, h: 1 }, rotation: 0, flip_h: false, flip_v: false }];
+        const node = plainNode(nodeType);
+        setImages(node, [item("a.png")]);
         const consumed = nodeType.prototype.onMouseDown.call(node, { ...pointer(card(0).x + 40, card(0).y + 40), button: 2 }, null, {});
         assert.equal(consumed, false, "not handled, so LiteGraph opens its menu");
         assert.ok(!node._msThumbPress, "the right button never starts a drag");
@@ -221,12 +222,10 @@ describe("save and restore", () => {
 });
 
 describe("thumbnails and the resolution estimate", () => {
-    const item = (filename, extra = {}) => ({ filename, type: "input", crop: { x: 0, y: 0, w: 1, h: 1 }, rotation: 0, flip_h: false, flip_v: false, ...extra });
-
     it("keeps a bounded canvas per image but estimates from the true size", async () => {
-        const node = makeNode(nodeType);
+        const node = plainNode(nodeType);
         dom.imageSizes.set("big.png", [4000, 3000]);
-        node._msImages = [item("big.png", { rotation: 90 })];
+        setImages(node, [item("big.png", { rotation: 90 })]);
         shared.loadTransformedThumb(node, node._msImages[0]);
         await tick(2);
 
@@ -250,17 +249,19 @@ describe("thumbnails and the resolution estimate", () => {
     });
 
     it("leaves a file that failed to load out of the estimate instead of hiding it", async () => {
-        const node = makeNode(nodeType);
+        const node = plainNode(nodeType);
         dom.imageSizes.set("a.png", [60, 40]);
         dom.imageSizes.set("b.png", [60, 40]);
-        node._msImages = [item("a.png"), item("b.png"), item("missing.png")];
+        setImages(node, [item("a.png"), item("b.png"), item("missing.png")]);
         widget(node, "layout_mode").value = "grid";
         widget(node, "direction").value = "down";
         paintedText(nodeType, node);
         await tick(2);
         const header = paintedText(nodeType, node)[0];
         assert.match(header, /3 images/);
-        assert.match(header, /~120×40 \(1 not loaded\)/);
+        // The missing file keeps its slot, stood in for by the first known size,
+        // so the layout matches what relinking it will produce.
+        assert.match(header, /~180×40 \(1 not loaded\)/);
     });
 });
 
@@ -276,14 +277,209 @@ describe("conditional widgets", () => {
         assert.equal(columns.options.hidden, false);
         assert.equal(Object.prototype.hasOwnProperty.call(columns, "computeSize"), false, "the override is gone, not replaced by undefined");
     });
+
+    it("shows the cell size only for grid and the pixel cap only when a limit is chosen", () => {
+        const node = makeNode(nodeType);
+        assert.equal(widget(node, "grid_cell_width").options.hidden, true);
+        assert.equal(widget(node, "grid_cell_height").options.hidden, true);
+        assert.equal(widget(node, "output_limit_px").options.hidden, true);
+
+        widget(node, "layout_mode").value = "grid";
+        nodeType.prototype.onWidgetChanged.call(node, "layout_mode", "grid", "strip", widget(node, "layout_mode"));
+        assert.equal(widget(node, "grid_cell_width").options.hidden, false);
+        assert.equal(widget(node, "grid_cell_height").options.hidden, false);
+
+        widget(node, "output_limit").value = "max_width";
+        nodeType.prototype.onWidgetChanged.call(node, "output_limit", "max_width", "none", widget(node, "output_limit"));
+        assert.equal(widget(node, "output_limit_px").options.hidden, false);
+    });
+});
+
+// Header controls sit at the right end of the status line: y 98..116,
+// undo at x 292..316, redo 320..344, preview 348..412 on a 420px node.
+const control = { undo: [304, 107], redo: [332, 107], preview: [380, 107] };
+const click = (node, [x, y]) => nodeType.prototype.onMouseDown.call(node, pointer(x, y), [x, y], {});
+
+describe("preview", () => {
+    it("draws every image into the band and reports the final size after the output cap", async () => {
+        const node = makeNode(nodeType);
+        dom.imageSizes.set("a.png", [40, 20]);
+        dom.imageSizes.set("b.png", [20, 20]);
+        setImages(node, [item("a.png"), item("b.png")]);
+        widget(node, "output_limit").value = "max_width";
+        widget(node, "output_limit_px").value = 30;
+        paintedCalls(nodeType, node);
+        await tick(2);
+        const painted = paintedCalls(nodeType, node);
+        // strip/right/match: 40x20 + 20x20 = 60x20 canvas, capped to 30 wide.
+        assert.match(painted.text[0], /2 images {2}• {2}~30×10/);
+        assert.ok(painted.text.some((t) => t === "Preview  30×10  (canvas 60×20)"), painted.text.join(" | "));
+        assert.equal(painted.drawImage, 4, "two images in the preview and two thumbnails");
+    });
+
+    it("toggles from the header control and gives the rows the band's height back", async () => {
+        const node = makeNode(nodeType);
+        dom.imageSizes.set("a.png", [40, 20]);
+        setImages(node, [item("a.png")]);
+        paintedCalls(nodeType, node);
+        await tick(2);
+        const before = node.size[1];
+        assert.equal(click(node, control.preview), true);
+        assert.equal(node.properties.multi_stitch_preview, false);
+        assert.equal(node.size[1], before - (150 + 8));
+        const painted = paintedCalls(nodeType, node);
+        assert.ok(!painted.text.some((t) => t.startsWith("Preview  ")));
+        assert.equal(painted.drawImage, 1, "only the thumbnail now");
+
+        click(node, control.preview);
+        assert.equal(node.properties.multi_stitch_preview, true);
+        assert.equal(node.size[1], before);
+    });
+
+    it("mentions a connected IMAGE input, whose frames only exist at run time", async () => {
+        const node = makeNode(nodeType, { inputs: [{ name: "images", link: 7 }] });
+        dom.imageSizes.set("a.png", [40, 20]);
+        setImages(node, [item("a.png")]);
+        paintedCalls(nodeType, node);
+        await tick(2);
+        const painted = paintedCalls(nodeType, node);
+        assert.match(painted.text[0], /\+ IMAGE input$/);
+        assert.ok(painted.text.some((t) => t.endsWith("+ IMAGE input at run time")));
+    });
+});
+
+describe("undo and redo", () => {
+    it("steps back through adds, forward again, and forgets the future after a new edit", async () => {
+        const node = plainNode(nodeType);
+        await node.pasteFiles(imageFiles(2, "u"));
+        assert.equal(node._msImages.length, 2);
+        assert.equal(node._msHistory.past.length, 2, "one entry per upload");
+
+        assert.equal(click(node, control.undo), true);
+        assert.equal(node._msImages.length, 1);
+        click(node, control.undo);
+        assert.equal(node._msImages.length, 0);
+        assert.equal(widget(node, "images_json").value, "[]", "the widget follows the undo");
+        click(node, control.undo);
+        assert.equal(node._msImages.length, 0, "nothing further to undo");
+
+        click(node, control.redo);
+        assert.equal(node._msImages.length, 1);
+        await node.pasteFiles(imageFiles(1, "v"));
+        assert.equal(node._msHistory.future.length, 0, "a new edit discards the redo branch");
+        click(node, control.redo);
+        assert.equal(node._msImages.length, 2);
+    });
+
+    it("undoes a drag reorder and a Clear all", async () => {
+        const node = plainNode(nodeType);
+        setImages(node, imageFiles(3).map((f) => item(f.name)));
+        node._msCommitted = JSON.stringify(node._msImages);
+        const handle = { x: card(0).x + 65, y: card(0).y + 92 - 12 };
+        nodeType.prototype.onMouseDown.call(node, pointer(handle.x, handle.y, [100, 200]), [handle.x, handle.y], {});
+        dom.fire("pointermove", pointer(card(2).x + 65, card(2).y + 46, [400, 400]));
+        dom.fire("pointerup", {});
+        await tick(5);
+        assert.deepEqual(node._msImages.map((i) => i.filename), ["img1.png", "img2.png", "img0.png"]);
+        click(node, control.undo);
+        assert.deepEqual(node._msImages.map((i) => i.filename), ["img0.png", "img1.png", "img2.png"]);
+
+        widget(node, "Clear all").callback();
+        assert.equal(node._msImages.length, 0);
+        click(node, control.undo);
+        assert.equal(node._msImages.length, 3);
+    });
+
+    it("starts a fresh history when a workflow is loaded into the node", () => {
+        const node = plainNode(nodeType);
+        node._msHistory.past.push("[]");
+        const saved = JSON.stringify([item("a.png")]);
+        widget(node, "images_json").value = saved;
+        nodeType.prototype.onConfigure.call(node, { properties: { multi_stitch_images: saved } });
+        assert.equal(node._msHistory.past.length, 0);
+        assert.equal(node._msHistory.future.length, 0);
+    });
+});
+
+describe("scrollable list", () => {
+    it("shows three rows by default and scrolls the rest, hit-testing only what is visible", () => {
+        const node = plainNode(nodeType);
+        node._msImages = imageFiles(12).map((f) => item(f.name));   // four rows
+        node._msSized = false;                                      // take the default height
+        paintedCalls(nodeType, node);
+        assert.equal(node.size[1], 118 + 3 * 99 - 7 + 12, "three rows tall");
+
+        // Row 3 (cards 9-11) is off-screen: its position is not clickable.
+        const off = nodeType.prototype.onMouseDown.call(node, pointer(20, 118 + 3 * 99 + 10), null, {});
+        assert.equal(off, false);
+        assert.equal(node._msImages.length, 12);
+
+        // The ▾ at the bottom of the scrollbar brings row 3 into view.
+        assert.equal(click(node, [408, 118 + 290 - 5]), true);
+        assert.equal(node._msScrollRow, 1);
+        // Card 9 now sits on visible row 2, in the narrower cards next to the bar.
+        const cellW = (420 - 16 - 14 - 14) / 3;
+        const removeX = 8 + cellW - 23 + 10;
+        const removeY = 118 + 2 * 99 + 3 + 9;
+        assert.equal(click(node, [removeX, removeY]), true);
+        assert.equal(node._msImages.length, 11);
+        assert.equal(node._msImages.some((i) => i.filename === "img9.png"), false);
+
+        // A wheel over the list scrolls back up; outside it is left alone.
+        assert.equal(nodeType.prototype.onMouseWheel.call(node, { canvasX: 100, canvasY: 200, deltaY: -100, preventDefault() {}, stopPropagation() {} }, null, {}), true);
+        assert.equal(node._msScrollRow, 0);
+        assert.equal(nodeType.prototype.onMouseWheel.call(node, { canvasX: 100, canvasY: 50, deltaY: 100 }, null, {}), false);
+    });
+
+    it("clamps a user resize between one row and all rows", () => {
+        const node = plainNode(nodeType);
+        setImages(node, imageFiles(12).map((f) => item(f.name)));
+        node.size = [420, 5000];
+        nodeType.prototype.onResize.call(node, node.size);
+        assert.equal(node.size[1], 118 + 4 * 99 - 7 + 12, "no taller than the four rows");
+        node.size = [300, 50];
+        nodeType.prototype.onResize.call(node, node.size);
+        assert.deepEqual(node.size, [420, 118 + 92 + 12], "no narrower than the minimum, no shorter than one row");
+    });
+});
+
+describe("relink a missing image", () => {
+    it("replaces the file while keeping crop, transform and position", async () => {
+        const node = plainNode(nodeType);
+        dom.imageSizes.set("a.png", [40, 20]);
+        dom.imageSizes.set("c.png", [40, 20]);
+        setImages(node, [item("a.png"), item("gone.png", { crop: { x: 0.1, y: 0.2, w: 0.5, h: 0.5 }, rotation: 90 }), item("c.png")]);
+        paintedCalls(nodeType, node);
+        await tick(2);
+        assert.match(paintedText(nodeType, node)[0], /\(1 not loaded\)/);
+
+        // Clicking the failed card offers a file instead of the editor.
+        dom.inputs.length = 0;
+        assert.equal(click(node, [card(1).x + 60, card(1).y + 50]), true);
+        assert.equal(node._msEditorOpening, undefined, "the editor was not opened");
+        const input = dom.inputs.at(-1);
+        assert.ok(input?.attached, "a file picker was opened");
+        input.files = [{ name: "found.png", type: "image/png" }];
+        await input.handlers.change[0]();
+
+        const names = node._msImages.map((i) => i.filename);
+        assert.equal(names[0], "a.png");
+        assert.equal(names[2], "c.png");
+        assert.match(names[1], /^multi_stitch_.*\.png$/, "uploaded under the node's naming scheme");
+        assert.deepEqual(node._msImages[1].crop, { x: 0.1, y: 0.2, w: 0.5, h: 0.5 });
+        assert.equal(node._msImages[1].rotation, 90);
+        assert.equal(input.attached, false, "the picker was removed");
+        assert.deepEqual(toasts(), ["success/Image replaced"]);
+        assert.equal(node._msHistory.past.length, 1, "relinking is an undoable edit");
+    });
 });
 
 describe("copy original image", () => {
     const define = (name, value) => Object.defineProperty(globalThis, name, { value, configurable: true, writable: true });
 
     it("offers the entry only over a card and copies the file as PNG", async () => {
-        const node = makeNode(nodeType);
-        node._msImages = [{ filename: "photo.jpg", type: "input", crop: { x: 0, y: 0, w: 1, h: 1 }, rotation: 0, flip_h: false, flip_v: false }];
+        const node = plainNode(nodeType);
+        setImages(node, [item("photo.jpg")]);
         const written = [];
         define("fetch", async () => ({ ok: true, status: 200, blob: async () => ({ type: "image/jpeg" }) }));
         define("ClipboardItem", class { constructor(parts) { this.parts = parts; } });
@@ -296,6 +492,7 @@ describe("copy original image", () => {
         const options = [];
         nodeType.prototype.getExtraMenuOptions.call(node, { graph_mouse: [card(0).x + 65, card(0).y + 46] }, options);
         assert.equal(options[0].content, "Copy original image #1");
+        assert.equal(options[1].content, "Replace image #1…");
         await options[0].callback();
         assert.equal(written.length, 1);
         assert.equal(written[0].type, "image/png", "a JPEG source is re-encoded");
@@ -303,8 +500,8 @@ describe("copy original image", () => {
     });
 
     it("reports a missing file instead of throwing", async () => {
-        const node = makeNode(nodeType);
-        node._msImages = [{ filename: "gone.png", type: "input", crop: { x: 0, y: 0, w: 1, h: 1 }, rotation: 0, flip_h: false, flip_v: false }];
+        const node = plainNode(nodeType);
+        setImages(node, [item("gone.png")]);
         define("fetch", async () => ({ ok: false, status: 404, statusText: "Not Found" }));
         const options = [];
         nodeType.prototype.getExtraMenuOptions.call(node, { graph_mouse: [card(0).x + 65, card(0).y + 46] }, options);

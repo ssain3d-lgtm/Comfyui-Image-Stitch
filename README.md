@@ -24,6 +24,12 @@
 - `spacing_width`
 - 기본색 + **Custom spacing color**
 - 노드 내부 **예상 최종 해상도 표시**
+- 노드 내부 **최종 합성 미리보기** (Queue 전에 실제 배치 확인)
+- 출력 크기 옵션: **`output_limit`**, Grid **셀 크기 고정**
+- 선택 **IMAGE 입력** 연결 + 개별 **`cells`** 출력
+- **↶ / ↷ 실행 취소·다시 실행**
+- **고정 높이 스크롤 목록** (기본 3행, 노드 크기로 조절)
+- 파일이 사라진 이미지 **재연결** (Crop·순서 유지)
 - 초대형 결과 생성 전 **Output Size Safety Guard**
 - 일반 `IMAGE` 출력 → `Preview Image`, `Save Image`, `VAE Encode` 등에 바로 연결
 - 추가 Python 패키지 불필요
@@ -102,6 +108,8 @@ git pull
 8. Grid라면 `grid_columns`를 지정합니다.
 9. 원하는 색이 필요하면 `spacing_color = custom` 후 **Custom color** 버튼을 사용합니다.
 10. `IMAGE` 출력을 **Preview Image**에 연결하고 Queue를 실행합니다.
+11. 썸네일 위 **미리보기 띠**에서 배치를 확인합니다. 결과 전체 크기를 제한하려면 `output_limit`, Grid 셀 크기를 고정하려면 `grid_cell_width / height`를 설정합니다.
+12. 생성·업스케일 결과를 바로 붙이려면 `images` 입력에 IMAGE를 연결합니다. 개별 이미지가 필요하면 `output_cells`를 켜고 `cells` 출력을 씁니다.
 
 ## 이미지 편집기
 
@@ -168,6 +176,21 @@ grid_columns = 3
 
 `match_image_size = true`이면 **목록의 첫 번째 이미지**(편집 여부와 무관) 크기를 셀 기준으로 사용하고 다른 이미지는 종횡비를 유지한 채 Fit 합니다. Strip에서도 같은 기준을 씁니다. `direction`이 `left` / `up`이면 그 첫 번째 이미지가 화면상 **마지막**에 그려집니다.
 
+## 미리보기 · 목록 · 편집 이력
+
+**최종 합성 미리보기** — 썸네일 위의 띠에 실제 배치(Strip/Grid, 방향, 간격, 배경색, 출력 크기 제한)를 축소해 보여줍니다. 백엔드와 **같은 레이아웃 계산**(`_layout` ↔ `layoutPlacements`)을 쓰고 CI에서 픽셀 단위로 대조하므로, Queue 전에 보이는 배치가 곧 결과입니다. 상태줄 오른쪽의 **`Preview`** 버튼으로 끄고 켤 수 있고(워크플로우에 저장), 아직 로드되지 않았거나 없는 이미지는 `?` 자리표시자로 표시됩니다.
+
+**고정 높이 목록** — 썸네일 목록은 기본 **3행**만 보이고 나머지는 스크롤합니다(오른쪽 스크롤바의 ▴/▾, 트랙 클릭, 마우스 휠). 노드를 세로로 늘리면 더 많은 행이 보이며, 1행보다 작아지거나 전체 행보다 커지지는 않습니다.
+
+**실행 취소 / 다시 실행** — 상태줄의 **`↶` / `↷`** 버튼이 추가·삭제·순서 변경·Crop/회전 편집·교체·Clear all을 되돌립니다(최근 50단계, 노드가 열려 있는 동안 유지, 워크플로우를 다시 열면 초기화). ComfyUI 자체의 Ctrl+Z와는 별개입니다.
+
+**누락 이미지 교체** — 워크플로우를 옮겨 원본 파일이 없으면 카드에 `Load failed — click to relink`가 표시됩니다. 카드를 클릭(또는 우클릭 → `Replace image #N…`)해 새 파일을 고르면 **Crop·회전·반전·순서를 유지한 채** 파일만 바뀝니다. 이 교체도 실행 취소할 수 있습니다.
+
+## IMAGE 입력 · 개별 셀 출력
+
+- 선택 입력 **`images`** (IMAGE): 연결된 배치의 프레임들이 붙여넣은 이미지 **뒤에** 추가됩니다. 생성/업스케일 결과를 저장·재업로드 없이 바로 합칠 수 있고, 붙여넣은 이미지 없이 배치만 연결하면 "배치 → 그리드" 노드로도 씁니다. RGBA 프레임은 배경색 위에 합성되고 1채널은 RGB로 확장됩니다. 프레임 수는 실행 시점에만 알 수 있어 미리보기에는 `+ IMAGE input` 표시만 됩니다. 붙여넣은 이미지 + 프레임 합계가 256장 상한입니다.
+- 출력 **`image`**: 합성 결과. 출력 **`cells`**: `output_cells = true`일 때 이미지마다 한 프레임씩, **같은 크기의 셀**(가장 큰 배치 크기 기준) 가운데에 배경색으로 패딩한 배치 `[N, H, W, 3]`입니다. 얼굴 클로즈업처럼 개별 참조를 따로 넘길 때 씁니다. `false`면 `image`와 같은 텐서를 내보내 출력이 비지 않습니다. 셀 배치 전체에도 같은 크기 안전 한도가 적용됩니다.
+
 ## 파라미터
 
 | 위젯 | 값 | 기본값 |
@@ -179,6 +202,11 @@ grid_columns = 3
 | `layout_mode` | `strip` / `grid` | `strip` |
 | `grid_columns` | `1` – `16` | `3` |
 | `custom_spacing_color` | `#RRGGBB` (숨김 위젯, 버튼으로 설정) | `#808080` |
+| `output_limit` | `none` / `max_width` / `max_height` / `max_long_side` | `none` |
+| `output_limit_px` | `64` – `16384` (`output_limit`가 `none`이 아닐 때 표시) | `2048` |
+| `grid_cell_width` / `grid_cell_height` | `0` = 자동, 최대 `16384` (Grid에서만 표시, 둘 다 있어야 적용) | `0` |
+| `output_cells` | `true` / `false` | `false` |
+| `images` (입력) | 선택 IMAGE 배치 — 붙여넣은 이미지 뒤에 추가 | — |
 
 `spacing_width`는 홀수도 동작합니다 — step 2는 위젯의 증감 단위일 뿐입니다. 목록에 없는 값을 API로 직접 넣으면 조용히 기본값으로 바뀌지 않고 **에러가 발생**합니다.
 
@@ -210,6 +238,14 @@ white / black / red / green / blue / custom
 한 변 최대: 131,072 px
 이미지 수: 최대 256장 (노드 UI에서도 같은 상한을 적용)
 ```
+
+### 출력 크기 지정
+
+기본값은 **원본 기준 유지, 추가 축소 없음**입니다. 참조 시트(예: MiniMax H3 같은 모델의 입력)는 해상도가 곧 세부 정보이므로 기본으로는 줄이지 않습니다. 필요할 때만:
+
+- `output_limit` = `max_width` / `max_height` / `max_long_side` + `output_limit_px`: 완성된 결과를 해당 치수가 `px` 이하가 되도록 **축소만** 합니다(확대 없음, 종횡비 유지). 가로 4장 strip을 2048px로 제한하면 한 장당 약 512px이 됩니다. 참조 모델의 입력 노드가 어차피 다시 축소한다면 여기서 키워도 소용없으니, 실제 전달 해상도는 그 노드의 전처리를 먼저 확인하세요.
+- `grid_cell_width` / `grid_cell_height` (Grid): 둘 다 주면 모든 이미지가 그 셀 안에 종횡비를 유지하며 맞춰집니다(예: 768×1024). 한쪽만 주면 자동(첫 이미지 또는 최대 크기)입니다.
+- 미리보기와 상태줄의 `~W×H`는 제한이 적용된 **최종 크기**이며, 캔버스 크기가 다르면 함께 표시합니다. 안전 한도는 축소 전 캔버스에 적용됩니다.
 
 한도를 초과하면 예상 해상도 / MP / float32 메모리 크기를 표시하고 실행을 중단합니다. 이 경우 이미지 수를 줄이거나, Crop/Resize를 하거나, Grid를 사용하거나, `match_image_size = true`를 사용하세요.
 
@@ -253,6 +289,12 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 - `spacing_width`
 - Built-in colors + **Custom spacing color**
 - **Estimated final resolution** displayed inside the node
+- **Composite preview** inside the node — the real layout before you queue
+- Output size options: **`output_limit`** and a fixed Grid **cell size**
+- Optional **IMAGE input** plus a per-image **`cells`** output
+- **↶ / ↷ undo and redo**
+- **Fixed-height, scrollable list** (three rows by default; resize the node for more)
+- **Relink** an image whose file went missing, keeping its crop and order
 - **Output Size Safety Guard** before giant tensors are allocated
 - Standard `IMAGE` output → `Preview Image`, `Save Image`, `VAE Encode`, etc.
 - No extra Python packages required
@@ -329,6 +371,8 @@ Then fully restart ComfyUI. If frontend changes are still cached, refresh the br
 8. In Grid mode, set `grid_columns`.
 9. For an arbitrary color, choose `spacing_color = custom` and use the **Custom color** button.
 10. Connect the `IMAGE` output to **Preview Image** and queue the workflow.
+11. Check the arrangement in the **preview band** above the thumbnails. Use `output_limit` to cap the result's size and `grid_cell_width / height` to fix the Grid cell.
+12. To stitch a generated or upscaled result directly, connect it to the `images` input. For the individual images, turn on `output_cells` and use the `cells` output.
 
 ## Per-image editor
 
@@ -393,6 +437,21 @@ Grid fill order follows `direction`.
 
 With `match_image_size = true`, the **first image in the list** — edited or not — defines the cell size, and the remaining images are fit into that cell while preserving aspect ratio. Strip mode uses the same reference. With `direction` set to `left` / `up` that first image is drawn **last** on screen.
 
+## Preview · list · edit history
+
+**Composite preview** — the band above the thumbnails shows the real arrangement (Strip/Grid, direction, spacing, background colour, output cap) scaled down. It uses the **same layout maths** as the backend (`_layout` ↔ `layoutPlacements`), compared pixel for pixel in CI, so what you see before queueing is what you get. The **`Preview`** button at the right of the status line toggles it (saved with the workflow); an image that is still loading or missing shows as a `?` placeholder.
+
+**Fixed-height list** — the thumbnail list shows **three rows** by default and scrolls the rest (▴/▾ on the scrollbar, track clicks, mouse wheel). Resize the node taller for more rows; it never goes below one row or above the rows it has.
+
+**Undo / redo** — the **`↶` / `↷`** buttons in the status line step through adds, removals, reorders, crop/rotation edits, replacements and Clear all (the last 50 steps, kept while the node is open, reset when a workflow is reopened). Independent of ComfyUI's own Ctrl+Z.
+
+**Relink a missing image** — when a workflow moves and a source file is gone, its card reads `Load failed — click to relink`. Click the card (or right-click → `Replace image #N…`) and pick a file: only the file changes; **crop, rotation, flip and position are kept**. The replacement is undoable too.
+
+## IMAGE input · per-image cells output
+
+- Optional input **`images`** (IMAGE): frames of a connected batch are appended **after** the pasted images, so a generated or upscaled result is stitched without saving and re-adding it — with nothing pasted, the node works as a batch-to-grid tool. RGBA frames are composited onto the background colour; single-channel frames are expanded to RGB. The frame count is only known at run time, so the preview just notes `+ IMAGE input`. Pasted images plus frames share the 256 cap.
+- Output **`image`**: the stitched result. Output **`cells`**: with `output_cells = true`, one frame per image, each centred in a **uniform cell** (the largest placed size) and padded with the background colour, as a batch `[N, H, W, 3]` — for passing individual references, such as a face close-up, on their own. With it off, `cells` is the same tensor as `image`, so the output is never empty. The cells batch is subject to the same size safety limit.
+
 ## Parameters
 
 | Widget | Values | Default |
@@ -404,6 +463,11 @@ With `match_image_size = true`, the **first image in the list** — edited or no
 | `layout_mode` | `strip` / `grid` | `strip` |
 | `grid_columns` | `1` – `16` | `3` |
 | `custom_spacing_color` | `#RRGGBB` (hidden widget, set via the button) | `#808080` |
+| `output_limit` | `none` / `max_width` / `max_height` / `max_long_side` | `none` |
+| `output_limit_px` | `64` – `16384` (shown when `output_limit` is not `none`) | `2048` |
+| `grid_cell_width` / `grid_cell_height` | `0` = automatic, up to `16384` (Grid only; both must be set) | `0` |
+| `output_cells` | `true` / `false` | `false` |
+| `images` (input) | optional IMAGE batch, appended after the pasted images | — |
 
 Odd `spacing_width` values work — the step of 2 is only the widget's increment. A value outside the listed set, passed directly through the API, **raises an error** rather than being silently replaced with the default.
 
@@ -435,6 +499,14 @@ Any one original:  max 134.2 MP (128 MiPixels), measured before the crop
 Maximum side:      131,072 px
 Images per node:   max 256 (the node UI enforces the same cap)
 ```
+
+### Choosing the output size
+
+The default is **original size, no extra downscaling**. For a reference sheet (input to a model such as MiniMax H3) resolution is detail, so nothing is shrunk unless you ask:
+
+- `output_limit` = `max_width` / `max_height` / `max_long_side` with `output_limit_px`: the finished result is **only ever scaled down** (never up, aspect kept) so that dimension is at most `px`. Four images in a row capped at 2048px leaves about 512px each. If the reference node re-scales its input anyway, a larger result here will not help — check that node's preprocessing for the resolution it actually receives.
+- `grid_cell_width` / `grid_cell_height` (Grid): with both set, every image is fitted into that cell, aspect preserved (for example 768×1024). One side alone falls back to automatic sizing (first image, or the largest).
+- The preview and the `~W×H` in the status line show the **final size** after the cap, with the canvas size alongside when they differ. The safety limit applies to the canvas before scaling.
 
 If the limit would be exceeded, execution stops with the estimated resolution, megapixels, and approximate float32 output memory. Reduce the image count, Crop/Resize the sources, use Grid, or enable `match_image_size`.
 
@@ -469,6 +541,7 @@ If you move the workflow to another machine, copy the referenced input images as
 - Output safety limit: **134.2 MP (128 MiPixels) / 131,072 px per side**, and the same per-image cap on any original before its crop. Sources stream through one at a time.
 - GitHub Actions, backend job (Python 3.10 and 3.12): a package-import smoke test (so a node that would not load in ComfyUI fails CI), `INPUT_TYPES` widget order against the `stitch()` signature, per-pixel rotation/flip checks across all 16 transform combinations, EXIF orientation 1–8 against Pillow, a spy proving the measurement pass never decodes pixels, streaming composition (each source loaded once, never two resident), Strip directions, Grid placement with no unused row or column, spacing-colour fill in both layouts, transparency compositing, rejected enum values, unsafe paths, the image-count cap and the size guards. A parity test runs the browser maths (`normalizeCrop`, `gridShape`, crop↔transform mapping) under Node and compares it with Python.
 - GitHub Actions, frontend job (Node 22): `tests/web/logic.test.mjs` drives the real `web/*.js` against a stub ComfyUI — paste, the 256 cap, cancel and Clear-all during upload, ≡ reorder through window events, save → reopen round-trip, an unreadable list kept verbatim, bounded thumbnails, a failed thumbnail not hiding the estimate, conditional widgets, and the copy action. `tests/web/browser.test.mjs` runs the crop editor (corner handles, rotate, apply, cancel) and the clipboard copy (PNG, JPEG re-encode, missing file) in real Chromium via Playwright. Run locally with `npm ci && npx playwright install chromium && npm test`.
+- The frontend suite also covers the preview band (draw calls and the final-size caption), the header undo/redo controls (adds, a drag reorder, Clear all, history reset on load), the scrollable list (default height, scrollbar and wheel, hit-testing only visible rows, resize clamping), the new conditional widgets, and relinking a missing file. The parity test compares `layoutPlacements` / `limitedSize` with `_layout` / `_limited_size` over 700 cases, including sizes that land on exact halves where Python's half-even rounding differs from `Math.round`.
 - Not covered by automation: interaction inside a live ComfyUI session, and the Vue-based "Node 2.0" renderer. The extension sets `options.hidden` for that renderer and swaps `draw`/`computeSize` for the legacy canvas; only the legacy path is exercised by the tests.
 
 ## Credits

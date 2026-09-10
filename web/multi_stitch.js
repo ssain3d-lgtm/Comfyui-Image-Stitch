@@ -1,19 +1,24 @@
 import { app } from "../../scripts/app.js";
 import { openCropEditor } from "./crop_editor.js";
 import {
+    commitImages,
     getWidget,
-    gridShape,
     hideWidget,
+    historyOf,
     imageUrl,
     isCropped,
     isTransformed,
+    layoutPlacements,
+    limitedSize,
     loadTransformedThumb,
     MAX_IMAGES,
     normalizeCrop,
     normalizeTransform,
+    redoImages,
+    resetHistory,
     safeJsonParse,
     setWidgetHidden,
-    syncImages,
+    undoImages,
     uploadFile,
 } from "./shared.js";
 
@@ -25,6 +30,13 @@ const MIN_NODE_WIDTH = 420;
 // Deliberately measured in browser/client pixels, not graph coordinates, so
 // ComfyUI zoom cannot turn a normal click into an accidental reorder.
 const DRAG_THRESHOLD_PX = 6;
+// The composed-result preview band above the list, and the list itself:
+// three rows by default, scrollable beyond that, resizable by the user.
+const PREVIEW_HEIGHT = 150;
+const DEFAULT_LIST_ROWS = 3;
+const SCROLLBAR_W = 8;
+const ROW_H = THUMB_HEIGHT + THUMB_GAP;
+const NAMED_COLORS = { white: "#ffffff", black: "#000000", red: "#ff0000", green: "#00ff00", blue: "#0000ff" };
 
 function visibleWidgetBottom(node) {
     let bottom = 92;
@@ -35,17 +47,86 @@ function visibleWidgetBottom(node) {
     return bottom;
 }
 
+function nodeWidth(node) {
+    return Math.max(MIN_NODE_WIDTH, node.size?.[0] || MIN_NODE_WIDTH);
+}
+
+function previewEnabled(node) {
+    return node.properties?.multi_stitch_preview !== false;
+}
+
+function previewRect(node) {
+    if (!previewEnabled(node) || !(node._msImages?.length)) return null;
+    return { x: 8, y: visibleWidgetBottom(node) + 26, w: nodeWidth(node) - 16, h: PREVIEW_HEIGHT };
+}
+
+function listTop(node) {
+    const preview = previewRect(node);
+    return preview ? preview.y + preview.h + 8 : visibleWidgetBottom(node) + 26;
+}
+
+function rowsOf(node) {
+    return Math.max(1, Math.ceil((node._msImages?.length || 0) / THUMB_COLS));
+}
+
+function heightForRows(node, rows) {
+    return listTop(node) + rows * ROW_H - THUMB_GAP + 12;
+}
+
+// The visible window onto the thumbnail rows: how many fit in the node's
+// current height, and which row is scrolled to the top.
+function listViewport(node) {
+    const top = listTop(node);
+    const rows = rowsOf(node);
+    const available = (node.size?.[1] || 0) - top - 12;
+    const visibleRows = Math.max(1, Math.min(rows, Math.floor((available + THUMB_GAP) / ROW_H)));
+    const maxScroll = Math.max(0, rows - visibleRows);
+    const scroll = Math.max(0, Math.min(maxScroll, Math.floor(node._msScrollRow || 0)));
+    node._msScrollRow = scroll;
+    return {
+        top, rows, visibleRows, maxScroll, scroll,
+        height: visibleRows * ROW_H - THUMB_GAP,
+        scrollable: maxScroll > 0,
+    };
+}
+
+function scrollbarRect(node, viewport = listViewport(node)) {
+    if (!viewport.scrollable) return null;
+    return { x: nodeWidth(node) - 8 - SCROLLBAR_W, y: viewport.top, w: SCROLLBAR_W, h: viewport.height };
+}
+
+function scrollList(node, deltaRows) {
+    const viewport = listViewport(node);
+    const next = Math.max(0, Math.min(viewport.maxScroll, viewport.scroll + deltaRows));
+    if (next === viewport.scroll) return false;
+    node._msScrollRow = next;
+    node.graph?.setDirtyCanvas(true, false);
+    return true;
+}
+
 function thumbLayout(node, index) {
-    const width = Math.max(MIN_NODE_WIDTH, node.size?.[0] || MIN_NODE_WIDTH);
-    const top = visibleWidgetBottom(node) + 26;
-    const cellW = (width - 16 - THUMB_GAP * (THUMB_COLS - 1)) / THUMB_COLS;
+    const viewport = listViewport(node);
+    const width = nodeWidth(node) - 16 - (viewport.scrollable ? SCROLLBAR_W + 6 : 0);
+    const cellW = (width - THUMB_GAP * (THUMB_COLS - 1)) / THUMB_COLS;
     const col = index % THUMB_COLS;
-    const row = Math.floor(index / THUMB_COLS);
+    const row = Math.floor(index / THUMB_COLS) - viewport.scroll;
     return {
         x: 8 + col * (cellW + THUMB_GAP),
-        y: top + row * (THUMB_HEIGHT + THUMB_GAP),
+        y: viewport.top + row * ROW_H,
         w: cellW,
         h: THUMB_HEIGHT,
+        visible: row >= 0 && row < viewport.visibleRows,
+    };
+}
+
+// Undo / redo / preview controls at the right end of the status line.
+function headerControls(node) {
+    const y = visibleWidgetBottom(node) + 6;
+    const right = nodeWidth(node) - 8;
+    return {
+        preview: { x: right - 64, y, w: 64, h: 18 },
+        redo: { x: right - 64 - 4 - 24, y, w: 24, h: 18 },
+        undo: { x: right - 64 - 4 - 24 - 4 - 24, y, w: 24, h: 18 },
     };
 }
 
@@ -58,34 +139,43 @@ function thumbActionRects(r) {
     };
 }
 
-function requiredNodeHeight(node) {
-    const count = node._msImages?.length || 0;
-    const rows = Math.max(1, Math.ceil(count / THUMB_COLS));
-    return visibleWidgetBottom(node) + 26 + rows * THUMB_HEIGHT + (rows - 1) * THUMB_GAP + 12;
-}
 
-function updateNodeSize(node, allowShrink = false) {
+
+function updateNodeSize(node) {
     if (!node) return;
-    const wantedH = requiredNodeHeight(node);
-    const width = Math.max(MIN_NODE_WIDTH, node.size?.[0] || 0);
-    const currentH = node.size?.[1] || 0;
-    const needsExpand = currentH + 1 < wantedH;
-    const needsShrink = allowShrink && currentH > wantedH + 2;
-    const needsWidth = !node.size || node.size[0] < MIN_NODE_WIDTH;
+    const width = nodeWidth(node);
+    const rows = rowsOf(node);
+    const top = listTop(node);
+    node.size ||= [width, 0];
 
-    if (needsExpand || needsShrink || needsWidth) {
-        node.setSize?.([width, needsShrink || needsExpand ? wantedH : currentH]);
+    // Keep the same rows visible when the widgets above the list, or the
+    // preview band, change height.
+    if (node._msListTop !== undefined && top !== node._msListTop) node.size[1] += top - node._msListTop;
+    node._msListTop = top;
+
+    let height = node.size[1] || 0;
+    if (!node._msSized) {
+        height = heightForRows(node, Math.min(rows, DEFAULT_LIST_ROWS));
+        node._msSized = true;
+    }
+    // Never shorter than one row, never taller than all the rows.
+    height = Math.max(heightForRows(node, 1), Math.min(heightForRows(node, rows), height));
+
+    if (node.size[0] !== width || Math.abs(node.size[1] - height) > 0.5) {
+        node.setSize?.([width, height]);
+        node.size[0] = width;
+        node.size[1] = height;
         node.graph?.setDirtyCanvas(true, true);
     }
 }
 
-function scheduleNodeLayout(node, allowShrink = true) {
+function scheduleNodeLayout(node) {
     if (!node || node._msLayoutScheduled) return;
     node._msLayoutScheduled = true;
     const run = () => {
         node._msLayoutScheduled = false;
         syncConditionalWidgets(node);
-        updateNodeSize(node, allowShrink);
+        updateNodeSize(node);
         node.graph?.setDirtyCanvas(true, true);
     };
     if (typeof requestAnimationFrame === "function") {
@@ -132,73 +222,213 @@ function transformedCropDims(node, item) {
     };
 }
 
-function predictedSize(node) {
+function readSettings(node) {
+    const value = (name, fallback) => {
+        const v = getWidget(node, name)?.value;
+        return v === undefined || v === null || v === "" ? fallback : v;
+    };
+    return {
+        direction: value("direction", "right"),
+        match: !!value("match_image_size", true),
+        spacing: Math.max(0, Number(value("spacing_width", 0)) || 0),
+        layout: value("layout_mode", "strip"),
+        gridColumns: Math.max(1, Math.min(16, Number(value("grid_columns", 3)) || 3)),
+        cellWidth: Math.max(0, Number(value("grid_cell_width", 0)) || 0),
+        cellHeight: Math.max(0, Number(value("grid_cell_height", 0)) || 0),
+        outputLimit: value("output_limit", "none"),
+        outputLimitPx: Math.max(1, Number(value("output_limit_px", 2048)) || 2048),
+        spacingColor: value("spacing_color", "white"),
+        customColor: normalizeHex(value("custom_spacing_color", "#808080")),
+    };
+}
+
+function backgroundColor(settings) {
+    return settings.spacingColor === "custom" ? settings.customColor : (NAMED_COLORS[settings.spacingColor] || "#ffffff");
+}
+
+// Dimensions and placements the backend will use, from the same layout maths
+// (layoutPlacements mirrors _layout). Items still decoding yield null; items
+// that failed to load are stood in for by the first known size and flagged.
+function plannedLayout(node) {
     const items = node._msImages || [];
     if (!items.length) return null;
-
-    const dims = [];
-    let skipped = 0;
-    for (const item of items) {
-        // A file that failed to load is left out of the estimate rather than
-        // suppressing it for every other image; one still decoding just means
-        // "not yet", and the next repaint tries again.
-        if (loadTransformedThumb(node, item).failed) {
-            skipped++;
-            continue;
-        }
-        const d = transformedCropDims(node, item);
-        if (!d) return null;
-        dims.push(d);
+    const settings = readSettings(node);
+    const known = items.map((item) => {
+        const state = loadTransformedThumb(node, item);
+        if (state.failed) return "failed";
+        return transformedCropDims(node, item);
+    });
+    if (known.some((d) => d === null)) return null;
+    const fallback = known.find((d) => d && d !== "failed") || { w: 256, h: 256 };
+    const dims = known.map((d) => (d === "failed" ? fallback : d));
+    let layout;
+    try {
+        layout = layoutPlacements(
+            dims, settings.layout, settings.direction, settings.match,
+            settings.gridColumns, settings.spacing, settings.cellWidth, settings.cellHeight,
+        );
+    } catch (_) {
+        return null;
     }
-    if (!dims.length) return null;
+    const final = limitedSize(layout.width, layout.height, settings.outputLimit, settings.outputLimitPx);
+    return {
+        ...layout,
+        finalWidth: final.w,
+        finalHeight: final.h,
+        failed: known.map((d) => d === "failed"),
+        skipped: known.filter((d) => d === "failed").length,
+        settings,
+    };
+}
 
-    const direction = getWidget(node, "direction")?.value || "right";
-    const match = !!getWidget(node, "match_image_size")?.value;
-    const spacing = Math.max(0, Number(getWidget(node, "spacing_width")?.value) || 0);
-    const layout = getWidget(node, "layout_mode")?.value || "strip";
+function predictedSize(node) {
+    const planned = plannedLayout(node);
+    return planned ? { w: planned.finalWidth, h: planned.finalHeight, skipped: planned.skipped } : null;
+}
 
-    if (layout === "grid") {
-        const requested = Math.max(1, Math.min(16, Number(getWidget(node, "grid_columns")?.value) || 3));
-        const { rows, cols } = gridShape(dims.length, requested, direction);
-        let cellW, cellH;
-        if (match) {
-            cellW = dims[0].w;
-            cellH = dims[0].h;
+function imageInputConnected(node) {
+    return (node.inputs || []).some((input) => input?.name === "images" && input.link != null);
+}
+
+function drawPill(ctx, rect, label, active = true) {
+    ctx.fillStyle = active ? "rgba(255,255,255,.12)" : "rgba(255,255,255,.05)";
+    ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+    ctx.fillStyle = active ? "#e8e8e8" : "#6f6f6f";
+    ctx.textAlign = "center";
+    ctx.fillText(label, rect.x + rect.w / 2, rect.y + 13);
+    ctx.textAlign = "left";
+}
+
+function drawPreview(ctx, node, rect) {
+    ctx.fillStyle = "#101010";
+    ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+    ctx.strokeStyle = "#3a3a3a";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(rect.x + 0.5, rect.y + 0.5, rect.w - 1, rect.h - 1);
+
+    const planned = plannedLayout(node);
+    if (!planned) {
+        ctx.fillStyle = "#8d8d8d";
+        ctx.textAlign = "center";
+        ctx.fillText("Loading preview…", rect.x + rect.w / 2, rect.y + rect.h / 2 + 4);
+        ctx.textAlign = "left";
+        return;
+    }
+
+    const inset = 6;
+    const scale = Math.min((rect.w - inset * 2) / planned.width, (rect.h - inset * 2) / planned.height);
+    const pw = Math.max(1, planned.width * scale);
+    const ph = Math.max(1, planned.height * scale);
+    const ox = rect.x + (rect.w - pw) / 2;
+    const oy = rect.y + (rect.h - ph) / 2;
+
+    ctx.fillStyle = backgroundColor(planned.settings);
+    ctx.fillRect(ox, oy, pw, ph);
+
+    const items = node._msImages;
+    planned.placements.forEach((p, index) => {
+        const dest = { x: ox + p.x * scale, y: oy + p.y * scale, w: Math.max(1, p.w * scale), h: Math.max(1, p.h * scale) };
+        const state = loadTransformedThumb(node, items[index]);
+        if (state.ready && !planned.failed[index]) {
+            const size = mediaSize(state.image);
+            const c = normalizeCrop(items[index].crop);
+            ctx.drawImage(
+                state.image,
+                c.x * size.w, c.y * size.h, c.w * size.w, c.h * size.h,
+                dest.x, dest.y, dest.w, dest.h,
+            );
         } else {
-            cellW = Math.max(...dims.map((d) => d.w));
-            cellH = Math.max(...dims.map((d) => d.h));
+            ctx.fillStyle = "rgba(255,80,80,.35)";
+            ctx.fillRect(dest.x, dest.y, dest.w, dest.h);
+            ctx.fillStyle = "#fff";
+            ctx.textAlign = "center";
+            ctx.fillText("?", dest.x + dest.w / 2, dest.y + dest.h / 2 + 4);
+            ctx.textAlign = "left";
         }
-        return {
-            w: cols * cellW + spacing * (cols - 1),
-            h: rows * cellH + spacing * (rows - 1),
-            skipped,
-        };
+    });
+
+    ctx.fillStyle = "rgba(0,0,0,.6)";
+    const caption = `Preview  ${planned.finalWidth}×${planned.finalHeight}` +
+        (planned.finalWidth !== planned.width ? `  (canvas ${planned.width}×${planned.height})` : "") +
+        (imageInputConnected(node) ? "  + IMAGE input at run time" : "");
+    ctx.fillRect(rect.x + 1, rect.y + rect.h - 17, rect.w - 2, 16);
+    ctx.fillStyle = "#d0d0d0";
+    ctx.fillText(caption, rect.x + 8, rect.y + rect.h - 5);
+}
+
+function drawCard(ctx, node, item, index, r) {
+    const actions = thumbActionRects(r);
+    const press = node._msThumbPress;
+    const isSource = press?.dragging && press.index === index;
+    const isTarget = press?.dragging && press.target === index;
+
+    ctx.save();
+    if (isSource) ctx.globalAlpha = 0.55;
+    ctx.fillStyle = "#171717";
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.strokeStyle = isTarget
+        ? "#8ab4f8"
+        : (isCropped(item.crop) || isTransformed(item) ? "#f6b73c" : "#555");
+    ctx.lineWidth = isTarget ? 3 : 1;
+    ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+
+    const state = loadTransformedThumb(node, item);
+    const imageRect = { x: r.x + 3, y: r.y + 3, w: r.w - 6, h: r.h - 6 };
+
+    if (state.ready) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(imageRect.x, imageRect.y, imageRect.w, imageRect.h);
+        ctx.clip();
+        drawContained(ctx, state.image, item.crop, imageRect);
+        ctx.restore();
+    } else {
+        ctx.fillStyle = state.failed ? "#f08a8a" : "#8d8d8d";
+        ctx.textAlign = "center";
+        if (state.failed) {
+            ctx.fillText("Load failed", r.x + r.w / 2, r.y + r.h / 2 - 4);
+            ctx.fillText("click to relink", r.x + r.w / 2, r.y + r.h / 2 + 12);
+        } else {
+            ctx.fillText("Loading…", r.x + r.w / 2, r.y + r.h / 2 + 4);
+        }
     }
 
-    if (match && dims.length > 1) {
-        const first = dims[0];
-        for (let i = 1; i < dims.length; i++) {
-            const d = dims[i];
-            if (direction === "left" || direction === "right") {
-                d.w = Math.max(1, Math.round(d.w * first.h / d.h));
-                d.h = first.h;
-            } else {
-                d.h = Math.max(1, Math.round(d.h * first.w / d.w));
-                d.w = first.w;
-            }
-        }
+    ctx.textAlign = "left";
+    ctx.fillStyle = "rgba(0,0,0,.72)";
+    ctx.fillRect(r.x + 3, r.y + 3, 27, 19);
+    ctx.fillStyle = "#fff";
+    ctx.fillText(String(index + 1), r.x + 11, r.y + 17);
+
+    let badgeX = r.x + 33;
+    if (isCropped(item.crop)) {
+        ctx.fillStyle = "rgba(0,0,0,.72)";
+        ctx.fillRect(badgeX, r.y + 3, 25, 19);
+        ctx.fillStyle = "#f6b73c";
+        ctx.fillText("✂", badgeX + 6, r.y + 17);
+        badgeX += 28;
     }
 
-    return direction === "left" || direction === "right"
-        ? {
-            w: dims.reduce((s, d) => s + d.w, 0) + spacing * (dims.length - 1),
-            h: Math.max(...dims.map((d) => d.h)),
-            skipped,
-        }
-        : {
-            w: Math.max(...dims.map((d) => d.w)),
-            h: dims.reduce((s, d) => s + d.h, 0) + spacing * (dims.length - 1),
-        };
+    if (isTransformed(item)) {
+        const t = normalizeTransform(item);
+        ctx.fillStyle = "rgba(0,0,0,.72)";
+        ctx.fillRect(badgeX, r.y + 3, 48, 19);
+        ctx.fillStyle = "#f6b73c";
+        ctx.fillText(`${t.rotation}°${t.flip_h ? "H" : ""}${t.flip_v ? "V" : ""}`, badgeX + 4, r.y + 17);
+    }
+
+    ctx.fillStyle = "rgba(0,0,0,.76)";
+    ctx.fillRect(actions.remove.x, actions.remove.y, actions.remove.w, actions.remove.h);
+    ctx.fillRect(actions.prev.x, actions.prev.y, actions.prev.w, actions.prev.h);
+    ctx.fillRect(actions.drag.x, actions.drag.y, actions.drag.w, actions.drag.h);
+    ctx.fillRect(actions.next.x, actions.next.y, actions.next.w, actions.next.h);
+    ctx.fillStyle = "#fff";
+    ctx.fillText("×", actions.remove.x + 5, actions.remove.y + 14);
+    ctx.fillText("‹", actions.prev.x + 6, actions.prev.y + 15);
+    ctx.textAlign = "center";
+    ctx.fillText("≡", actions.drag.x + actions.drag.w / 2, actions.drag.y + 14);
+    ctx.textAlign = "left";
+    ctx.fillText("›", actions.next.x + 6, actions.next.y + 15);
+    ctx.restore();
 }
 
 function drawThumbs(node, ctx) {
@@ -214,13 +444,19 @@ function drawThumbs(node, ctx) {
     const predicted = predictedSize(node);
     ctx.fillText(
         count
-            ? `${count} image${count === 1 ? "" : "s"}${predicted ? `  •  ~${predicted.w}×${predicted.h}${predicted.skipped ? ` (${predicted.skipped} not loaded)` : ""}` : ""}  •  click image edit / drag ≡ reorder`
+            ? `${count} image${count === 1 ? "" : "s"}${predicted ? `  •  ~${predicted.w}×${predicted.h}${predicted.skipped ? ` (${predicted.skipped} not loaded)` : ""}` : ""}${imageInputConnected(node) ? "  + IMAGE input" : ""}`
             : node._msUnreadable
                 ? "Image list unreadable — kept as-is. Add or Clear all to replace."
                 : "Select this node, then Ctrl+V images",
         9,
         top + 12,
     );
+
+    const history = historyOf(node);
+    const controls = headerControls(node);
+    drawPill(ctx, controls.undo, "↶", history.past.length > 0);
+    drawPill(ctx, controls.redo, "↷", history.future.length > 0);
+    drawPill(ctx, controls.preview, previewEnabled(node) ? "Preview ✓" : "Preview", count > 0);
 
     if (!count) {
         const r = thumbLayout(node, 0);
@@ -230,82 +466,47 @@ function drawThumbs(node, ctx) {
         ctx.setLineDash([]);
         ctx.fillStyle = "#8f8f8f";
         ctx.textAlign = "center";
-        ctx.fillText("Paste / Drop / Add images", r.x + r.w / 2, r.y + r.h / 2 + 4);
+        ctx.fillText("Paste / Drop / Add images", r.x + r.w / 2, r.y + r.h / 2 - 4);
+        ctx.fillText("click an image to edit · drag ≡ to reorder", r.x + r.w / 2, r.y + r.h / 2 + 12);
         ctx.restore();
         return;
     }
 
+    const preview = previewRect(node);
+    if (preview) drawPreview(ctx, node, preview);
+
+    const viewport = listViewport(node);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, viewport.top - 1, nodeWidth(node), viewport.height + 2);
+    ctx.clip();
     items.forEach((item, index) => {
         const r = thumbLayout(node, index);
-        const actions = thumbActionRects(r);
-        const press = node._msThumbPress;
-        const isSource = press?.dragging && press.index === index;
-        const isTarget = press?.dragging && press.target === index;
-
-        ctx.save();
-        if (isSource) ctx.globalAlpha = 0.55;
-        ctx.fillStyle = "#171717";
-        ctx.fillRect(r.x, r.y, r.w, r.h);
-        ctx.strokeStyle = isTarget
-            ? "#8ab4f8"
-            : (isCropped(item.crop) || isTransformed(item) ? "#f6b73c" : "#555");
-        ctx.lineWidth = isTarget ? 3 : 1;
-        ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
-
-        const state = loadTransformedThumb(node, item);
-        const imageRect = { x: r.x + 3, y: r.y + 3, w: r.w - 6, h: r.h - 6 };
-
-        if (state.ready) {
-            ctx.save();
-            ctx.beginPath();
-            ctx.rect(imageRect.x, imageRect.y, imageRect.w, imageRect.h);
-            ctx.clip();
-            drawContained(ctx, state.image, item.crop, imageRect);
-            ctx.restore();
-        } else {
-            ctx.fillStyle = "#8d8d8d";
-            ctx.textAlign = "center";
-            ctx.fillText(state.failed ? "Load failed" : "Loading…", r.x + r.w / 2, r.y + r.h / 2 + 4);
-        }
-
-        ctx.textAlign = "left";
-        ctx.fillStyle = "rgba(0,0,0,.72)";
-        ctx.fillRect(r.x + 3, r.y + 3, 27, 19);
-        ctx.fillStyle = "#fff";
-        ctx.fillText(String(index + 1), r.x + 11, r.y + 17);
-
-        let badgeX = r.x + 33;
-        if (isCropped(item.crop)) {
-            ctx.fillStyle = "rgba(0,0,0,.72)";
-            ctx.fillRect(badgeX, r.y + 3, 25, 19);
-            ctx.fillStyle = "#f6b73c";
-            ctx.fillText("✂", badgeX + 6, r.y + 17);
-            badgeX += 28;
-        }
-
-        if (isTransformed(item)) {
-            const t = normalizeTransform(item);
-            ctx.fillStyle = "rgba(0,0,0,.72)";
-            ctx.fillRect(badgeX, r.y + 3, 48, 19);
-            ctx.fillStyle = "#f6b73c";
-            ctx.fillText(`${t.rotation}°${t.flip_h ? "H" : ""}${t.flip_v ? "V" : ""}`, badgeX + 4, r.y + 17);
-        }
-
-        ctx.fillStyle = "rgba(0,0,0,.76)";
-        ctx.fillRect(actions.remove.x, actions.remove.y, actions.remove.w, actions.remove.h);
-        ctx.fillRect(actions.prev.x, actions.prev.y, actions.prev.w, actions.prev.h);
-        ctx.fillRect(actions.drag.x, actions.drag.y, actions.drag.w, actions.drag.h);
-        ctx.fillRect(actions.next.x, actions.next.y, actions.next.w, actions.next.h);
-        ctx.fillStyle = "#fff";
-        ctx.fillText("×", actions.remove.x + 5, actions.remove.y + 14);
-        ctx.fillText("‹", actions.prev.x + 6, actions.prev.y + 15);
-        ctx.textAlign = "center";
-        ctx.fillText("≡", actions.drag.x + actions.drag.w / 2, actions.drag.y + 14);
-        ctx.textAlign = "left";
-        ctx.fillText("›", actions.next.x + 6, actions.next.y + 15);
-        ctx.restore();
+        if (r.visible) drawCard(ctx, node, item, index, r);
     });
+    ctx.restore();
 
+    const bar = scrollbarRect(node, viewport);
+    if (bar) {
+        ctx.fillStyle = "rgba(255,255,255,.08)";
+        ctx.fillRect(bar.x, bar.y, bar.w, bar.h);
+        const trackH = bar.h - 2 * 14;
+        const thumbH = Math.max(12, trackH * (viewport.visibleRows / viewport.rows));
+        const thumbY = bar.y + 14 + (trackH - thumbH) * (viewport.scroll / viewport.maxScroll);
+        ctx.fillStyle = "rgba(255,255,255,.35)";
+        ctx.fillRect(bar.x + 1, thumbY, bar.w - 2, thumbH);
+        ctx.fillStyle = "#ddd";
+        ctx.textAlign = "center";
+        ctx.fillText("▴", bar.x + bar.w / 2, bar.y + 11);
+        ctx.fillText("▾", bar.x + bar.w / 2, bar.y + bar.h - 4);
+        ctx.textAlign = "left";
+        ctx.fillStyle = "#9a9a9a";
+        ctx.fillText(
+            `rows ${viewport.scroll + 1}–${Math.min(viewport.rows, viewport.scroll + viewport.visibleRows)} of ${viewport.rows}`,
+            9,
+            viewport.top + viewport.height + 10,
+        );
+    }
     ctx.restore();
 }
 
@@ -390,7 +591,8 @@ function thumbIndexAt(node, graphCanvas) {
     const x = mouse[0] - node.pos[0];
     const y = mouse[1] - node.pos[1];
     for (let i = 0; i < (node._msImages?.length || 0); i++) {
-        if (inRect(x, y, thumbLayout(node, i))) return i;
+        const r = thumbLayout(node, i);
+        if (r.visible && inRect(x, y, r)) return i;
     }
     return -1;
 }
@@ -414,10 +616,55 @@ function stopEvent(event, graphCanvas) {
 function changed(node) {
     // A real edit replaces whatever unreadable text was preserved on load.
     node._msUnreadable = null;
-    syncImages(node);
+    commitImages(node);
     syncConditionalWidgets(node);
-    updateNodeSize(node, true);
-    scheduleNodeLayout(node, true);
+    updateNodeSize(node);
+    scheduleNodeLayout(node);
+}
+
+function restoreHistory(node, step) {
+    if (!step(node)) return false;
+    node._msUnreadable = null;
+    node._msTransformedCache?.clear();
+    syncConditionalWidgets(node);
+    updateNodeSize(node);
+    scheduleNodeLayout(node);
+    return true;
+}
+
+function togglePreview(node) {
+    node.properties ||= {};
+    node.properties.multi_stitch_preview = !previewEnabled(node);
+    updateNodeSize(node);
+    node.graph?.setDirtyCanvas(true, true);
+}
+
+// Relink one entry to a new file, keeping its crop, transform and position:
+// the answer to a workflow whose source files moved.
+function replaceImage(node, index) {
+    const item = node._msImages?.[index];
+    if (!item) return;
+    const { input, removeOnce } = transientInput("file");
+    input.accept = "image/*";
+    input.addEventListener("change", async () => {
+        try {
+            const file = Array.from(input.files || []).find((f) => f.type?.startsWith("image/"));
+            if (!file) return;
+            const uploaded = await uploadFile(file);
+            const current = node._msImages?.indexOf(item);
+            if (current === undefined || current < 0) return;
+            node._msThumbCache?.clear();
+            node._msTransformedCache?.clear();
+            Object.assign(item, { filename: uploaded.filename, subfolder: uploaded.subfolder, type: uploaded.type });
+            changed(node);
+            notify("Image replaced", `Image #${current + 1} now points at ${uploaded.filename}; its crop and order were kept.`);
+        } catch (error) {
+            notify("Replace failed", String(error?.message || error), "error");
+        } finally {
+            removeOnce();
+        }
+    }, { once: true });
+    input.click();
 }
 
 function moveItem(node, index, delta) {
@@ -436,10 +683,11 @@ function reorderItem(node, from, to) {
 }
 
 function nearestThumbIndex(node, x, y) {
-    let best = 0;
+    let best = -1;
     let bestD = Infinity;
     for (let i = 0; i < node._msImages.length; i++) {
         const r = thumbLayout(node, i);
+        if (!r.visible) continue;
         const cx = r.x + r.w / 2;
         const cy = r.y + r.h / 2;
         const d = (x - cx) ** 2 + (y - cy) ** 2;
@@ -628,7 +876,11 @@ function setWidgetVisible(widget, visible) {
 function syncConditionalWidgets(node) {
     const layout = getWidget(node, "layout_mode")?.value || "strip";
     const spacingColor = getWidget(node, "spacing_color")?.value || "white";
+    const outputLimit = getWidget(node, "output_limit")?.value || "none";
     setWidgetVisible(getWidget(node, "grid_columns"), layout === "grid");
+    setWidgetVisible(getWidget(node, "grid_cell_width"), layout === "grid");
+    setWidgetVisible(getWidget(node, "grid_cell_height"), layout === "grid");
+    setWidgetVisible(getWidget(node, "output_limit_px"), outputLimit !== "none");
     setWidgetVisible(getWidget(node, "custom_color_picker"), spacingColor === "custom");
 }
 
@@ -665,7 +917,13 @@ function chooseCustomColor(node) {
 
 function openEditor(node, index) {
     if (!node || node._msEditorOpening) return;
-    if (!node._msImages?.[index]) return;
+    const item = node._msImages?.[index];
+    if (!item) return;
+    // A file that cannot be loaded cannot be edited; offer to relink instead.
+    if (loadTransformedThumb(node, item).failed) {
+        replaceImage(node, index);
+        return;
+    }
     node._msEditorOpening = true;
     Promise.resolve(openCropEditor(node, index))
         .catch((error) => {
@@ -701,7 +959,10 @@ function updateThumbnailDrag(node, x, y, event) {
     if (!press.dragging && dragDistancePx(press, event, x, y) >= DRAG_THRESHOLD_PX) {
         press.dragging = true;
     }
-    if (press.dragging) press.target = nearestThumbIndex(node, x, y);
+    if (press.dragging) {
+        const nearest = nearestThumbIndex(node, x, y);
+        if (nearest >= 0) press.target = nearest;
+    }
     node.graph?.setDirtyCanvas(true, false);
     return true;
 }
@@ -783,6 +1044,8 @@ function setupNode(node) {
     node._msImages = normalizeItems(fromWidget?.length ? fromWidget : fromProps ?? fromWidget);
     node._msThumbCache = new Map();
     node._msTransformedCache = new Map();
+    node._msScrollRow = 0;
+    resetHistory(node);
 
     if (!node.widgets?.some((w) => w.name === "Add images…")) {
         // The same button cancels a running upload; its label says which.
@@ -810,7 +1073,7 @@ function setupNode(node) {
     syncConditionalWidgets(node);
     node.pasteFiles = (files) => addFiles(node, files);
     changed(node);
-    scheduleNodeLayout(node, true);
+    scheduleNodeLayout(node);
 }
 
 app.registerExtension({
@@ -845,6 +1108,11 @@ app.registerExtension({
             hideWidget(getWidget(this, "custom_spacing_color"));
             this._msThumbCache ||= new Map();
             this._msTransformedCache ||= new Map();
+            this._msScrollRow = 0;
+            // The saved node size is the user's; only clamp it from here on.
+            this._msSized = true;
+            this._msListTop = undefined;
+            resetHistory(this);
             updateCustomColorButton(this);
             syncConditionalWidgets(this);
             if (this._msUnreadable) {
@@ -852,11 +1120,11 @@ app.registerExtension({
                     "[Multi Stitch Images] keeping the unreadable image list stored on the node;" +
                     " add or clear images to replace it.",
                 );
-                updateNodeSize(this, true);
+                updateNodeSize(this);
             } else {
                 changed(this);
             }
-            scheduleNodeLayout(this, true);
+            scheduleNodeLayout(this);
             return r;
         };
 
@@ -876,29 +1144,56 @@ app.registerExtension({
         nodeType.prototype.onDrawForeground = function (ctx) {
             draw?.apply(this, arguments);
             syncConditionalWidgets(this);
-            updateNodeSize(this, false);
+            updateNodeSize(this);
             drawThumbs(this, ctx);
         };
 
         const widgetChanged = nodeType.prototype.onWidgetChanged;
         nodeType.prototype.onWidgetChanged = function (name, value, oldValue, widget) {
             const r = widgetChanged?.apply(this, arguments);
-            if (name === "layout_mode" || name === "spacing_color") {
+            if (name === "layout_mode" || name === "spacing_color" || name === "output_limit") {
                 syncConditionalWidgets(this);
-                scheduleNodeLayout(this, true);
+                scheduleNodeLayout(this);
             }
+            // Every setting shows in the preview and the estimate.
+            this.graph?.setDirtyCanvas(true, false);
             return r;
         };
 
         const mouseDown = nodeType.prototype.onMouseDown;
         nodeType.prototype.onMouseDown = function (event, pos, graphCanvas) {
             const primary = event?.button === undefined || event.button === 0;
+            if (primary && !this.flags?.collapsed) {
+                const [x, y] = localPos(this, event, pos, graphCanvas);
+                const controls = headerControls(this);
+                if (inRect(x, y, controls.undo) || inRect(x, y, controls.redo) || inRect(x, y, controls.preview)) {
+                    if (inRect(x, y, controls.undo)) restoreHistory(this, undoImages);
+                    else if (inRect(x, y, controls.redo)) restoreHistory(this, redoImages);
+                    else if (this._msImages?.length) togglePreview(this);
+                    stopEvent(event, graphCanvas);
+                    return true;
+                }
+            }
             if (primary && !this.flags?.collapsed && this._msImages?.length) {
                 const [x, y] = localPos(this, event, pos, graphCanvas);
+                const viewport = listViewport(this);
+                const bar = scrollbarRect(this, viewport);
+                if (bar && inRect(x, y, bar)) {
+                    if (y < bar.y + 14) scrollList(this, -1);
+                    else if (y > bar.y + bar.h - 14) scrollList(this, 1);
+                    else {
+                        // Track click: page towards the click.
+                        const trackH = bar.h - 28;
+                        const thumbCentre = bar.y + 14 + (trackH * ((viewport.scroll + viewport.visibleRows / 2) / viewport.rows));
+                        scrollList(this, y < thumbCentre ? -viewport.visibleRows : viewport.visibleRows);
+                    }
+                    stopEvent(event, graphCanvas);
+                    return true;
+                }
 
                 for (let i = 0; i < this._msImages.length; i++) {
                     const r = thumbLayout(this, i);
-                    if (!inRect(x, y, r)) continue;
+                    if (!r.visible || !inRect(x, y, r)) continue;
 
                     const actions = thumbActionRects(r);
                     if (inRect(x, y, actions.remove)) {
@@ -935,8 +1230,41 @@ app.registerExtension({
                         content: `Copy original image #${index + 1}`,
                         callback: () => copyOriginalImage(this, index),
                     },
+                    {
+                        content: `Replace image #${index + 1}…`,
+                        callback: () => replaceImage(this, index),
+                    },
                     null,
                 );
+            }
+            return r;
+        };
+
+        // Wheel over the list scrolls it when there is more than fits.
+        const mouseWheel = nodeType.prototype.onMouseWheel;
+        nodeType.prototype.onMouseWheel = function (event, pos, graphCanvas) {
+            if (!this.flags?.collapsed && this._msImages?.length) {
+                const [x, y] = localPos(this, event, pos, graphCanvas);
+                const viewport = listViewport(this);
+                if (viewport.scrollable && y >= viewport.top && y <= viewport.top + viewport.height && x >= 0 && x <= nodeWidth(this)) {
+                    const delta = Number(event?.deltaY) || Number(event?.wheelDelta) * -1 || 0;
+                    if (delta !== 0) {
+                        scrollList(this, delta > 0 ? 1 : -1);
+                        stopEvent(event, graphCanvas);
+                        return true;
+                    }
+                }
+            }
+            return mouseWheel?.apply(this, arguments) ?? false;
+        };
+
+        // A resize by the user changes how many rows are visible; keep it in range.
+        const resized = nodeType.prototype.onResize;
+        nodeType.prototype.onResize = function (size) {
+            const r = resized?.apply(this, arguments);
+            if (this._msImages) {
+                this._msSized = true;
+                updateNodeSize(this);
             }
             return r;
         };

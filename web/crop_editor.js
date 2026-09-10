@@ -5,7 +5,7 @@ import {
     normalizeCrop,
     normalizeTransform,
     renderTransformedImage,
-    syncImages,
+    commitImages,
 } from "./shared.js";
 
 let styleInstalled = false;
@@ -442,7 +442,7 @@ export async function openCropEditor(node, index) {
             h: +(rect.h / working.height).toFixed(6),
         };
         node._msTransformedCache?.clear();
-        syncImages(node);
+        commitImages(node);
         close();
     };
 

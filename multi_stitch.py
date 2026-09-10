@@ -49,6 +49,7 @@ _ORIENTATIONS_THAT_SWAP_AXES = {5, 6, 7, 8}
 
 _DIRECTIONS = ("right", "down", "left", "up")
 _LAYOUT_MODES = ("strip", "grid")
+_OUTPUT_LIMITS = ("none", "max_width", "max_height", "max_long_side")
 
 
 def _safe_input_path(item: dict) -> Path:
@@ -338,15 +339,25 @@ def _grid_shape(count: int, grid_columns: int, direction: str) -> tuple[int, int
     return rows, cols
 
 
-def _estimate_output_dimensions(
+Placement = tuple[int, int, int, int]
+
+
+def _layout(
     dimensions: list[tuple[int, int]],
     layout_mode: str,
     direction: str,
     match_image_size: bool,
     grid_columns: int,
     spacing_width: int,
-) -> tuple[int, int]:
-    """Estimate the exact canvas size using the same resize rules as composition."""
+    grid_cell_width: int = 0,
+    grid_cell_height: int = 0,
+) -> tuple[int, int, list[Placement]]:
+    """Canvas size and the (x, y, w, h) each image occupies, in list order.
+
+    This is the one description of where images go: the pre-decode estimate,
+    the streaming composition and the in-node preview (its JavaScript mirror,
+    layoutPlacements in web/shared.js) all derive from it.
+    """
     if not dimensions:
         raise ValueError("Multi Stitch Images: paste or add at least one image first.")
 
@@ -357,27 +368,89 @@ def _estimate_output_dimensions(
 
     if layout_mode == "grid":
         rows, cols = _grid_shape(len(dims), grid_columns, direction)
-        if match_image_size:
+        cell_w = max(0, int(grid_cell_width))
+        cell_h = max(0, int(grid_cell_height))
+        if cell_w > 0 and cell_h > 0:
+            # An explicit cell: every image is fitted into it, never stretched.
+            placed = [_fit_size(w, h, cell_w, cell_h) for w, h in dims]
+        elif match_image_size:
             cell_w, cell_h = dims[0]
+            placed = [_fit_size(w, h, cell_w, cell_h) for w, h in dims]
         else:
             cell_w = max(w for w, _ in dims)
             cell_h = max(h for _, h in dims)
+            placed = list(dims)
+
+        placements: list[Placement] = []
+        for index, (w, h) in enumerate(placed):
+            row, col = _grid_position(index, rows, cols, direction)
+            x = col * (cell_w + spacing_width) + (cell_w - w) // 2
+            y = row * (cell_h + spacing_width) + (cell_h - h) // 2
+            placements.append((x, y, w, h))
         return (
             cols * cell_w + spacing_width * (cols - 1),
             rows * cell_h + spacing_width * (rows - 1),
+            placements,
         )
 
-    dims = _prepared_strip_dims(dims, direction, match_image_size)
+    prepared = _prepared_strip_dims(dims, direction, match_image_size)
+    order = list(range(len(prepared)))
+    if direction in {"left", "up"}:
+        order.reverse()
+    horizontal = direction in {"left", "right"}
+    if horizontal:
+        out_h = max(h for _, h in prepared)
+        out_w = sum(w for w, _ in prepared) + spacing_width * (len(prepared) - 1)
+    else:
+        out_w = max(w for w, _ in prepared)
+        out_h = sum(h for _, h in prepared) + spacing_width * (len(prepared) - 1)
 
-    if direction in {"left", "right"}:
-        return (
-            sum(w for w, _ in dims) + spacing_width * (len(dims) - 1),
-            max(h for _, h in dims),
-        )
-    return (
-        max(w for w, _ in dims),
-        sum(h for _, h in dims) + spacing_width * (len(dims) - 1),
+    strip: list[Placement] = [(0, 0, 0, 0)] * len(prepared)
+    cursor = 0
+    for index in order:
+        w, h = prepared[index]
+        if horizontal:
+            strip[index] = (cursor, (out_h - h) // 2, w, h)
+            cursor += w + spacing_width
+        else:
+            strip[index] = ((out_w - w) // 2, cursor, w, h)
+            cursor += h + spacing_width
+    return out_w, out_h, strip
+
+
+def _estimate_output_dimensions(
+    dimensions: list[tuple[int, int]],
+    layout_mode: str,
+    direction: str,
+    match_image_size: bool,
+    grid_columns: int,
+    spacing_width: int,
+    grid_cell_width: int = 0,
+    grid_cell_height: int = 0,
+) -> tuple[int, int]:
+    """Exact canvas size, from the same layout the composition fills."""
+    out_w, out_h, _ = _layout(
+        dimensions, layout_mode, direction, match_image_size,
+        grid_columns, spacing_width, grid_cell_width, grid_cell_height,
     )
+    return out_w, out_h
+
+
+def _limited_size(width: int, height: int, output_limit: str, output_limit_px: int) -> tuple[int, int]:
+    """Final size after the optional output cap. Only ever shrinks."""
+    output_limit = _require_choice("output_limit", output_limit, _OUTPUT_LIMITS)
+    if output_limit == "none":
+        return width, height
+    limit = max(1, int(output_limit_px))
+    current = {
+        "max_width": width,
+        "max_height": height,
+        "max_long_side": max(width, height),
+    }[output_limit]
+    if current <= limit:
+        return width, height
+    scale = limit / current
+    return max(1, int(round(width * scale))), max(1, int(round(height * scale)))
 
 
 def _validate_output_dimensions(width: int, height: int) -> None:
@@ -436,49 +509,6 @@ def _load_checked(loader: Loader, expected: tuple[int, int], index: int) -> torc
     return image
 
 
-def _compose_strip(
-    loaders: list[Loader],
-    dimensions: list[tuple[int, int]],
-    direction: str,
-    match_image_size: bool,
-    spacing_width: int,
-    color_tuple: tuple[float, float, float],
-) -> torch.Tensor:
-    # Every position comes from the measured dimensions, so the canvas is
-    # allocated up front and each source is decoded, placed and released in
-    # turn. spacing_color is the node's background: the canvas starts filled
-    # with it, which is what makes both the separator bars and the letterbox
-    # padding that colour in strip and grid alike.
-    prepared = _prepared_strip_dims(dimensions, direction, match_image_size)
-    order = list(range(len(prepared)))
-    if direction in {"left", "up"}:
-        order.reverse()
-    horizontal = direction in {"left", "right"}
-
-    if horizontal:
-        out_h = max(h for _, h in prepared)
-        out_w = sum(w for w, _ in prepared) + spacing_width * (len(prepared) - 1)
-    else:
-        out_w = max(w for w, _ in prepared)
-        out_h = sum(h for _, h in prepared) + spacing_width * (len(prepared) - 1)
-    output = _blank_canvas(out_w, out_h, color_tuple)
-
-    cursor = 0
-    for index in order:
-        w, h = prepared[index]
-        image = _resize_exact(_load_checked(loaders[index], dimensions[index], index), h, w)
-        if horizontal:
-            y = (out_h - h) // 2
-            output[:, y:y + h, cursor:cursor + w, :] = image.to(output)
-            cursor += w + spacing_width
-        else:
-            x = (out_w - w) // 2
-            output[:, cursor:cursor + h, x:x + w, :] = image.to(output)
-            cursor += h + spacing_width
-        del image  # release this source before the next one is decoded
-    return output
-
-
 def _grid_position(index: int, rows: int, cols: int, direction: str) -> tuple[int, int]:
     if direction == "left":
         row, col = divmod(index, cols)
@@ -491,39 +521,16 @@ def _grid_position(index: int, rows: int, cols: int, direction: str) -> tuple[in
     return divmod(index, cols)
 
 
-def _compose_grid(
-    loaders: list[Loader],
-    dimensions: list[tuple[int, int]],
-    direction: str,
-    match_image_size: bool,
-    grid_columns: int,
-    spacing_width: int,
-    color_tuple: tuple[float, float, float],
-) -> torch.Tensor:
-    rows, cols = _grid_shape(len(dimensions), grid_columns, direction)
-
-    if match_image_size:
-        cell_w, cell_h = dimensions[0]
-        placed = [_fit_size(w, h, cell_w, cell_h) for w, h in dimensions]
-    else:
-        cell_w = max(w for w, _ in dimensions)
-        cell_h = max(h for _, h in dimensions)
-        placed = list(dimensions)
-
-    out_w = cols * cell_w + spacing_width * (cols - 1)
-    out_h = rows * cell_h + spacing_width * (rows - 1)
-    output = _blank_canvas(out_w, out_h, color_tuple)
-
-    for index, loader in enumerate(loaders):
-        row, col = _grid_position(index, rows, cols, direction)
-        w, h = placed[index]
-        image = _resize_exact(_load_checked(loader, dimensions[index], index), h, w)
-        y = row * (cell_h + spacing_width) + (cell_h - h) // 2
-        x = col * (cell_w + spacing_width) + (cell_w - w) // 2
-        output[:, y:y + h, x:x + w, :] = image.to(output)
-        del image  # release this source before the next one is decoded
-
-    return output
+def _validate_cells_output(count: int, cell_w: int, cell_h: int) -> None:
+    pixels = count * cell_w * cell_h
+    if pixels <= _MAX_OUTPUT_PIXELS:
+        return
+    raise ValueError(
+        f"Multi Stitch Images: the cells output would be {count} × {cell_w:,} × {cell_h:,} "
+        f"({pixels / 1_000_000:.1f} MP, ~{pixels * 3 * 4 / (1024 ** 3):.2f} GiB float32), "
+        f"above the safety limit ({_MAX_OUTPUT_PIXELS / 1_000_000:.1f} MP). "
+        "Turn off output_cells, or reduce the image count or cell size."
+    )
 
 
 def _compose_from(
@@ -536,52 +543,57 @@ def _compose_from(
     spacing_width: int,
     spacing_color: str,
     custom_spacing_color: str,
-) -> torch.Tensor:
-    """Compose from lazy sources: each loader is called once, in placement order.
+    grid_cell_width: int = 0,
+    grid_cell_height: int = 0,
+    output_limit: str = "none",
+    output_limit_px: int = 2048,
+    output_cells: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compose from lazy sources: each loader is called once, in list order.
 
-    Validation happens before any loader runs, so an oversized result is
-    rejected without decoding a single image. The output is CPU float32
-    [1, H, W, 3] as ComfyUI expects.
+    Returns (image, cells). `image` is the stitched canvas, optionally scaled
+    down by output_limit. `cells` is a batch with one frame per source, each
+    centred in a uniform cell on the background colour — or, when
+    output_cells is off, the image itself, so the output is never empty.
+    Validation happens before any loader runs. Every tensor is CPU float32
+    [N, H, W, 3] as ComfyUI expects.
     """
     if not loaders:
         raise ValueError("Multi Stitch Images: paste or add at least one image first.")
     if len(loaders) != len(dimensions):
         raise ValueError("Multi Stitch Images: internal error, one measurement per image is required.")
 
-    direction = _require_choice("direction", direction, _DIRECTIONS)
-    layout_mode = _require_choice("layout_mode", layout_mode, _LAYOUT_MODES)
-    spacing_width = max(0, int(spacing_width))
     color_tuple = _resolve_color(spacing_color, custom_spacing_color)
-    dimensions = [(max(1, int(w)), max(1, int(h))) for w, h in dimensions]
-
-    out_w, out_h = _estimate_output_dimensions(
-        dimensions,
-        layout_mode,
-        direction,
-        match_image_size,
-        grid_columns,
-        spacing_width,
+    out_w, out_h, placements = _layout(
+        dimensions, layout_mode, direction, match_image_size,
+        grid_columns, spacing_width, grid_cell_width, grid_cell_height,
     )
     _validate_output_dimensions(out_w, out_h)
+    final_w, final_h = _limited_size(out_w, out_h, output_limit, output_limit_px)
 
-    if layout_mode == "grid":
-        return _compose_grid(
-            loaders,
-            dimensions,
-            direction,
-            match_image_size,
-            grid_columns,
-            spacing_width,
-            color_tuple,
-        )
-    return _compose_strip(
-        loaders,
-        dimensions,
-        direction,
-        match_image_size,
-        spacing_width,
-        color_tuple,
-    )
+    cells = None
+    if output_cells:
+        cell_w = max(w for _, _, w, _ in placements)
+        cell_h = max(h for _, _, _, h in placements)
+        _validate_cells_output(len(placements), cell_w, cell_h)
+        color = torch.tensor(color_tuple, dtype=torch.float32)
+        cells = color.view(1, 1, 1, 3).expand(len(placements), cell_h, cell_w, 3).clone()
+
+    # The canvas starts filled with the background colour, which is what makes
+    # separator bars and letterbox padding that colour in either layout.
+    output = _blank_canvas(out_w, out_h, color_tuple)
+    for index, (loader, (x, y, w, h)) in enumerate(zip(loaders, placements)):
+        image = _resize_exact(_load_checked(loader, dimensions[index], index), h, w).to(output)
+        output[:, y:y + h, x:x + w, :] = image
+        if cells is not None:
+            cx = (cells.shape[2] - w) // 2
+            cy = (cells.shape[1] - h) // 2
+            cells[index:index + 1, cy:cy + h, cx:cx + w, :] = image
+        del image  # release this source before the next one is decoded
+
+    if (final_w, final_h) != (out_w, out_h):
+        output = _resize_exact(output, final_h, final_w)
+    return output, (cells if cells is not None else output)
 
 
 def _compose(
@@ -593,11 +605,12 @@ def _compose(
     spacing_width: int,
     spacing_color: str,
     custom_spacing_color: str,
+    **options,
 ) -> torch.Tensor:
     """Compose already-decoded tensors; the same path stitch() streams through."""
     dimensions = [(int(img.shape[2]), int(img.shape[1])) for img in images]
     loaders: list[Loader] = [functools.partial(lambda tensor: tensor, img) for img in images]
-    return _compose_from(
+    image, _ = _compose_from(
         loaders,
         dimensions,
         layout_mode,
@@ -607,7 +620,32 @@ def _compose(
         spacing_width,
         spacing_color,
         custom_spacing_color,
+        **options,
     )
+    return image
+
+
+def _frame_loader(frame: torch.Tensor, background: tuple[float, float, float]) -> tuple[Loader, tuple[int, int]]:
+    """Wrap one frame of a connected IMAGE batch as a source.
+
+    RGBA frames are composited onto the background like transparent files;
+    single-channel frames are expanded to RGB.
+    """
+    if frame.dim() != 3 or frame.shape[0] < 1 or frame.shape[1] < 1:
+        raise ValueError(
+            f"Multi Stitch Images: the IMAGE input must be [batch, height, width, channels], got {tuple(frame.shape)}."
+        )
+    tensor = frame.unsqueeze(0).float()
+    channels = tensor.shape[-1]
+    if channels == 4:
+        alpha = tensor[..., 3:4]
+        colour = torch.tensor(background, dtype=tensor.dtype, device=tensor.device).view(1, 1, 1, 3)
+        tensor = tensor[..., :3] * alpha + colour * (1.0 - alpha)
+    elif channels == 1:
+        tensor = tensor.expand(-1, -1, -1, 3)
+    elif channels != 3:
+        raise ValueError(f"Multi Stitch Images: the IMAGE input has {channels} channels; expected 1, 3 or 4.")
+    return functools.partial(lambda t: t, tensor), (int(tensor.shape[2]), int(tensor.shape[1]))
 
 
 class MultiStitchImages:
@@ -627,11 +665,25 @@ class MultiStitchImages:
                 "layout_mode": (["strip", "grid"], {"default": "strip"}),
                 "grid_columns": ("INT", {"default": 3, "min": 1, "max": 16, "step": 1}),
                 "custom_spacing_color": ("STRING", {"default": "#808080"}),
-            }
+                # Later additions stay after the original widgets so saved
+                # workflows keep their widget values aligned; defaults reproduce
+                # the previous behaviour exactly.
+                "output_limit": (list(_OUTPUT_LIMITS), {"default": "none"}),
+                "output_limit_px": ("INT", {"default": 2048, "min": 64, "max": 16384, "step": 8}),
+                "grid_cell_width": ("INT", {"default": 0, "min": 0, "max": 16384, "step": 8}),
+                "grid_cell_height": ("INT", {"default": 0, "min": 0, "max": 16384, "step": 8}),
+                "output_cells": ("BOOLEAN", {"default": False}),
+            },
+            "optional": {
+                # Frames from a connected batch are appended after the pasted
+                # images, so a generated or upscaled result can be stitched
+                # without saving and re-adding it.
+                "images": ("IMAGE",),
+            },
         }
 
-    RETURN_TYPES = ("IMAGE",)
-    RETURN_NAMES = ("image",)
+    RETURN_TYPES = ("IMAGE", "IMAGE")
+    RETURN_NAMES = ("image", "cells")
     FUNCTION = "stitch"
     CATEGORY = "image/transform"
     DESCRIPTION = (
@@ -649,6 +701,12 @@ class MultiStitchImages:
         layout_mode,
         grid_columns,
         custom_spacing_color,
+        output_limit="none",
+        output_limit_px=2048,
+        grid_cell_width=0,
+        grid_cell_height=0,
+        output_cells=False,
+        images=None,
     ):
         try:
             items = json.loads(images_json or "[]")
@@ -657,37 +715,46 @@ class MultiStitchImages:
 
         if not isinstance(items, list):
             raise ValueError("Multi Stitch Images: image list must be an array.")
-        if len(items) > _MAX_IMAGES:
-            raise ValueError(f"Multi Stitch Images: maximum {_MAX_IMAGES} images per node.")
-
         valid_items = [item for item in items if isinstance(item, dict)]
+        frames = list(images) if images is not None else []
+        if len(valid_items) + len(frames) > _MAX_IMAGES:
+            raise ValueError(
+                f"Multi Stitch Images: maximum {_MAX_IMAGES} images per node "
+                f"({len(valid_items)} pasted + {len(frames)} from the IMAGE input)."
+            )
 
         # Header-only pass: measure every source and its footprint on the
         # canvas, and refuse an original that would be too big to decode.
-        dimensions = []
+        background = _resolve_color(spacing_color, custom_spacing_color)
+        dimensions: list[tuple[int, int]] = []
+        loaders: list[Loader] = []
         for item in valid_items:
             (source_w, source_h), output_size = _inspect_item(item)
             _validate_source_pixels(item, source_w, source_h)
             dimensions.append(output_size)
+            loaders.append(functools.partial(_load_image, item, background))
+        for frame in frames:
+            loader, size = _frame_loader(frame, background)
+            loaders.append(loader)
+            dimensions.append(size)
 
         # Decode pass: _compose_from validates the canvas first, then pulls
         # each source through its loader one at a time.
-        background = _resolve_color(spacing_color, custom_spacing_color)
-        loaders: list[Loader] = [
-            functools.partial(_load_image, item, background) for item in valid_items
-        ]
-        return (
-            _compose_from(
-                loaders,
-                dimensions,
-                layout_mode,
-                direction,
-                match_image_size,
-                grid_columns,
-                spacing_width,
-                spacing_color,
-                custom_spacing_color,
-            ),
+        return _compose_from(
+            loaders,
+            dimensions,
+            layout_mode,
+            direction,
+            match_image_size,
+            grid_columns,
+            spacing_width,
+            spacing_color,
+            custom_spacing_color,
+            grid_cell_width=grid_cell_width,
+            grid_cell_height=grid_cell_height,
+            output_limit=output_limit,
+            output_limit_px=output_limit_px,
+            output_cells=output_cells,
         )
 
 

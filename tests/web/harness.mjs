@@ -134,10 +134,13 @@ export async function loadExtension(root) {
     return { app, api, shared, nodeType };
 }
 
+// The widgets INPUT_TYPES declares, in order, with their defaults.
 const WIDGET_DEFAULTS = [
     ["direction", "right"], ["match_image_size", true], ["spacing_width", 0],
     ["spacing_color", "white"], ["images_json", "[]"], ["layout_mode", "strip"],
     ["grid_columns", 3], ["custom_spacing_color", "#808080"],
+    ["output_limit", "none"], ["output_limit_px", 2048], ["grid_cell_width", 0],
+    ["grid_cell_height", 0], ["output_cells", false],
 ];
 
 // A LiteGraph-shaped node with the widgets INPUT_TYPES declares, then run
@@ -157,30 +160,57 @@ export function makeNode(nodeType, overrides = {}) {
             return widget;
         },
         onWidgetChanged() {},
-        setSize() {},
+        setSize(size) {
+            node.size = [...size];
+        },
         setDirtyCanvas() {},
+        inputs: [{ name: "images", link: null }],
         ...overrides,
     };
     nodeType.prototype.onNodeCreated.call(node);
     return node;
 }
 
+// A node with the preview band off, so card geometry starts right under the
+// widgets (row 0 at y = 118) as the geometry helpers in the tests assume.
+export function plainNode(nodeType, overrides = {}) {
+    return makeNode(nodeType, { properties: { multi_stitch_preview: false }, ...overrides });
+}
+
+// Assigns a list directly (bypassing upload) and gives the node room for it;
+// the next layout pass clamps the height to the rows it actually has.
+export function setImages(node, items) {
+    node._msImages = items;
+    node.size = [420, 600];
+    node._msSized = true;
+}
+
+export const item = (filename, extra = {}) => ({
+    filename, type: "input", crop: { x: 0, y: 0, w: 1, h: 1 }, rotation: 0, flip_h: false, flip_v: false, ...extra,
+});
+
 export const widget = (node, name) => node.widgets.find((w) => w.name === name);
 export const tick = (ms = 0) => new Promise((resolve) => setTimeout(resolve, ms));
 export const imageFiles = (count, prefix = "img") =>
     Array.from({ length: count }, (_, i) => ({ name: `${prefix}${i}.png`, type: "image/png" }));
 
-// Renders the node header through the real onDrawForeground and returns the
-// strings it painted, so tests can read the image count / estimate line.
-export function paintedText(nodeType, node) {
-    const drawn = [];
+// Renders the node through the real onDrawForeground and reports what it
+// painted: every string, and how many images were drawn.
+export function paintedCalls(nodeType, node) {
+    const text = [];
+    let drawImage = 0;
     const ctx = new Proxy({}, {
-        get: (target, key) => (key === "fillText" ? (text) => drawn.push(String(text))
-            : key === "measureText" ? () => ({ width: 8 })
-                : key === "createLinearGradient" ? () => ({ addColorStop() {} })
-                    : () => {}),
+        get: (target, key) => (key === "fillText" ? (value) => text.push(String(value))
+            : key === "drawImage" ? () => { drawImage += 1; }
+                : key === "measureText" ? () => ({ width: 8 })
+                    : key === "createLinearGradient" ? () => ({ addColorStop() {} })
+                        : () => {}),
         set: () => true,
     });
     nodeType.prototype.onDrawForeground.call(node, ctx);
-    return drawn;
+    return { text, drawImage };
+}
+
+export function paintedText(nodeType, node) {
+    return paintedCalls(nodeType, node).text;
 }

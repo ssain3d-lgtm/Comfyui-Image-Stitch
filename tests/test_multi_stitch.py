@@ -2,6 +2,7 @@ import importlib
 import importlib.util
 import inspect
 import json
+import random
 import re
 import sys
 import tempfile
@@ -273,7 +274,7 @@ class MultiStitchTests(unittest.TestCase):
             refs.clear(); order.clear(); alive_at_call.clear()
             with self.subTest(layout=layout, direction=direction):
                 loaders = [loader(i, w, h) for i, (w, h) in enumerate(dims)]
-                streamed = ms._compose_from(loaders, dims, layout, direction, True, 3, 1, "white", "#808080")
+                streamed, _ = ms._compose_from(loaders, dims, layout, direction, True, 3, 1, "white", "#808080")
                 eager = ms._compose(
                     [torch.full((1, h, w, 3), i / 10) for i, (w, h) in enumerate(dims)],
                     layout, direction, True, 3, 1, "white", "#808080",
@@ -316,7 +317,8 @@ class MultiStitchTests(unittest.TestCase):
         )
         self.assertEqual(package.WEB_DIRECTORY, "./web")
         node = package.NODE_CLASS_MAPPINGS["MultiStitchImages"]
-        self.assertEqual(node.RETURN_TYPES, ("IMAGE",))
+        self.assertEqual(node.RETURN_TYPES, ("IMAGE", "IMAGE"))
+        self.assertEqual(node.RETURN_NAMES, ("image", "cells"))
         self.assertEqual(node.FUNCTION, "stitch")
         self.assertTrue(callable(getattr(node, node.FUNCTION)))
         for name in package.__all__:
@@ -324,10 +326,13 @@ class MultiStitchTests(unittest.TestCase):
 
     def test_input_types_match_the_stitch_signature(self):
         """The widget order is load-bearing for the documented screenshots."""
-        required = ms.MultiStitchImages.INPUT_TYPES()["required"]
+        inputs = ms.MultiStitchImages.INPUT_TYPES()
+        required = inputs["required"]
         self.assertEqual(
             list(required),
             [
+                # The original eight stay first so saved workflows keep their
+                # widget values aligned; later additions follow.
                 "direction",
                 "match_image_size",
                 "spacing_width",
@@ -336,12 +341,21 @@ class MultiStitchTests(unittest.TestCase):
                 "layout_mode",
                 "grid_columns",
                 "custom_spacing_color",
+                "output_limit",
+                "output_limit_px",
+                "grid_cell_width",
+                "grid_cell_height",
+                "output_cells",
             ],
         )
-        parameters = list(
-            inspect.signature(ms.MultiStitchImages.stitch).parameters
-        )[1:]
-        self.assertEqual(parameters, list(required))
+        self.assertEqual(list(inputs["optional"]), ["images"])
+        self.assertEqual(inputs["optional"]["images"], ("IMAGE",))
+        parameters = inspect.signature(ms.MultiStitchImages.stitch).parameters
+        self.assertEqual(list(parameters)[1:], list(required) + list(inputs["optional"]))
+        # Defaults reproduce the behaviour before these widgets existed.
+        for name in ("output_limit", "output_limit_px", "grid_cell_width", "grid_cell_height", "output_cells"):
+            self.assertEqual(parameters[name].default, required[name][1]["default"], name)
+        self.assertEqual(required["output_limit"][0], list(ms._OUTPUT_LIMITS))
         self.assertEqual(required["spacing_color"][0][-1], "custom")
         self.assertEqual(required["direction"][0], list(ms._DIRECTIONS))
         self.assertEqual(required["layout_mode"][0], list(ms._LAYOUT_MODES))
@@ -355,7 +369,7 @@ class MultiStitchTests(unittest.TestCase):
         """Covers the actual node entry point, not just the helpers."""
         red = self.write_png("r.png", (255, 0, 0))
         blue = self.write_png("b.png", (0, 0, 255))
-        (output,) = ms.MultiStitchImages().stitch(
+        output, cells = ms.MultiStitchImages().stitch(
             direction="right",
             match_image_size=True,
             spacing_width=0,
@@ -365,6 +379,7 @@ class MultiStitchTests(unittest.TestCase):
             grid_columns=3,
             custom_spacing_color="#808080",
         )
+        self.assertIs(cells, output, "with output_cells off the second output is the image")
         self.assertEqual(output.shape, (1, 2, 4, 3))
         self.assertEqual(output.dtype, torch.float32)
         self.assertRgb(output[0, 0, 0], (1.0, 0.0, 0.0))
@@ -471,6 +486,113 @@ class MultiStitchTests(unittest.TestCase):
                 ms._item_output_dimensions({"filename": "small.png", "type": "input"})
         finally:
             Image.MAX_IMAGE_PIXELS = limit
+
+    def test_layout_places_every_image_inside_the_canvas_without_overlap(self):
+        """The one layout description feeds the estimate, the compose and the preview."""
+        random.seed(1234)
+        for _ in range(300):
+            count = random.randint(1, 7)
+            dims = [(random.randint(1, 40), random.randint(1, 40)) for _ in range(count)]
+            layout = random.choice(ms._LAYOUT_MODES)
+            direction = random.choice(ms._DIRECTIONS)
+            match = random.choice([True, False])
+            columns = random.randint(1, 6)
+            spacing = random.choice([0, 1, 3])
+            cell_w, cell_h = random.choice([(0, 0), (17, 9), (30, 30)])
+            width, height, placements = ms._layout(dims, layout, direction, match, columns, spacing, cell_w, cell_h)
+            with self.subTest(dims=dims, layout=layout, direction=direction, match=match, columns=columns, spacing=spacing, cell=(cell_w, cell_h)):
+                self.assertEqual(len(placements), count)
+                for x, y, w, h in placements:
+                    self.assertTrue(w >= 1 and h >= 1 and x >= 0 and y >= 0 and x + w <= width and y + h <= height, (x, y, w, h))
+                for i in range(count):
+                    for j in range(i + 1, count):
+                        a, b = placements[i], placements[j]
+                        overlap = a[0] < b[0] + b[2] and b[0] < a[0] + a[2] and a[1] < b[1] + b[3] and b[1] < a[1] + a[3]
+                        self.assertFalse(overlap, (a, b))
+                image = ms._compose(
+                    [torch.rand(1, h, w, 3) for w, h in dims], layout, direction, match, columns, spacing,
+                    "white", "#808080", grid_cell_width=cell_w, grid_cell_height=cell_h,
+                )
+                self.assertEqual((image.shape[2], image.shape[1]), (width, height))
+
+    def test_strip_left_and_up_draw_the_first_image_last(self):
+        dims = [(4, 2), (6, 2), (2, 2)]
+        _, _, right = ms._layout(dims, "strip", "right", False, 3, 1)
+        _, _, left = ms._layout(dims, "strip", "left", False, 3, 1)
+        _, _, up = ms._layout(dims, "strip", "up", False, 3, 1)
+        self.assertEqual([p[0] for p in right], [0, 5, 12])
+        self.assertEqual([p[0] for p in left], [10, 3, 0])
+        self.assertEqual([p[1] for p in up], [6, 3, 0])
+
+    def test_explicit_grid_cells_fit_every_image_without_stretching(self):
+        width, height, placements = ms._layout([(10, 60), (90, 5), (30, 20)], "grid", "right", False, 3, 0, 30, 20)
+        self.assertEqual((width, height), (90, 20))
+        self.assertEqual(placements, [(13, 0, 3, 20), (30, 9, 30, 2), (60, 0, 30, 20)])
+        # A cell given on one side only falls back to automatic sizing.
+        self.assertEqual(ms._layout([(10, 60), (90, 5)], "grid", "right", False, 3, 0, 30, 0)[:2], (180, 60))
+
+    def test_output_limit_only_shrinks(self):
+        self.assertEqual(ms._limited_size(400, 200, "none", 100), (400, 200))
+        self.assertEqual(ms._limited_size(400, 200, "max_width", 100), (100, 50))
+        self.assertEqual(ms._limited_size(400, 200, "max_height", 100), (200, 100))
+        self.assertEqual(ms._limited_size(400, 200, "max_long_side", 100), (100, 50))
+        self.assertEqual(ms._limited_size(400, 200, "max_width", 5000), (400, 200))
+        with self.assertRaisesRegex(ValueError, "output_limit must be one of"):
+            ms._limited_size(400, 200, "shrink", 100)
+        image = ms._compose(
+            [solid((1.0, 0.0, 0.0), 200, 400)], "strip", "right", True, 3, 0, "white", "#808080",
+            output_limit="max_width", output_limit_px=100,
+        )
+        self.assertEqual(tuple(image.shape), (1, 50, 100, 3))
+        self.assertRgb(image[0, 25, 50], (1.0, 0.0, 0.0), atol=1e-3)
+
+    def test_cells_output_is_a_uniform_batch_on_the_background(self):
+        red = solid((1.0, 0.0, 0.0), 4, 4)
+        blue = solid((0.0, 0.0, 1.0), 2, 6)
+        image, cells = ms._compose_from(
+            [lambda: red, lambda: blue], [(4, 4), (6, 2)], "strip", "right", False, 3, 1, "white", "#808080",
+            output_cells=True,
+        )
+        self.assertEqual(tuple(image.shape), (1, 4, 11, 3))
+        self.assertEqual(tuple(cells.shape), (2, 4, 6, 3))
+        self.assertRgb(cells[0, 2, 2], (1.0, 0.0, 0.0))
+        self.assertRgb(cells[0, 0, 0], (1.0, 1.0, 1.0))
+        self.assertRgb(cells[1, 1, 3], (0.0, 0.0, 1.0))
+        self.assertRgb(cells[1, 3, 3], (1.0, 1.0, 1.0))
+        with self.assertRaisesRegex(ValueError, "cells output would be"):
+            ms._validate_cells_output(300, 10000, 10000)
+
+    def test_image_input_frames_are_appended_after_the_pasted_images(self):
+        green = self.write_png("green.png", (0, 255, 0), size=(4, 2))
+        batch = torch.zeros(3, 2, 4, 4)
+        batch[0, ..., 0] = 1
+        batch[0, ..., 3] = 1         # opaque red
+        batch[1, ..., 3] = 0         # fully transparent: shows the background
+        batch[2, ..., :3] = 0.5
+        batch[2, ..., 3] = 1         # opaque grey
+        image, _ = ms.MultiStitchImages().stitch(
+            direction="right", match_image_size=True, spacing_width=0, spacing_color="blue",
+            images_json=json.dumps([green]), layout_mode="strip", grid_columns=3, custom_spacing_color="#808080",
+            images=batch,
+        )
+        self.assertEqual(tuple(image.shape), (1, 2, 16, 3))
+        self.assertRgb(image[0, 0, 0], (0.0, 1.0, 0.0))
+        self.assertRgb(image[0, 0, 4], (1.0, 0.0, 0.0))
+        self.assertRgb(image[0, 0, 8], (0.0, 0.0, 1.0))
+        self.assertRgb(image[0, 0, 12], (0.5, 0.5, 0.5))
+
+        grey, _ = ms.MultiStitchImages().stitch(
+            "right", True, 0, "white", "[]", "strip", 3, "#808080", images=torch.full((1, 2, 4, 1), 0.25),
+        )
+        self.assertEqual(tuple(grey.shape), (1, 2, 4, 3))
+        self.assertRgb(grey[0, 0, 0], (0.25, 0.25, 0.25))
+
+        with self.assertRaisesRegex(ValueError, r"maximum 256 images.*1 pasted \+ 256 from the IMAGE input"):
+            ms.MultiStitchImages().stitch(
+                "right", True, 0, "white", json.dumps([green]), "strip", 3, "#808080", images=torch.zeros(256, 2, 2, 3),
+            )
+        with self.assertRaisesRegex(ValueError, "expected 1, 3 or 4"):
+            ms.MultiStitchImages().stitch("right", True, 0, "white", "[]", "strip", 3, "#808080", images=torch.zeros(1, 2, 2, 2))
 
 
 if __name__ == "__main__":

@@ -23,7 +23,7 @@ window.__nodeType = nodeType;
 window.__toasts = app.extensionManager.toast.log;
 window.__openCropEditor = openCropEditor;
 window.__makeNode = (filename) => ({
-  pos: [0, 0], size: [420, 600], flags: {}, properties: {}, graph: { setDirtyCanvas() {} }, widgets: [],
+  pos: [0, 0], size: [420, 600], flags: {}, properties: { multi_stitch_preview: false }, graph: { setDirtyCanvas() {} }, widgets: [],
   _msImages: [{ filename, type: "input", crop: { x: 0, y: 0, w: 1, h: 1 }, rotation: 0, flip_h: false, flip_v: false }],
   _msThumbCache: new Map(), _msTransformedCache: new Map(),
 });
