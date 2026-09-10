@@ -34,6 +34,14 @@ const pointer = (x, y, client = [x, y]) => ({
     preventDefault() {}, stopPropagation() {},
 });
 
+async function waitForThumbs(node) {
+    for (let i = 0; i < 100; i++) {
+        if ([...(node._msThumbCache?.values() || [])].every(state => state.ready || state.failed)) return;
+        await tick(2);
+    }
+    assert.fail("thumbnail queue did not settle");
+}
+
 describe("paste and upload", () => {
     it("uploads pasted images and mirrors the list into the widget and properties", async () => {
         const node = makeNode(nodeType);
@@ -256,7 +264,7 @@ describe("thumbnails and the resolution estimate", () => {
         widget(node, "layout_mode").value = "grid";
         widget(node, "direction").value = "down";
         paintedText(nodeType, node);
-        await tick(2);
+        await waitForThumbs(node);
         const header = paintedText(nodeType, node)[0];
         assert.match(header, /3 images/);
         // The missing file keeps its slot, stood in for by the first known size,
@@ -309,7 +317,7 @@ describe("preview", () => {
         widget(node, "output_limit").value = "max_width";
         widget(node, "output_limit_px").value = 30;
         paintedCalls(nodeType, node);
-        await tick(2);
+        await waitForThumbs(node);
         const painted = paintedCalls(nodeType, node);
         // strip/right/match: 40x20 + 20x20 = 60x20 canvas, capped to 30 wide.
         assert.match(painted.text[0], /2 images {2}• {2}~30×10/);
@@ -322,7 +330,7 @@ describe("preview", () => {
         dom.imageSizes.set("a.png", [40, 20]);
         setImages(node, [item("a.png")]);
         paintedCalls(nodeType, node);
-        await tick(2);
+        await waitForThumbs(node);
         const before = node.size[1];
         assert.equal(click(node, control.preview), true);
         assert.equal(node.properties.multi_stitch_preview, false);
@@ -341,7 +349,7 @@ describe("preview", () => {
         dom.imageSizes.set("a.png", [40, 20]);
         setImages(node, [item("a.png")]);
         paintedCalls(nodeType, node);
-        await tick(2);
+        await waitForThumbs(node);
         const painted = paintedCalls(nodeType, node);
         assert.match(painted.text[0], /\+ IMAGE input$/);
         assert.ok(painted.text.some((t) => t.endsWith("+ IMAGE input at run time")));
@@ -450,7 +458,7 @@ describe("relink a missing image", () => {
         dom.imageSizes.set("c.png", [40, 20]);
         setImages(node, [item("a.png"), item("gone.png", { crop: { x: 0.1, y: 0.2, w: 0.5, h: 0.5 }, rotation: 90 }), item("c.png")]);
         paintedCalls(nodeType, node);
-        await tick(2);
+        await waitForThumbs(node);
         assert.match(paintedText(nodeType, node)[0], /\(1 not loaded\)/);
 
         // Clicking the failed card offers a file instead of the editor.
@@ -507,5 +515,46 @@ describe("copy original image", () => {
         nodeType.prototype.getExtraMenuOptions.call(node, { graph_mouse: [card(0).x + 65, card(0).y + 46] }, options);
         await options[0].callback();
         assert.deepEqual(toasts(), ["error/Copy failed"]);
+    });
+});
+
+
+describe("native-reference refinements", () => {
+    it("uses original size for new nodes and retains explicit saved matching", () => {
+        const node = makeNode(nodeType);
+        assert.equal(widget(node, "match_image_size").value, false);
+        widget(node, "match_image_size").value = true;
+        nodeType.prototype.onConfigure.call(node, { properties: { multi_stitch_images: "[]" } });
+        assert.equal(widget(node, "match_image_size").value, true);
+    });
+    it("rounds crop edges and quarter-turns exactly like Python", () => {
+        assert.deepEqual(shared.cropPixelBox(10, 10, { x: .15, y: .15, w: .3, h: .3 }), { x: 2, y: 2, w: 2, h: 2 });
+        assert.equal(shared.normalizeTransform({ rotation: 45 }).rotation, 0);
+        assert.equal(shared.normalizeTransform({ rotation: Infinity }).rotation, 0);
+        assert.deepEqual(shared.normalizeCrop({ x: null, w: null }), shared.defaultCrop());
+    });
+    it("limits simultaneous thumbnail loads and releases a removed node", async () => {
+        const OriginalImage = globalThis.Image;
+        const pending = [];
+        let active = 0, peak = 0;
+        globalThis.Image = class {
+            set src(value) {
+                if (!value) return;
+                active++; peak = Math.max(active, peak);
+                pending.push(() => { active--; this.naturalWidth = 4000; this.naturalHeight = 3000; this.onload?.(); });
+            }
+        };
+        try {
+            const node = makeNode(nodeType);
+            for (let i = 0; i < 8; i++) shared.loadThumb(node, item(`queued${i}.png`));
+            assert.equal(active, 2);
+            while (pending.length) pending.shift()();
+            assert.equal(peak, 2);
+            assert.ok([...node._msThumbCache.values()].every(state => state.ready && state.image.width <= 512));
+            shared.loadThumb(node, item("cancelled.png"));
+            nodeType.prototype.onRemoved.call(node);
+            assert.equal(node._msThumbCache.size, 0);
+            while (pending.length) pending.shift()();
+        } finally { globalThis.Image = OriginalImage; }
     });
 });

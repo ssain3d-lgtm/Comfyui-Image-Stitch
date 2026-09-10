@@ -17,6 +17,7 @@ export function defaultCrop() {
 export function normalizeCrop(crop) {
     const c = crop && typeof crop === "object" ? crop : defaultCrop();
     const number = (value, fallback) => {
+        if (value == null || typeof value === "string" && !value.trim()) return fallback;
         const n = Number(value);
         return Number.isFinite(n) ? n : fallback;
     };
@@ -174,13 +175,23 @@ export function limitedSize(width, height, outputLimit, outputLimitPx) {
 }
 
 export function normalizeTransform(item) {
-    const raw = Number(item?.rotation) || 0;
-    const rotation = ((Math.round(raw / 90) * 90) % 360 + 360) % 360;
+    const value = Number(item?.rotation);
+    const raw = Number.isFinite(value) ? value : 0;
+    const rotation = ((roundHalfEven(raw / 90) * 90) % 360 + 360) % 360;
     return {
         rotation,
         flip_h: !!item?.flip_h,
         flip_v: !!item?.flip_v,
     };
+}
+
+export function cropPixelBox(width, height, crop) {
+    const c = normalizeCrop(crop);
+    const x = Math.max(0, Math.min(width - 1, roundHalfEven(c.x * width)));
+    const y = Math.max(0, Math.min(height - 1, roundHalfEven(c.y * height)));
+    const right = Math.max(x + 1, Math.min(width, roundHalfEven((c.x + c.w) * width)));
+    const bottom = Math.max(y + 1, Math.min(height, roundHalfEven((c.y + c.h) * height)));
+    return { x, y, w: right - x, h: bottom - y };
 }
 
 function rotateCrop(crop, rotation) {
@@ -378,6 +389,18 @@ function scaledCanvas(source, width, height, maxSide) {
     return out;
 }
 
+// Avoid starting hundreds of full-resolution browser decodes simultaneously.
+// Only two files may be loading/shrinking at once across all stitch nodes.
+const thumbnailQueue = [];
+let thumbnailLoads = 0;
+function pumpThumbnails() {
+    while (thumbnailLoads < 2 && thumbnailQueue.length) {
+        const task = thumbnailQueue.shift();
+        thumbnailLoads++;
+        task(() => { thumbnailLoads--; pumpThumbnails(); });
+    }
+}
+
 // Loads a source once and keeps only a bounded copy of it. `width`/`height`
 // are the true source size; `image` is the thumbnail-sized canvas. The full
 // decode is released as soon as the copy exists, so a node full of large
@@ -389,20 +412,51 @@ export function loadThumb(node, item) {
 
     const state = { image: null, width: 0, height: 0, ready: false, failed: false };
     node._msThumbCache.set(key, state);
-    const image = new Image();
-    image.onload = () => {
-        state.width = image.naturalWidth || image.width || 1;
-        state.height = image.naturalHeight || image.height || 1;
-        state.image = scaledCanvas(image, state.width, state.height, THUMB_MAX_SIDE);
-        state.ready = true;
-        node.graph?.setDirtyCanvas(true, false);
-    };
-    image.onerror = () => {
-        state.failed = true;
-        node.graph?.setDirtyCanvas(true, false);
-    };
-    image.src = imageUrl(item);
+    thumbnailQueue.push((release) => {
+        if (node._msDisposed || node._msThumbCache.get(key) !== state) { release(); return; }
+        try {
+            startThumbLoad(node, key, state, item, release);
+        } catch (_) {
+            state.failed = true;
+            release();
+        }
+    });
+    pumpThumbnails();
     return state;
+}
+
+function startThumbLoad(node, key, state, item, release) {
+    {
+        const image = new Image();
+        let done = false;
+        let timeout;
+        const finish = (failed = false) => {
+            if (done) return;
+            done = true;
+            clearTimeout(timeout);
+            image.onload = image.onerror = null;
+            state.cancel = null;
+            if (failed) state.failed = true;
+            // Drop the original decode; the cache keeps only scaled pixels.
+            image.src = "";
+            node.graph?.setDirtyCanvas(true, false);
+            release();
+        };
+        state.cancel = () => finish(true);
+        image.onload = () => {
+            try {
+                if (node._msDisposed || node._msThumbCache.get(key) !== state) return;
+                state.width = image.naturalWidth || image.width || 1;
+                state.height = image.naturalHeight || image.height || 1;
+                state.image = scaledCanvas(image, state.width, state.height, THUMB_MAX_SIDE);
+                state.ready = true;
+            } catch (_) { state.failed = true; }
+            finally { finish(); }
+        };
+        image.onerror = () => finish(true);
+        timeout = setTimeout(() => finish(true), 30000);
+        image.src = imageUrl(item);
+    }
 }
 
 export function transformedDimensions(width, height, item) {

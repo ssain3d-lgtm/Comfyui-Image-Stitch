@@ -1,5 +1,11 @@
 # Comfyui-Image-Stitch
 
+**v1.1 참조 품질 보완:** 새 노드는 `match_image_size=false`, `output_limit=none`으로 원본 크기를 유지합니다. 기존 워크플로우의 설정과 출력 연결은 유지됩니다. 개별 참조를 축소 없이 받으려면 `output_cells=true`, `cells_resolution=source`를 사용하세요. `cells`는 원본 크기의 이미지를 최대 원본 크기 셀에 패딩한 배치입니다. 얼굴별 파일이 필요하면 배치 분리 노드로 분리하세요.
+
+`minimum_image_side`는 합성 결과에 배치되는 각 이미지의 짧은 변 최소값입니다. 기본 0은 검사 끄기이며, 지정값 미만으로 축소될 때 실행을 중단하고 알려줍니다. 모델 자체의 입력 전처리와는 별개입니다. 썸네일은 최대 512px 사본이며 동시 원본 로딩을 2개로 제한합니다. 미리보기 크기는 실제 출력 크기에 영향을 주지 않습니다.
+
+**v1.1 reference quality:** New nodes default to native size (`match_image_size=false`, `output_limit=none`). Saved settings and existing output slots remain compatible. Use `output_cells=true` with `cells_resolution=source` for a padded batch of pre-resize images. The default `placed` mode retains the previous cells behavior. `minimum_image_side=0` disables the optional per-image detail guard; a positive value rejects a composite whose placed image short side would be smaller. Model-side preprocessing is separate. Thumbnails retain at most 512px per side and at most two source decodes run concurrently. Preview size never changes output size.
+
 **Multi Stitch Images** for ComfyUI — paste many images into one node, crop / rotate / flip each image, click an image to edit it, drag its dedicated `≡` handle to reorder, then output a classic stitched strip or a configurable grid.
 
 **[한국어](#-한국어) · [English](#-english)**
@@ -196,7 +202,7 @@ grid_columns = 3
 | 위젯 | 값 | 기본값 |
 | --- | --- | --- |
 | `direction` | `right` / `down` / `left` / `up` | `right` |
-| `match_image_size` | `true` / `false` | `true` |
+| `match_image_size` | `true` / `false` | `false` |
 | `spacing_width` | `0` – `1024` (step 2) | `0` |
 | `spacing_color` | `white` / `black` / `red` / `green` / `blue` / `custom` | `white` |
 | `layout_mode` | `strip` / `grid` | `strip` |
@@ -206,6 +212,8 @@ grid_columns = 3
 | `output_limit_px` | `64` – `16384` (`output_limit`가 `none`이 아닐 때 표시) | `2048` |
 | `grid_cell_width` / `grid_cell_height` | `0` = 자동, 최대 `16384` (Grid에서만 표시, 둘 다 있어야 적용) | `0` |
 | `output_cells` | `true` / `false` | `false` |
+| `cells_resolution` | `placed` / `source` (output_cells 사용 시 표시) | `placed` |
+| `minimum_image_side` | `0` = 검사 끄기 / 최대 131072px | `0` |
 | `images` (입력) | 선택 IMAGE 배치 — 붙여넣은 이미지 뒤에 추가 | — |
 
 `spacing_width`는 홀수도 동작합니다 — step 2는 위젯의 증감 단위일 뿐입니다. 목록에 없는 값을 API로 직접 넣으면 조용히 기본값으로 바뀌지 않고 **에러가 발생**합니다.
@@ -228,7 +236,7 @@ white / black / red / green / blue / custom
 
 여러 장의 고해상도 이미지를 `match_image_size = false`로 길게 붙이면 결과 Tensor가 매우 커질 수 있습니다. 이 노드는 실행 시 **파일 헤더만 읽어** (픽셀 디코딩 없이 — EXIF 방향까지 헤더에서 계산) 최종 캔버스 크기와 각 원본의 크기를 먼저 확인합니다.
 
-합성은 **한 장씩 스트리밍**됩니다: 캔버스를 먼저 할당하고, 원본을 하나 디코딩해 제자리에 넣은 뒤 바로 해제합니다. 따라서 이미지가 몇 장이든 메모리에는 **캔버스 + 원본 1장**만 존재합니다. 원본 한 장의 한도는 Crop 이후가 아니라 **디코딩되는 원본 전체 크기** 기준입니다 — 작은 영역만 잘라 써도 디코딩 비용은 원본 전체이기 때문입니다.
+합성은 **한 장씩 스트리밍**됩니다: 캔버스를 먼저 할당하고, 원본을 하나 디코딩해 제자리에 넣은 뒤 바로 해제합니다. 따라서 이미지가 몇 장이든 작업 메모리에는 주로 **캔버스 + 처리 중인 원본·리사이즈 버퍼**가 존재합니다. `output_cells=true`이면 셀 배치도 보관합니다. 원본 한 장의 한도는 Crop 이후가 아니라 **디코딩되는 원본 전체 크기** 기준입니다 — 작은 영역만 잘라 써도 디코딩 비용은 원본 전체이기 때문입니다.
 
 기본 안전 한도:
 
@@ -457,7 +465,7 @@ With `match_image_size = true`, the **first image in the list** — edited or no
 | Widget | Values | Default |
 | --- | --- | --- |
 | `direction` | `right` / `down` / `left` / `up` | `right` |
-| `match_image_size` | `true` / `false` | `true` |
+| `match_image_size` | `true` / `false` | `false` |
 | `spacing_width` | `0` – `1024` (step 2) | `0` |
 | `spacing_color` | `white` / `black` / `red` / `green` / `blue` / `custom` | `white` |
 | `layout_mode` | `strip` / `grid` | `strip` |
@@ -467,6 +475,8 @@ With `match_image_size = true`, the **first image in the list** — edited or no
 | `output_limit_px` | `64` – `16384` (shown when `output_limit` is not `none`) | `2048` |
 | `grid_cell_width` / `grid_cell_height` | `0` = automatic, up to `16384` (Grid only; both must be set) | `0` |
 | `output_cells` | `true` / `false` | `false` |
+| `cells_resolution` | `placed` / `source` (shown when `output_cells` is on) | `placed` |
+| `minimum_image_side` | `0` = off, up to `131072` px | `0` |
 | `images` (input) | optional IMAGE batch, appended after the pasted images | — |
 
 Odd `spacing_width` values work — the step of 2 is only the widget's increment. A value outside the listed set, passed directly through the API, **raises an error** rather than being silently replaced with the default.
@@ -489,7 +499,7 @@ A PNG with transparency is composited onto that background color.
 
 A long strip of high-resolution images can create a very large float32 tensor, especially with `match_image_size = false`. At run time the node reads **only the file headers** (no pixel decoding — EXIF orientation is taken from the header too) to check the final canvas size and the size of every original first.
 
-Composition then **streams one source at a time**: the canvas is allocated up front, each original is decoded, placed and released before the next one is read. Whatever the image count, memory holds **the canvas plus one original**. The per-image limit is measured on the **full decoded original, not the crop** — a small crop still costs a full decode.
+Composition then **streams one source at a time**: the canvas is allocated up front, each original is decoded, placed and released before the next one is read. Whatever the image count, working memory mainly holds **the canvas plus the current original and resize buffers**; `output_cells=true` also retains the cells batch. The per-image limit is measured on the **full decoded original, not the crop** — a small crop still costs a full decode.
 
 Default safety limits:
 

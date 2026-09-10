@@ -2,6 +2,7 @@ import { app } from "../../scripts/app.js";
 import { openCropEditor } from "./crop_editor.js";
 import {
     commitImages,
+    cropPixelBox,
     getWidget,
     hideWidget,
     historyOf,
@@ -216,10 +217,7 @@ function transformedCropDims(node, item) {
     if (!state.ready) return null;
     // The thumbnail canvas is downscaled; the estimate must use the true size.
     const c = normalizeCrop(item.crop);
-    return {
-        w: Math.max(1, Math.round(state.width * c.w)),
-        h: Math.max(1, Math.round(state.height * c.h)),
-    };
+    return cropPixelBox(state.width, state.height, c);
 }
 
 function readSettings(node) {
@@ -229,7 +227,7 @@ function readSettings(node) {
     };
     return {
         direction: value("direction", "right"),
-        match: !!value("match_image_size", true),
+        match: !!value("match_image_size", false),
         spacing: Math.max(0, Number(value("spacing_width", 0)) || 0),
         layout: value("layout_mode", "strip"),
         gridColumns: Math.max(1, Math.min(16, Number(value("grid_columns", 3)) || 3)),
@@ -882,6 +880,7 @@ function syncConditionalWidgets(node) {
     setWidgetVisible(getWidget(node, "grid_cell_height"), layout === "grid");
     setWidgetVisible(getWidget(node, "output_limit_px"), outputLimit !== "none");
     setWidgetVisible(getWidget(node, "custom_color_picker"), spacingColor === "custom");
+    setWidgetVisible(getWidget(node, "cells_resolution"), !!getWidget(node, "output_cells")?.value);
 }
 
 function updateCustomColorButton(node) {
@@ -1031,6 +1030,7 @@ function dragDistancePx(press, event, localX, localY) {
 }
 
 function setupNode(node) {
+    node._msDisposed = false;
     node.previewMediaType = "image";
     node.properties ||= {};
 
@@ -1151,7 +1151,7 @@ app.registerExtension({
         const widgetChanged = nodeType.prototype.onWidgetChanged;
         nodeType.prototype.onWidgetChanged = function (name, value, oldValue, widget) {
             const r = widgetChanged?.apply(this, arguments);
-            if (name === "layout_mode" || name === "spacing_color" || name === "output_limit") {
+            if (name === "layout_mode" || name === "spacing_color" || name === "output_limit" || name === "output_cells") {
                 syncConditionalWidgets(this);
                 scheduleNodeLayout(this);
             }
@@ -1311,6 +1311,10 @@ app.registerExtension({
 
         const removed = nodeType.prototype.onRemoved;
         nodeType.prototype.onRemoved = function () {
+            this._msDisposed = true;
+            cancelUpload(this);
+            for (const state of this._msThumbCache?.values() || []) state.cancel?.();
+            this._msThumbCache?.clear(); this._msTransformedCache?.clear();
             detachPressFallback(this._msThumbPress);
             return removed?.apply(this, arguments);
         };

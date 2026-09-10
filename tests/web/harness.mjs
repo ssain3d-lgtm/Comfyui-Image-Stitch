@@ -136,11 +136,12 @@ export async function loadExtension(root) {
 
 // The widgets INPUT_TYPES declares, in order, with their defaults.
 const WIDGET_DEFAULTS = [
-    ["direction", "right"], ["match_image_size", true], ["spacing_width", 0],
+    ["direction", "right"], ["match_image_size", false], ["spacing_width", 0],
     ["spacing_color", "white"], ["images_json", "[]"], ["layout_mode", "strip"],
     ["grid_columns", 3], ["custom_spacing_color", "#808080"],
     ["output_limit", "none"], ["output_limit_px", 2048], ["grid_cell_width", 0],
     ["grid_cell_height", 0], ["output_cells", false],
+    ["cells_resolution", "placed"], ["minimum_image_side", 0],
 ];
 
 // A LiteGraph-shaped node with the widgets INPUT_TYPES declares, then run
