@@ -29,7 +29,7 @@ NODE = shutil.which("node")
 
 RUNNER = """
 import {
-    normalizeCrop, gridShape, cropSourceToView, cropViewToSource, layoutPlacements, limitedSize,
+    normalizeCrop, gridShape, cropSourceToView, cropViewToSource, layoutPlacements, limitedSize, cropPixelBox,
 } from "./pkg/web/shared.js";
 import { readFileSync } from "node:fs";
 const cases = JSON.parse(readFileSync(process.argv[2], "utf8"));
@@ -41,6 +41,7 @@ const out = {
     layout: (cases.layout || []).map(([dims, layout, direction, match, gc, sw, cw, ch]) =>
         layoutPlacements(dims.map(([w, h]) => ({ w, h })), layout, direction, match, gc, sw, cw, ch)),
     limit: (cases.limit || []).map(([w, h, mode, px]) => limitedSize(w, h, mode, px)),
+    box: (cases.box || []).map(([w, h, c]) => cropPixelBox(w, h, c)),
 };
 process.stdout.write(JSON.stringify(out));
 """
@@ -175,6 +176,22 @@ class FrontendParityTests(unittest.TestCase):
         for (w, h, mode, px), js in zip(limit_cases, got["limit"]):
             with self.subTest(limit=(w, h, mode, px)):
                 self.assertEqual((js["w"], js["h"]), ms._limited_size(w, h, mode, px))
+
+    def test_crop_pixel_box_matches_python(self):
+        """cropPixelBox mirrors _crop_box, half-even rounding and 1px minimum included."""
+        rng = random.Random(99)
+        cases = []
+        for _ in range(500):
+            width, height = rng.randint(1, 60), rng.randint(1, 60)
+            x, y = rng.random(), rng.random()
+            cases.append([width, height, {"x": x, "y": y, "w": rng.random() * (1 - x), "h": rng.random() * (1 - y)}])
+        cases += [[10, 10, {"x": 0.15, "y": 0.15, "w": 0.3, "h": 0.3}], [1, 1, {"x": 0, "y": 0, "w": 1, "h": 1}],
+                  [7, 3, {"x": 0.5, "y": 0.5, "w": 0.5, "h": 0.5}], [40, 20, {"x": 0.999, "y": 0.999, "w": 0.001, "h": 0.001}]]
+        got = self.run_js({"box": cases})
+        for (width, height, crop), js in zip(cases, got["box"]):
+            left, top, right, bottom = ms._crop_box(width, height, crop)
+            with self.subTest(box=(width, height, crop)):
+                self.assertEqual((js["x"], js["y"], js["w"], js["h"]), (left, top, right - left, bottom - top))
 
 
 if __name__ == "__main__":

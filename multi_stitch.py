@@ -211,7 +211,10 @@ def _exif_orientation(source: Image.Image) -> int:
         finally:
             stream.seek(position)
         return orientation
-    except (OSError, TypeError, SyntaxError):
+    except Exception:
+        # Pillow raises SyntaxError for a non-TIFF block but struct.error for a
+        # truncated one; a malformed EXIF block must not make a decodable image
+        # unusable, so treat anything unreadable as "no orientation".
         return 1
 
 

@@ -227,7 +227,7 @@ function readSettings(node) {
     };
     return {
         direction: value("direction", "right"),
-        match: !!value("match_image_size", true),
+        match: !!value("match_image_size", false),
         spacing: Math.max(0, Number(value("spacing_width", 0)) || 0),
         layout: value("layout_mode", "strip"),
         gridColumns: Math.max(1, Math.min(16, Number(value("grid_columns", 3)) || 3)),

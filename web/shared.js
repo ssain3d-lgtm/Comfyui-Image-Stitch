@@ -414,6 +414,19 @@ export function loadThumb(node, item) {
     node._msThumbCache.set(key, state);
     thumbnailQueue.push((release) => {
         if (node._msDisposed || node._msThumbCache.get(key) !== state) { release(); return; }
+        try {
+            startThumbLoad(node, key, state, item, release);
+        } catch (_) {
+            state.failed = true;
+            release();
+        }
+    });
+    pumpThumbnails();
+    return state;
+}
+
+function startThumbLoad(node, key, state, item, release) {
+    {
         const image = new Image();
         let done = false;
         let timeout;
@@ -443,9 +456,7 @@ export function loadThumb(node, item) {
         image.onerror = () => finish(true);
         timeout = setTimeout(() => finish(true), 30000);
         image.src = imageUrl(item);
-    });
-    pumpThumbnails();
-    return state;
+    }
 }
 
 export function transformedDimensions(width, height, item) {

@@ -71,6 +71,21 @@ class ReferenceQualityTests(unittest.TestCase):
         with Image.open(path) as image:
             self.assertEqual(ImageOps.exif_transpose(image).size, (30, 20))
 
+    def test_malformed_late_png_exif_is_ignored_not_fatal(self):
+        """A truncated TIFF header inside eXIf makes Pillow raise struct.error."""
+        item = self.write_png('broken.png', (255, 0, 0), (20, 30))
+        path = self.root / 'broken.png'
+        for junk in (b'MM\x00\x2a\x00\x00', b'\x00\x01\x02garbage!!', b''):
+            chunk = struct.pack('>I', len(junk)) + b'eXIf' + junk + struct.pack('>I', zlib.crc32(b'eXIf' + junk))
+            data = path.read_bytes()
+            if b'eXIf' in data:
+                self.write_png('broken.png', (255, 0, 0), (20, 30))
+                data = path.read_bytes()
+            path.write_bytes(data[:-12] + chunk + data[-12:])
+            with self.subTest(junk=junk):
+                self.assertEqual(ms._item_output_dimensions(item), (20, 30))
+                self.assertEqual(tuple(ms._load_image(item).shape), (1, 30, 20, 3))
+
     def test_tiff_orientation_headers_are_respected(self):
         image = Image.new('RGB', (20, 30))
         exif = Image.Exif(); exif[274] = 6

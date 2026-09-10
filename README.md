@@ -475,8 +475,8 @@ With `match_image_size = true`, the **first image in the list** — edited or no
 | `output_limit_px` | `64` – `16384` (shown when `output_limit` is not `none`) | `2048` |
 | `grid_cell_width` / `grid_cell_height` | `0` = automatic, up to `16384` (Grid only; both must be set) | `0` |
 | `output_cells` | `true` / `false` | `false` |
-| `cells_resolution` | `placed` / `source` (output_cells 사용 시 표시) | `placed` |
-| `minimum_image_side` | `0` = 검사 끄기 / 최대 131072px | `0` |
+| `cells_resolution` | `placed` / `source` (shown when `output_cells` is on) | `placed` |
+| `minimum_image_side` | `0` = off, up to `131072` px | `0` |
 | `images` (input) | optional IMAGE batch, appended after the pasted images | — |
 
 Odd `spacing_width` values work — the step of 2 is only the widget's increment. A value outside the listed set, passed directly through the API, **raises an error** rather than being silently replaced with the default.
