@@ -34,11 +34,14 @@ export function installDom() {
     const inputs = [];
     const imageSizes = new Map();
     const noop = () => {};
-    const context2d = () => new Proxy({}, {
+    // A canvas records how many images were drawn into it, so a test can tell
+    // a rendered composite from the thumbnails and the preview.
+    const context2d = (owner) => new Proxy({}, {
         get: (target, key) => (key === "measureText" ? () => ({ width: 8 })
             : key === "createLinearGradient" ? () => ({ addColorStop: noop })
                 : key === "getImageData" ? () => ({ data: new Uint8ClampedArray(4) })
-                    : noop),
+                    : key === "drawImage" ? () => { if (owner) owner.draws += 1; }
+                        : noop),
         set: () => true,
     });
 
@@ -75,7 +78,8 @@ export function installDom() {
                 remove() {
                     element.attached = false;
                 },
-                getContext: context2d,
+                draws: 0,
+                getContext: () => context2d(element),
                 toBlob(callback, type) {
                     callback({ type: type || "image/png", size: 1, encoded: true });
                 },

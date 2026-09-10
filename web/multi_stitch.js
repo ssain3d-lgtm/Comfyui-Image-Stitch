@@ -16,6 +16,7 @@ import {
     normalizeCrop,
     normalizeTransform,
     redoImages,
+    renderTransformedImage,
     resetHistory,
     safeJsonParse,
     setWidgetHidden,
@@ -38,6 +39,9 @@ const DEFAULT_LIST_ROWS = 3;
 const SCROLLBAR_W = 8;
 const ROW_H = THUMB_HEIGHT + THUMB_GAP;
 const NAMED_COLORS = { white: "#ffffff", black: "#000000", red: "#ff0000", green: "#00ff00", blue: "#0000ff" };
+// "Copy stitched result" renders the composite in the browser. Bounded so a
+// canvas the browser cannot allocate or encode fails with a message.
+const COPY_MAX_PIXELS = 64 * 1024 * 1024;
 
 function visibleWidgetBottom(node) {
     let bottom = 92;
@@ -124,11 +128,11 @@ function thumbLayout(node, index) {
 function headerControls(node) {
     const y = visibleWidgetBottom(node) + 6;
     const right = nodeWidth(node) - 8;
-    return {
-        preview: { x: right - 64, y, w: 64, h: 18 },
-        redo: { x: right - 64 - 4 - 24, y, w: 24, h: 18 },
-        undo: { x: right - 64 - 4 - 24 - 4 - 24, y, w: 24, h: 18 },
-    };
+    const preview = { x: right - 64, y, w: 64, h: 18 };
+    const redo = { x: preview.x - 4 - 24, y, w: 24, h: 18 };
+    const undo = { x: redo.x - 4 - 24, y, w: 24, h: 18 };
+    const copy = { x: undo.x - 4 - 52, y, w: 52, h: 18 };
+    return { copy, undo, redo, preview };
 }
 
 function thumbActionRects(r) {
@@ -440,18 +444,24 @@ function drawThumbs(node, ctx) {
     ctx.font = "12px sans-serif";
     ctx.fillStyle = "#b8b8b8";
     const predicted = predictedSize(node);
-    ctx.fillText(
-        count
-            ? `${count} image${count === 1 ? "" : "s"}${predicted ? `  •  ~${predicted.w}×${predicted.h}${predicted.skipped ? ` (${predicted.skipped} not loaded)` : ""}` : ""}${imageInputConnected(node) ? "  + IMAGE input" : ""}`
-            : node._msUnreadable
-                ? "Image list unreadable — kept as-is. Add or Clear all to replace."
-                : "Select this node, then Ctrl+V images",
-        9,
-        top + 12,
-    );
+    const controls = headerControls(node);
+    const noun = `${count} image${count === 1 ? "" : "s"}`;
+    const estimate = predicted
+        ? `  •  ~${predicted.w}×${predicted.h}${predicted.skipped ? ` (${predicted.skipped} not loaded)` : ""}`
+        : "";
+    const inputNote = imageInputConnected(node) ? "  + IMAGE input" : "";
+    // Longest status that still clears the controls on the right.
+    const candidates = count
+        ? [`${noun}${estimate}${inputNote}`, `${noun}${estimate}`, noun]
+        : [node._msUnreadable
+            ? "Image list unreadable — kept as-is. Add or Clear all to replace."
+            : "Select this node, then Ctrl+V images"];
+    const room = controls.copy.x - 9 - 6;
+    const status = candidates.find((text) => (ctx.measureText?.(text)?.width ?? 0) <= room) ?? candidates[candidates.length - 1];
+    ctx.fillText(status, 9, top + 12);
 
     const history = historyOf(node);
-    const controls = headerControls(node);
+    drawPill(ctx, controls.copy, node._msCopying ? "…" : "⧉ Copy", count > 0 && !node._msCopying);
     drawPill(ctx, controls.undo, "↶", history.past.length > 0);
     drawPill(ctx, controls.redo, "↷", history.future.length > 0);
     drawPill(ctx, controls.preview, previewEnabled(node) ? "Preview ✓" : "Preview", count > 0);
@@ -580,6 +590,134 @@ async function copyOriginalImage(node, index) {
         notify("Copied", `Original image #${index + 1} copied to the clipboard.`);
     } catch (error) {
         notify("Copy failed", String(error?.message || error), "error");
+    }
+}
+
+function loadFullImage(url) {
+    return new Promise((resolve, reject) => {
+        const image = new Image();
+        image.crossOrigin = "anonymous";
+        image.onload = () => resolve(image);
+        image.onerror = () => reject(new Error(`could not load ${url}`));
+        image.src = url;
+    });
+}
+
+function releaseImage(image) {
+    image.onload = null;
+    image.onerror = null;
+    image.src = "";
+}
+
+// Draws the stitched result in the browser at its final size: the same
+// placements the backend will use, but from the original files rather than
+// the thumbnails, one image at a time. Frames from a connected IMAGE input
+// exist only at run time and are not included; an image that failed to load
+// is left as background. Resampling is the browser's, so a downscaled image
+// can differ very slightly from the backend's bicubic result.
+async function renderStitched(node, onProgress) {
+    const planned = plannedLayout(node);
+    if (!planned) throw new Error("thumbnails are still loading — try again in a moment");
+    if (planned.finalWidth * planned.finalHeight > COPY_MAX_PIXELS) {
+        throw new Error(
+            `${planned.finalWidth}×${planned.finalHeight} is too large to render in the browser ` +
+            `(limit ${Math.round(COPY_MAX_PIXELS / 1_000_000)} MP); set output_limit, or queue the workflow instead`,
+        );
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = planned.finalWidth;
+    canvas.height = planned.finalHeight;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = backgroundColor(planned.settings);
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const scaleX = planned.finalWidth / planned.width;
+    const scaleY = planned.finalHeight / planned.height;
+
+    const items = node._msImages;
+    let skipped = 0;
+    for (let index = 0; index < items.length; index++) {
+        onProgress?.(index + 1, items.length);
+        if (planned.failed[index]) {
+            skipped += 1;
+            continue;
+        }
+        const item = items[index];
+        const place = planned.placements[index];
+        const image = await loadFullImage(imageUrl(item));
+        try {
+            const view = isTransformed(item) ? renderTransformedImage(image, item, 0) : image;
+            const size = mediaSize(view);
+            const box = cropPixelBox(size.w, size.h, item.crop);
+            ctx.drawImage(
+                view,
+                box.x, box.y, box.w, box.h,
+                place.x * scaleX, place.y * scaleY, place.w * scaleX, place.h * scaleY,
+            );
+        } finally {
+            releaseImage(image);
+        }
+    }
+
+    const blob = await new Promise((resolve, reject) => {
+        canvas.toBlob(
+            (out) => (out ? resolve(out) : reject(new Error("could not encode the result as PNG"))),
+            "image/png",
+        );
+    });
+    return { blob, width: canvas.width, height: canvas.height, skipped };
+}
+
+// "⧉ Copy": the composite as it will be stitched, on the clipboard now,
+// without queueing the workflow.
+async function copyStitchedResult(node) {
+    if (!(node._msImages?.length)) return;
+    if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
+        notify("Copy failed", "The clipboard API needs a secure context (https:// or localhost).", "error");
+        return;
+    }
+    if (node._msCopying) {
+        notify("Still rendering", "The previous copy is still being rendered.", "warn");
+        return;
+    }
+
+    node._msCopying = true;
+    const title = node.title;
+    let result = null;
+    const rendering = renderStitched(node, (done, total) => {
+        node.title = `${title || "Multi Stitch Images"} • rendering copy ${done}/${total}…`;
+        node.graph?.setDirtyCanvas(true, false);
+    }).then((out) => {
+        result = out;
+        return out.blob;
+    });
+    rendering.catch(() => {});  // observed below; keep a render failure from surfacing twice
+
+    try {
+        try {
+            // The pending promise keeps the click's user gesture alive while
+            // the originals load, which Safari requires.
+            await navigator.clipboard.write([new ClipboardItem({ "image/png": rendering })]);
+        } catch (_) {
+            // A render failure rethrows here with its own message; a browser
+            // that rejects a pending promise gets the resolved blob instead.
+            const blob = await rendering;
+            await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+        }
+        const notes = [];
+        if (result.skipped) notes.push(`${result.skipped} not loaded, left blank`);
+        if (imageInputConnected(node)) notes.push("IMAGE input frames not included");
+        notify(
+            "Copied",
+            `Stitched result ${result.width}×${result.height} copied to the clipboard` +
+            `${notes.length ? ` (${notes.join("; ")})` : ""}.`,
+        );
+    } catch (error) {
+        notify("Copy failed", String(error?.message || error), "error");
+    } finally {
+        node._msCopying = false;
+        node.title = title;
+        node.graph?.setDirtyCanvas(true, true);
     }
 }
 
@@ -1166,8 +1304,10 @@ app.registerExtension({
             if (primary && !this.flags?.collapsed) {
                 const [x, y] = localPos(this, event, pos, graphCanvas);
                 const controls = headerControls(this);
-                if (inRect(x, y, controls.undo) || inRect(x, y, controls.redo) || inRect(x, y, controls.preview)) {
-                    if (inRect(x, y, controls.undo)) restoreHistory(this, undoImages);
+                if (inRect(x, y, controls.copy) || inRect(x, y, controls.undo) || inRect(x, y, controls.redo) || inRect(x, y, controls.preview)) {
+                    if (inRect(x, y, controls.copy)) {
+                        if (this._msImages?.length) copyStitchedResult(this);
+                    } else if (inRect(x, y, controls.undo)) restoreHistory(this, undoImages);
                     else if (inRect(x, y, controls.redo)) restoreHistory(this, redoImages);
                     else if (this._msImages?.length) togglePreview(this);
                     stopEvent(event, graphCanvas);
@@ -1224,8 +1364,9 @@ app.registerExtension({
         nodeType.prototype.getExtraMenuOptions = function (graphCanvas, options) {
             const r = extraMenu?.apply(this, arguments);
             const index = thumbIndexAt(this, graphCanvas);
-            if (index >= 0 && Array.isArray(options)) {
-                options.unshift(
+            const extra = [];
+            if (index >= 0) {
+                extra.push(
                     {
                         content: `Copy original image #${index + 1}`,
                         callback: () => copyOriginalImage(this, index),
@@ -1234,9 +1375,15 @@ app.registerExtension({
                         content: `Replace image #${index + 1}…`,
                         callback: () => replaceImage(this, index),
                     },
-                    null,
                 );
             }
+            if (this._msImages?.length) {
+                extra.push({
+                    content: "Copy stitched result",
+                    callback: () => copyStitchedResult(this),
+                });
+            }
+            if (extra.length && Array.isArray(options)) options.unshift(...extra, null);
             return r;
         };
 

@@ -15,6 +15,7 @@ const PAGE = `<!doctype html><meta charset="utf-8"><title>Multi Stitch Images te
 <script type="module">
 import { app } from "./scripts/app.js";
 import { openCropEditor } from "./pkg/web/crop_editor.js";
+import { loadTransformedThumb } from "./pkg/web/shared.js";
 await import("./pkg/web/multi_stitch.js");
 const nodeType = { prototype: {} };
 await app.extension.beforeRegisterNodeDef(nodeType, { name: "MultiStitchImages" });
@@ -22,6 +23,7 @@ window.__msFixtureBase = location.origin + "/fixtures";
 window.__nodeType = nodeType;
 window.__toasts = app.extensionManager.toast.log;
 window.__openCropEditor = openCropEditor;
+window.__loadTransformedThumb = loadTransformedThumb;
 window.__makeNode = (filename) => ({
   pos: [0, 0], size: [420, 600], flags: {}, properties: { multi_stitch_preview: false }, graph: { setDirtyCanvas() {} }, widgets: [],
   _msImages: [{ filename, type: "input", crop: { x: 0, y: 0, w: 1, h: 1 }, rotation: 0, flip_h: false, flip_v: false }],
@@ -119,6 +121,59 @@ describe("crop editor", () => {
         const item = await page.evaluate(() => window.__node._msImages[0]);
         assert.equal(item.flip_h, false);
         assert.equal(await page.locator(".ms-crop-overlay").count(), 0);
+        await page.close();
+    });
+});
+
+describe("copy stitched result", () => {
+    it("composes the originals at full size with the spacing colour and puts the PNG on the clipboard", async () => {
+        const { page, errors } = await openPage();
+        const r = await page.evaluate(async () => {
+            const node = window.__makeNode("green.png");
+            node._msImages.push({ filename: "pink.jpg", type: "input", crop: { x: 0, y: 0, w: 1, h: 1 }, rotation: 0, flip_h: false, flip_v: false });
+            node.widgets = [
+                { name: "direction", value: "right", options: {} }, { name: "match_image_size", value: false, options: {} },
+                { name: "spacing_width", value: 2, options: {} }, { name: "spacing_color", value: "blue", options: {} },
+                { name: "layout_mode", value: "strip", options: {} },
+            ];
+            for (const item of node._msImages) window.__loadTransformedThumb(node, item);
+            await new Promise((resolve, reject) => {
+                const started = Date.now();
+                const timer = setInterval(() => {
+                    const states = [...node._msThumbCache.values()];
+                    if (states.length === 2 && states.every((s) => s.ready || s.failed)) { clearInterval(timer); resolve(); }
+                    if (Date.now() - started > 10000) { clearInterval(timer); reject(new Error("thumbnails never settled")); }
+                }, 20);
+            });
+            window.__toasts.length = 0;
+            const options = [];
+            window.__nodeType.prototype.getExtraMenuOptions.call(node, { graph_mouse: [200, 40] }, options);
+            await options.find((o) => o?.content === "Copy stitched result").callback();
+            await new Promise((resolve) => setTimeout(resolve, 200));
+
+            const items = await navigator.clipboard.read();
+            const holder = items.find((i) => i.types.includes("image/png"));
+            const blob = await holder.getType("image/png");
+            const bitmap = await createImageBitmap(blob);
+            const c = document.createElement("canvas");
+            c.width = bitmap.width; c.height = bitmap.height;
+            const ctx = c.getContext("2d");
+            ctx.drawImage(bitmap, 0, 0);
+            const px = (x, y) => [...ctx.getImageData(x, y, 1, 1).data].slice(0, 3);
+            const toast = window.__toasts[0];
+            return { toast: toast && `${toast.severity}/${toast.summary}`, detail: toast?.detail, w: bitmap.width, h: bitmap.height,
+                     left: px(2, 2), gap: px(6, 2), right: px(10, 2), stillCopying: node._msCopying };
+        });
+        // green 6×4, a 2px blue bar, pink 6×4 → 14×4.
+        assert.equal(r.toast, "success/Copied");
+        assert.match(r.detail, /14×4/);
+        assert.deepEqual([r.w, r.h], [14, 4]);
+        const near = (got, want) => got.every((v, i) => Math.abs(v - want[i]) <= 4);
+        assert.ok(near(r.left, [10, 200, 40]), `left ${r.left}`);
+        assert.ok(near(r.gap, [0, 0, 255]), `gap ${r.gap}`);
+        assert.ok(near(r.right, [220, 30, 90]), `right ${r.right}`);
+        assert.equal(r.stillCopying, false);
+        assert.deepEqual(errors, []);
         await page.close();
     });
 });

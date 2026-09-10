@@ -16,6 +16,7 @@
 - 이미지 클릭 → **즉시 Edit**
 - 전용 **`≡` Drag Handle**로 이미지 순서 변경
 - 썸네일 **우클릭 → 원본 이미지 클립보드 복사**
+- **`⧉ Copy` 버튼 → 합성 결과를 Queue 없이 바로 클립보드 복사**
 - 이미지별 **Crop / 90° Rotate / Flip H / Flip V**
 - Free Crop용 **상/하/좌/우 + 모서리 핸들**
 - **Strip / Grid** 레이아웃
@@ -109,6 +110,7 @@ git pull
 4. 편집할 이미지는 **썸네일 이미지 영역을 한 번 클릭**합니다.
 5. 순서를 바꾸려면 썸네일 하단 중앙의 **`≡` 핸들만 잡고 드래그**합니다.
    - 썸네일을 **우클릭**하면 `Copy original image #N` 메뉴가 나옵니다. 클릭하면 **편집 전 원본 이미지 전체**가 클립보드에 복사됩니다.
+   - 상태줄의 **`⧉ Copy`** 버튼(또는 우클릭 → `Copy stitched result`)은 지금 설정대로 **합성된 결과**를 원본 해상도로 브라우저에서 만들어 PNG로 클립보드에 넣습니다 — Queue를 돌리지 않아도 됩니다.
 6. `layout_mode`를 선택합니다.
    - `strip` → 기존 Stitch Images처럼 한 줄/한 열로 연결
    - `grid` → 여러 행/열로 자동 배치
@@ -146,6 +148,7 @@ Edit 클릭과 Reorder 제스처를 서로 분리했습니다.
 - **이미지 영역 클릭** → Edit 즉시 열기
 - 썸네일 하단 중앙의 **`≡`만 드래그** → 순서 변경
 - 썸네일 **우클릭** → `Copy original image #N` → **원본 이미지 복사**
+- 상태줄 **`⧉ Copy`** → 합성 결과 복사
 - Drag 판정 거리는 ComfyUI Canvas 좌표가 아닌 **실제 화면 픽셀 기준**이라 Zoom 배율에 영향을 덜 받습니다.
 - 현재 드롭 대상 → 파란 테두리 표시
 - `‹ / ›` 버튼으로 한 칸씩 이동도 가능
@@ -187,6 +190,8 @@ grid_columns = 3
 ## 미리보기 · 목록 · 편집 이력
 
 **최종 합성 미리보기** — 썸네일 위의 띠에 실제 배치(Strip/Grid, 방향, 간격, 배경색, 출력 크기 제한)를 축소해 보여줍니다. 백엔드와 **같은 레이아웃 계산**(`_layout` ↔ `layoutPlacements`)을 쓰고 CI에서 픽셀 단위로 대조하므로, Queue 전에 보이는 배치가 곧 결과입니다. 상태줄 오른쪽의 **`Preview`** 버튼으로 끄고 켤 수 있고(워크플로우에 저장), 아직 로드되지 않았거나 없는 이미지는 `?` 자리표시자로 표시됩니다.
+
+**합성 결과 복사** — 상태줄의 **`⧉ Copy`** 버튼은 미리보기와 같은 배치를 **원본 파일**로 다시 그려(썸네일이 아니라) 최종 크기의 PNG를 클립보드에 넣습니다. 이미지를 한 장씩 불러와 그리므로 진행률이 노드 제목에 표시됩니다. 브라우저 canvas 한도 때문에 **64 MP**까지만 렌더링하며, 그보다 크면 `output_limit`을 쓰거나 Queue로 실행하라고 알려줍니다. 연결된 `images` 입력의 프레임은 실행 시점에만 존재하므로 포함되지 않고, 로드에 실패한 이미지는 배경색으로 비워 둔 채 알려줍니다. 축소 리샘플링은 브라우저 방식이라 백엔드(bicubic)와 픽셀이 미세하게 다를 수 있습니다.
 
 **고정 높이 목록** — 썸네일 목록은 기본 **3행**만 보이고 나머지는 스크롤합니다(오른쪽 스크롤바의 ▴/▾ 또는 트랙 클릭). 마우스 휠은 ComfyUI가 캔버스 줌에 쓰고 노드에 전달하지 않으므로 목록 스크롤에는 쓰이지 않습니다. 노드를 세로로 늘리면 더 많은 행이 보이며, 1행보다 작아지거나 전체 행보다 커지지는 않습니다.
 
@@ -296,6 +301,7 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 - Click an image → **open Edit immediately**
 - Dedicated **`≡` drag handle** for reordering
 - **Right-click a thumbnail to copy the original image** to the clipboard
+- **`⧉ Copy` button → the stitched result on the clipboard without queueing**
 - Per-image **Crop / 90° Rotate / Flip H / Flip V**
 - **Top / bottom / left / right + corner handles** for Free Crop
 - **Strip / Grid** layouts
@@ -387,6 +393,7 @@ Then fully restart ComfyUI. If frontend changes are still cached, refresh the br
 4. **Single-click the image area** of a thumbnail to Crop / Rotate / Flip it.
 5. To reorder, drag only the **`≡` handle** at the bottom center of the thumbnail.
    - **Right-click** a thumbnail for `Copy original image #N`. It copies the **whole original image, before any edits**, to the clipboard.
+   - The **`⧉ Copy`** button in the status line (or right-click → `Copy stitched result`) renders the **stitched result** with the current settings, at full resolution, in the browser and puts it on the clipboard as PNG — no queue needed.
 6. Choose `layout_mode`.
    - `strip` → classic one-row / one-column stitching
    - `grid` → automatic multi-row / multi-column layout
@@ -424,6 +431,7 @@ Editing and reordering use separate gestures.
 - **Click image area** → open editor immediately
 - Drag the bottom-center **`≡` handle** → reorder
 - **Right-click** a thumbnail → `Copy original image #N` → copies the original image
+- **`⧉ Copy`** in the status line → copies the stitched result
 - Drag threshold is measured in **real browser pixels**, not ComfyUI graph coordinates, so canvas zoom does not make normal clicks behave like drags.
 - Current drop target → blue border
 - `‹ / ›` buttons remain available for one-step movement
@@ -463,6 +471,8 @@ With `match_image_size = true`, the **first image in the list** — edited or no
 ## Preview · list · edit history
 
 **Composite preview** — the band above the thumbnails shows the real arrangement (Strip/Grid, direction, spacing, background colour, output cap) scaled down. It uses the **same layout maths** as the backend (`_layout` ↔ `layoutPlacements`), compared pixel for pixel in CI, so what you see before queueing is what you get. The **`Preview`** button at the right of the status line toggles it (saved with the workflow); an image that is still loading or missing shows as a `?` placeholder.
+
+**Copy the stitched result** — the **`⧉ Copy`** button in the status line redraws the preview's layout from the **original files** (not the thumbnails) and puts the final-size PNG on the clipboard. Images are loaded and drawn one at a time, with progress in the node title. Browser canvas limits cap it at **64 MP**; above that it asks you to set `output_limit` or queue the workflow. Frames from a connected `images` input exist only at run time and are not included, and an image that failed to load is left as background — both are mentioned in the notice. Downscaling is the browser's resampling, so pixels can differ very slightly from the backend's bicubic result.
 
 **Fixed-height list** — the thumbnail list shows **three rows** by default and scrolls the rest (▴/▾ on the scrollbar, or a click on its track). The mouse wheel zooms the ComfyUI canvas and is not delivered to nodes, so it does not scroll the list. Resize the node taller for more rows; it never goes below one row or above the rows it has.
 
@@ -570,8 +580,8 @@ If you move the workflow to another machine, copy the referenced input images as
 - Backend limit: **256 images per node**.
 - Output safety limit: **134.2 MP (128 MiPixels) / 131,072 px per side**, and the same per-image cap on any original before its crop. Sources stream through one at a time.
 - GitHub Actions, backend job (Python 3.10 and 3.12): a package-import smoke test (so a node that would not load in ComfyUI fails CI), `INPUT_TYPES` widget order against the `stitch()` signature, per-pixel rotation/flip checks across all 16 transform combinations, EXIF orientation 1–8 against Pillow, a spy proving the measurement pass never decodes pixels, streaming composition (each source loaded once, never two resident), Strip directions, Grid placement with no unused row or column, spacing-colour fill in both layouts, transparency compositing, rejected enum values, unsafe paths, the image-count cap and the size guards. A parity test runs the browser maths (`normalizeCrop`, `gridShape`, crop↔transform mapping) under Node and compares it with Python. `tests/test_reference_quality.py` adds the 1.1 behaviour: the native-size default, `cells_resolution = source`, the cells memory check and `minimum_image_side` both rejecting before any decode, PNG EXIF after the pixel data read without decoding, a malformed EXIF chunk degrading to "no orientation" instead of an error, TIFF orientation, cache invalidation when a file changes, and lazy IMAGE frames.
-- GitHub Actions, frontend job (Node 22): `tests/web/logic.test.mjs` drives the real `web/*.js` against a stub ComfyUI — paste, the 256 cap, cancel and Clear-all during upload, ≡ reorder through window events, save → reopen round-trip, an unreadable list kept verbatim, bounded thumbnails, a failed thumbnail not hiding the estimate, conditional widgets, and the copy action. `tests/web/browser.test.mjs` runs the crop editor (corner handles, rotate, apply, cancel) and the clipboard copy (PNG, JPEG re-encode, missing file) in real Chromium via Playwright. Run locally with `npm ci && npx playwright install chromium && npm test`.
-- The frontend suite also covers the preview band (draw calls and the final-size caption), the header undo/redo controls (adds, a drag reorder, Clear all, history reset on load), the scrollable list (default height, scrollbar arrows and track, hit-testing only visible rows, resize clamping), the new conditional widgets, and relinking a missing file. The parity test compares `layoutPlacements` / `limitedSize` with `_layout` / `_limited_size` over 700 cases and `cropPixelBox` with `_crop_box` over 500, including sizes that land on exact halves where Python's half-even rounding differs from `Math.round`. Three further logic tests cover the native-size default surviving a reopen, crop-edge and quarter-turn rounding, and the two-at-a-time thumbnail queue releasing everything when a node is removed.
+- GitHub Actions, frontend job (Node 22): `tests/web/logic.test.mjs` drives the real `web/*.js` against a stub ComfyUI — paste, the 256 cap, cancel and Clear-all during upload, ≡ reorder through window events, save → reopen round-trip, an unreadable list kept verbatim, bounded thumbnails, a failed thumbnail not hiding the estimate, conditional widgets, and the copy action. `tests/web/browser.test.mjs` runs the crop editor (corner handles, rotate, apply, cancel), the clipboard copy of an original (PNG, JPEG re-encode, missing file) and the stitched-result copy (two originals with a blue separator, read back from the clipboard pixel by pixel) in real Chromium via Playwright. Run locally with `npm ci && npx playwright install chromium && npm test`.
+- The frontend suite also covers the preview band (draw calls and the final-size caption), the header undo/redo controls (adds, a drag reorder, Clear all, history reset on load), the scrollable list (default height, scrollbar arrows and track, hit-testing only visible rows, resize clamping), the new conditional widgets, relinking a missing file, and the stitched-result copy (final size after the cap, both originals drawn, a missing image left blank, the browser size limit, the context-menu entry). The parity test compares `layoutPlacements` / `limitedSize` with `_layout` / `_limited_size` over 700 cases and `cropPixelBox` with `_crop_box` over 500, including sizes that land on exact halves where Python's half-even rounding differs from `Math.round`. Three further logic tests cover the native-size default surviving a reopen, crop-edge and quarter-turn rounding, and the two-at-a-time thumbnail queue releasing everything when a node is removed.
 - Not covered by automation: interaction inside a live ComfyUI session, and the Vue-based "Node 2.0" renderer. The extension sets `options.hidden` for that renderer and swaps `draw`/`computeSize` for the legacy canvas; only the legacy path is exercised by the tests.
 
 ## Credits

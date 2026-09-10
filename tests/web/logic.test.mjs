@@ -305,7 +305,15 @@ describe("conditional widgets", () => {
 
 // Header controls sit at the right end of the status line: y 98..116,
 // undo at x 292..316, redo 320..344, preview 348..412 on a 420px node.
-const control = { undo: [304, 107], redo: [332, 107], preview: [380, 107] };
+// The copy pill sits left of undo: x 236..288.
+const control = { copy: [262, 107], undo: [304, 107], redo: [332, 107], preview: [380, 107] };
+const until = async (condition, ms = 2000) => {
+    const start = Date.now();
+    while (!condition()) {
+        if (Date.now() - start > ms) assert.fail("timed out waiting");
+        await tick(2);
+    }
+};
 const click = (node, [x, y]) => nodeType.prototype.onMouseDown.call(node, pointer(x, y), [x, y], {});
 
 describe("preview", () => {
@@ -493,9 +501,10 @@ describe("copy original image", () => {
         define("ClipboardItem", class { constructor(parts) { this.parts = parts; } });
         define("navigator", { clipboard: { async write(items) { written.push(await items[0].parts["image/png"]); } } });
 
+        // Off a card only the node-wide entry is offered, not the per-image ones.
         const off = [];
         nodeType.prototype.getExtraMenuOptions.call(node, { graph_mouse: [card(0).x + 65, card(0).y - 30] }, off);
-        assert.equal(off.length, 0);
+        assert.deepEqual(off.map((o) => o?.content ?? null), ["Copy stitched result", null]);
 
         const options = [];
         nodeType.prototype.getExtraMenuOptions.call(node, { graph_mouse: [card(0).x + 65, card(0).y + 46] }, options);
@@ -518,6 +527,85 @@ describe("copy original image", () => {
     });
 });
 
+describe("copy the stitched result", () => {
+    const define = (name, value) => Object.defineProperty(globalThis, name, { value, configurable: true, writable: true });
+    const armClipboard = () => {
+        const written = [];
+        define("ClipboardItem", class { constructor(parts) { this.parts = parts; } });
+        define("navigator", { clipboard: { async write(items) { written.push(await items[0].parts["image/png"]); } } });
+        return written;
+    };
+    const lastToast = () => app.extensionManager.toast.log.at(-1);
+
+    it("renders the composite from the originals at the final size and copies it as PNG", async () => {
+        const node = makeNode(nodeType, { inputs: [{ name: "images", link: 3 }] });
+        dom.imageSizes.set("a.png", [40, 20]);
+        dom.imageSizes.set("b.png", [20, 20]);
+        setImages(node, [item("a.png"), item("b.png", { rotation: 90 })]);
+        widget(node, "output_limit").value = "max_width";
+        widget(node, "output_limit_px").value = 30;
+        paintedCalls(nodeType, node);
+        await waitForThumbs(node);
+        const written = armClipboard();
+        dom.canvases.length = 0;
+
+        assert.equal(click(node, control.copy), true);
+        assert.equal(node._msCopying, true);
+        await until(() => !node._msCopying);
+
+        // strip/right, native size: 40×20 next to the rotated 20×20 → 60×20, capped to 30 wide.
+        const result = dom.canvases.find((c) => c.width === 30 && c.height === 10);
+        assert.ok(result, `no 30×10 canvas among ${dom.canvases.map((c) => `${c.width}×${c.height}`).join(", ")}`);
+        assert.equal(result.draws, 2, "both originals drawn into the result");
+        assert.equal(written.length, 1);
+        assert.equal(written[0].type, "image/png");
+        assert.equal(`${lastToast().severity}/${lastToast().summary}`, "success/Copied");
+        assert.match(lastToast().detail, /30×10/);
+        assert.match(lastToast().detail, /IMAGE input frames not included/);
+        assert.equal(node.title, "Multi Stitch Images");
+    });
+
+    it("leaves an image that failed to load blank and says so", async () => {
+        const node = plainNode(nodeType);
+        dom.imageSizes.set("a.png", [40, 20]);
+        setImages(node, [item("a.png"), item("gone.png")]);
+        paintedCalls(nodeType, node);
+        await waitForThumbs(node);
+        armClipboard();
+        dom.canvases.length = 0;
+        click(node, control.copy);
+        await until(() => !node._msCopying);
+        const result = dom.canvases.find((c) => c.width === 80 && c.height === 20);
+        assert.ok(result, "the layout keeps the missing image's slot");
+        assert.equal(result.draws, 1);
+        assert.match(lastToast().detail, /1 not loaded, left blank/);
+    });
+
+    it("refuses a result too large for a browser canvas", async () => {
+        const node = plainNode(nodeType);
+        dom.imageSizes.set("huge.png", [9000, 9000]);
+        setImages(node, [item("huge.png")]);
+        paintedCalls(nodeType, node);
+        await waitForThumbs(node);
+        const written = armClipboard();
+        click(node, control.copy);
+        await until(() => !node._msCopying);
+        assert.equal(written.length, 0);
+        assert.equal(`${lastToast().severity}/${lastToast().summary}`, "error/Copy failed");
+        assert.match(lastToast().detail, /too large.*output_limit/);
+    });
+
+    it("is offered in the context menu anywhere on the node", () => {
+        const node = plainNode(nodeType);
+        setImages(node, [item("a.png")]);
+        const options = [];
+        nodeType.prototype.getExtraMenuOptions.call(node, { graph_mouse: [200, 40] }, options);
+        assert.equal(options[0].content, "Copy stitched result");
+        const empty = [];
+        nodeType.prototype.getExtraMenuOptions.call(plainNode(nodeType), { graph_mouse: [200, 40] }, empty);
+        assert.equal(empty.length, 0, "nothing to copy on an empty node");
+    });
+});
 
 describe("native-reference refinements", () => {
     it("uses original size for new nodes and retains explicit saved matching", () => {
