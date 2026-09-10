@@ -67,5 +67,32 @@ jobs:
 
       - name: Backend unit tests
         # Includes a package-import smoke test, so a node that would fail to
-        # load in ComfyUI fails here too.
+        # load in ComfyUI fails here too, and a parity test that runs the
+        # browser maths under Node and compares it with Python.
         run: python -m unittest discover -s tests -p "test_*.py" -v
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install test dependencies
+        run: npm ci
+
+      - name: Install Chromium for Playwright
+        run: npx playwright install --with-deps chromium
+
+      - name: Frontend tests
+        # logic.test.mjs drives the real web/*.js under Node with a stub
+        # ComfyUI; browser.test.mjs runs the crop editor and clipboard copy in
+        # Chromium.
+        run: npm test

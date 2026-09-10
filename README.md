@@ -89,6 +89,9 @@ git pull
 1. **`Multi Stitch Images` 노드를 추가**합니다.
 2. 노드를 한 번 클릭해 **선택**합니다.
 3. 이미지 파일/브라우저 이미지/스크린샷을 복사한 뒤 **Ctrl+V** 합니다.
+   - 업로드 중에는 노드 제목에 진행률(`uploading 2/5…`)이 표시되고, `Add images…` 버튼이 **`Cancel upload`**로 바뀝니다. 취소하면 이미 올라간 이미지는 남고 나머지만 중단됩니다. 업로드 중 `Clear all`은 업로드까지 함께 취소합니다.
+   - 한 노드에 최대 **256장**입니다. 넘치는 파일은 업로드 전에 건너뛰고 알려줍니다.
+   - 썸네일은 긴 변 **512px**로 축소한 사본만 유지하므로 고해상도 이미지를 많이 넣어도 브라우저 메모리가 원본 크기만큼 늘지 않습니다. 편집기와 실제 합성은 항상 원본을 사용합니다.
 4. 편집할 이미지는 **썸네일 이미지 영역을 한 번 클릭**합니다.
 5. 순서를 바꾸려면 썸네일 하단 중앙의 **`≡` 핸들만 잡고 드래그**합니다.
    - 썸네일을 **우클릭**하면 `Copy original image #N` 메뉴가 나옵니다. 클릭하면 **편집 전 원본 이미지 전체**가 클립보드에 복사됩니다.
@@ -195,15 +198,17 @@ white / black / red / green / blue / custom
 
 ## Output Size Safety Guard
 
-여러 장의 고해상도 이미지를 `match_image_size = false`로 길게 붙이면 결과 Tensor가 매우 커질 수 있습니다. 이 노드는 소스 이미지를 전부 Tensor로 디코딩하기 **전에** 파일 메타데이터만으로 최종 크기와 **소스 이미지 합계 크기**를 함께 계산합니다. 작은 결과물이라도 원본이 거대하면 차단됩니다.
+여러 장의 고해상도 이미지를 `match_image_size = false`로 길게 붙이면 결과 Tensor가 매우 커질 수 있습니다. 이 노드는 실행 시 **파일 헤더만 읽어** (픽셀 디코딩 없이 — EXIF 방향까지 헤더에서 계산) 최종 캔버스 크기와 각 원본의 크기를 먼저 확인합니다.
+
+합성은 **한 장씩 스트리밍**됩니다: 캔버스를 먼저 할당하고, 원본을 하나 디코딩해 제자리에 넣은 뒤 바로 해제합니다. 따라서 이미지가 몇 장이든 메모리에는 **캔버스 + 원본 1장**만 존재합니다. 원본 한 장의 한도는 Crop 이후가 아니라 **디코딩되는 원본 전체 크기** 기준입니다 — 작은 영역만 잘라 써도 디코딩 비용은 원본 전체이기 때문입니다.
 
 기본 안전 한도:
 
 ```text
 최종 출력: 134.2 MP (128 MiPixels) 이하
-소스 이미지 합계: 134.2 MP (128 MiPixels) 이하
+원본 이미지 1장: 134.2 MP (128 MiPixels) 이하 (Crop 전 크기 기준)
 한 변 최대: 131,072 px
-이미지 수: 최대 256장
+이미지 수: 최대 256장 (노드 UI에서도 같은 상한을 적용)
 ```
 
 한도를 초과하면 예상 해상도 / MP / float32 메모리 크기를 표시하고 실행을 중단합니다. 이 경우 이미지 수를 줄이거나, Crop/Resize를 하거나, Grid를 사용하거나, `match_image_size = true`를 사용하세요.
@@ -311,6 +316,9 @@ Then fully restart ComfyUI. If frontend changes are still cached, refresh the br
 1. Add the **`Multi Stitch Images`** node.
 2. Click the node once so it is **selected**.
 3. Copy image files, a browser image, or a screenshot and press **Ctrl+V**.
+   - While uploading, the node title shows progress (`uploading 2/5…`) and the `Add images…` button becomes **`Cancel upload`**. Cancelling keeps what has already landed and stops the rest. `Clear all` during an upload cancels it too.
+   - A node holds at most **256** images; files beyond that are skipped before upload, with a notice.
+   - Thumbnails keep only a copy scaled to **512px** on the long edge, so many high-resolution images do not grow browser memory by their full size. The editor and the actual stitch always use the original.
 4. **Single-click the image area** of a thumbnail to Crop / Rotate / Flip it.
 5. To reorder, drag only the **`≡` handle** at the bottom center of the thumbnail.
    - **Right-click** a thumbnail for `Copy original image #N`. It copies the **whole original image, before any edits**, to the clipboard.
@@ -415,15 +423,17 @@ A PNG with transparency is composited onto that background color.
 
 ## Output Size Safety Guard
 
-A long strip of high-resolution images can create a very large float32 tensor, especially with `match_image_size = false`. From file metadata alone — **before** any source is decoded — the node estimates both the final canvas and the **combined size of the sources**, so a small output built from huge originals is rejected too.
+A long strip of high-resolution images can create a very large float32 tensor, especially with `match_image_size = false`. At run time the node reads **only the file headers** (no pixel decoding — EXIF orientation is taken from the header too) to check the final canvas size and the size of every original first.
+
+Composition then **streams one source at a time**: the canvas is allocated up front, each original is decoded, placed and released before the next one is read. Whatever the image count, memory holds **the canvas plus one original**. The per-image limit is measured on the **full decoded original, not the crop** — a small crop still costs a full decode.
 
 Default safety limits:
 
 ```text
-Final output:        max 134.2 MP (128 MiPixels)
-Source images total: max 134.2 MP (128 MiPixels)
-Maximum side:        131,072 px
-Images per node:     max 256
+Final output:      max 134.2 MP (128 MiPixels)
+Any one original:  max 134.2 MP (128 MiPixels), measured before the crop
+Maximum side:      131,072 px
+Images per node:   max 256 (the node UI enforces the same cap)
 ```
 
 If the limit would be exceeded, execution stops with the estimated resolution, megapixels, and approximate float32 output memory. Reduce the image count, Crop/Resize the sources, use Grid, or enable `match_image_size`.
@@ -456,8 +466,10 @@ If you move the workflow to another machine, copy the referenced input images as
 - Requires **Python 3.10+** and the dependencies normally included with ComfyUI: **PyTorch, Pillow, NumPy**. No extra packages.
 - Does **not** modify ComfyUI core files.
 - Backend limit: **256 images per node**.
-- Output safety limit: **134.2 MP (128 MiPixels) / 131,072 px per side**, plus the same cap on the combined source size.
-- GitHub Actions runs the suite on Python 3.10 and 3.12: a package-import smoke test (so a node that would not load in ComfyUI fails CI), `INPUT_TYPES` widget order against the `stitch()` signature, per-pixel rotation/flip checks across all 16 transform combinations, Strip directions, Grid placement with no unused row or column, Crop/rotation dimensions, spacing-colour fill in both layouts, transparency compositing, rejected enum values, unsafe paths, the image-count cap, and the output/input size guards. Every `web/*.js` file is syntax-checked.
+- Output safety limit: **134.2 MP (128 MiPixels) / 131,072 px per side**, and the same per-image cap on any original before its crop. Sources stream through one at a time.
+- GitHub Actions, backend job (Python 3.10 and 3.12): a package-import smoke test (so a node that would not load in ComfyUI fails CI), `INPUT_TYPES` widget order against the `stitch()` signature, per-pixel rotation/flip checks across all 16 transform combinations, EXIF orientation 1–8 against Pillow, a spy proving the measurement pass never decodes pixels, streaming composition (each source loaded once, never two resident), Strip directions, Grid placement with no unused row or column, spacing-colour fill in both layouts, transparency compositing, rejected enum values, unsafe paths, the image-count cap and the size guards. A parity test runs the browser maths (`normalizeCrop`, `gridShape`, crop↔transform mapping) under Node and compares it with Python.
+- GitHub Actions, frontend job (Node 22): `tests/web/logic.test.mjs` drives the real `web/*.js` against a stub ComfyUI — paste, the 256 cap, cancel and Clear-all during upload, ≡ reorder through window events, save → reopen round-trip, an unreadable list kept verbatim, bounded thumbnails, a failed thumbnail not hiding the estimate, conditional widgets, and the copy action. `tests/web/browser.test.mjs` runs the crop editor (corner handles, rotate, apply, cancel) and the clipboard copy (PNG, JPEG re-encode, missing file) in real Chromium via Playwright. Run locally with `npm ci && npx playwright install chromium && npm test`.
+- Not covered by automation: interaction inside a live ComfyUI session, and the Vue-based "Node 2.0" renderer. The extension sets `options.hidden` for that renderer and swaps `draw`/`computeSize` for the legacy canvas; only the legacy path is exercised by the tests.
 
 ## Credits
 

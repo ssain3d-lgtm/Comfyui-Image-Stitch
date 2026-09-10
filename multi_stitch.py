@@ -1,13 +1,15 @@
+import functools
 import json
 import math
 import re
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 import torch
 import torch.nn.functional as F
-from PIL import Image, ImageOps
+from PIL import Image
 
 import folder_paths
 
@@ -21,15 +23,29 @@ _COLOR_MAP = {
 }
 
 # A ComfyUI IMAGE is float32 RGB, so 128 MiPixels is already about 1.5 GiB
-# for the final tensor alone. These guards run on metadata only, before any
-# source image is decoded, so an accidental giant strip/grid is rejected
-# cheaply. The output guard bounds the destination canvas; the input guard
-# bounds the source tensors, which stay resident together for the whole
-# composition and can dwarf a small canvas (many large sources downscaled
-# into a tiny grid).
+# for the final tensor alone. These guards run on file headers only, before
+# any source image is decoded, so an accidental giant strip/grid is rejected
+# cheaply. The output guard bounds the destination canvas. The source guard
+# bounds each original as it is decoded: composition streams the sources one
+# at a time into the canvas, so one decoded original plus the canvas is the
+# whole working set, however many images the node holds.
 _MAX_OUTPUT_PIXELS = 128 * 1024 * 1024
 _MAX_OUTPUT_SIDE = 131_072
-_MAX_INPUT_PIXELS = 128 * 1024 * 1024
+_MAX_SOURCE_PIXELS = 128 * 1024 * 1024
+_MAX_IMAGES = 256  # mirrored by MAX_IMAGES in web/shared.js
+
+_EXIF_ORIENTATION = 0x0112
+# The same table Pillow's ImageOps.exif_transpose applies.
+_ORIENTATION_TRANSPOSES = {
+    2: Image.Transpose.FLIP_LEFT_RIGHT,
+    3: Image.Transpose.ROTATE_180,
+    4: Image.Transpose.FLIP_TOP_BOTTOM,
+    5: Image.Transpose.TRANSPOSE,
+    6: Image.Transpose.ROTATE_270,
+    7: Image.Transpose.TRANSVERSE,
+    8: Image.Transpose.ROTATE_90,
+}
+_ORIENTATIONS_THAT_SWAP_AXES = {5, 6, 7, 8}
 
 _DIRECTIONS = ("right", "down", "left", "up")
 _LAYOUT_MODES = ("strip", "grid")
@@ -156,19 +172,62 @@ def _flatten_alpha(image: Image.Image, background: tuple[float, float, float]) -
     return Image.alpha_composite(solid, rgba).convert("RGB")
 
 
-def _item_output_dimensions(item: dict) -> tuple[int, int]:
-    """Return exact post-EXIF/rotate/crop dimensions without decoding to a tensor."""
+def _exif_orientation(source: Image.Image) -> int:
+    """EXIF orientation from the bytes the header already exposed.
+
+    Deliberately not ``source.getexif()``: Pillow's PNG plugin decodes the
+    whole image inside getexif() when no eXIf chunk preceded the pixel data,
+    which is every pasted screenshot. ImageOps.exif_transpose() goes further
+    and always decodes, because it copies the image even when nothing needs
+    transposing. Both the measurement pass and the decode pass use this one
+    function, so they can never disagree about an image's orientation.
+    """
+    raw = source.info.get("exif")
+    if not raw:
+        return 1
+    try:
+        exif = Image.Exif()
+        exif.load(raw)
+        return int(exif.get(_EXIF_ORIENTATION, 1))
+    except Exception:  # a malformed EXIF block must not make a decodable image unusable
+        return 1
+
+
+def _apply_orientation(image: Image.Image, orientation: int) -> Image.Image:
+    method = _ORIENTATION_TRANSPOSES.get(orientation)
+    return image.transpose(method) if method is not None else image
+
+
+def _oriented_size(source: Image.Image) -> tuple[int, int]:
+    """Displayed size after EXIF orientation, from the header alone."""
+    width, height = source.size
+    if _exif_orientation(source) in _ORIENTATIONS_THAT_SWAP_AXES:
+        width, height = height, width
+    return width, height
+
+
+def _inspect_item(item: dict) -> tuple[tuple[int, int], tuple[int, int]]:
+    """Return ((source_w, source_h), (output_w, output_h)) without decoding pixels.
+
+    The source size is what decoding will cost; the output size is the exact
+    post-rotate/crop footprint that lands on the canvas.
+    """
     path = _safe_input_path(item)
     with _open_image(path) as source:
-        image = ImageOps.exif_transpose(source)
-        width, height = image.size
+        width, height = _oriented_size(source)
+    source_size = (width, height)
 
     rotation, _, _ = _normalize_transform(item)
     if rotation in {90, 270}:
         width, height = height, width
 
     left, top, right, bottom = _crop_box(width, height, item.get("crop"))
-    return right - left, bottom - top
+    return source_size, (right - left, bottom - top)
+
+
+def _item_output_dimensions(item: dict) -> tuple[int, int]:
+    """Exact post-EXIF/rotate/crop dimensions without decoding to a tensor."""
+    return _inspect_item(item)[1]
 
 
 def _load_image(
@@ -177,7 +236,8 @@ def _load_image(
 ) -> torch.Tensor:
     path = _safe_input_path(item)
     with _open_image(path) as source:
-        image = _flatten_alpha(ImageOps.exif_transpose(source), background)
+        image = _apply_orientation(source, _exif_orientation(source))
+        image = _flatten_alpha(image, background)
         image = _apply_transform(image, item)
         width, height = image.size
         left, top, right, bottom = _crop_box(width, height, item.get("crop"))
@@ -198,24 +258,32 @@ def _resize_exact(image: torch.Tensor, height: int, width: int) -> torch.Tensor:
     return resized.movedim(1, -1).clamp_(0.0, 1.0)
 
 
-def _resize_for_direction(image: torch.Tensor, direction: str, target_h: int, target_w: int) -> torch.Tensor:
-    h, w = image.shape[1], image.shape[2]
-    if direction in {"left", "right"}:
-        new_h = target_h
-        new_w = max(1, int(round(w * (target_h / h))))
-    else:
-        new_w = target_w
-        new_h = max(1, int(round(h * (target_w / w))))
+def _prepared_strip_dims(
+    dimensions: list[tuple[int, int]],
+    direction: str,
+    match_image_size: bool,
+) -> list[tuple[int, int]]:
+    """Size of each strip image after match_image_size, in list order.
 
-    return _resize_exact(image, new_h, new_w)
+    Shared by the estimate and the composition, so the canvas measured before
+    decoding is the canvas actually filled.
+    """
+    if not match_image_size or len(dimensions) <= 1:
+        return list(dimensions)
+    first_w, first_h = dimensions[0]
+    prepared = [dimensions[0]]
+    for w, h in dimensions[1:]:
+        if direction in {"left", "right"}:
+            prepared.append((max(1, int(round(w * (first_h / h)))), first_h))
+        else:
+            prepared.append((first_w, max(1, int(round(h * (first_w / w))))))
+    return prepared
 
 
-def _fit_to_cell(image: torch.Tensor, cell_h: int, cell_w: int) -> torch.Tensor:
-    h, w = image.shape[1], image.shape[2]
-    scale = min(cell_h / h, cell_w / w)
-    new_h = max(1, int(round(h * scale)))
-    new_w = max(1, int(round(w * scale)))
-    return _resize_exact(image, new_h, new_w)
+def _fit_size(width: int, height: int, cell_w: int, cell_h: int) -> tuple[int, int]:
+    """Largest size with the same aspect that fits inside a grid cell."""
+    scale = min(cell_h / height, cell_w / width)
+    return max(1, int(round(width * scale))), max(1, int(round(height * scale)))
 
 
 def _parse_hex_color(value: str) -> tuple[float, float, float]:
@@ -299,15 +367,7 @@ def _estimate_output_dimensions(
             rows * cell_h + spacing_width * (rows - 1),
         )
 
-    if match_image_size and len(dims) > 1:
-        first_w, first_h = dims[0]
-        prepared = [dims[0]]
-        for w, h in dims[1:]:
-            if direction in {"left", "right"}:
-                prepared.append((max(1, int(round(w * (first_h / h)))), first_h))
-            else:
-                prepared.append((first_w, max(1, int(round(h * (first_w / w))))))
-        dims = prepared
+    dims = _prepared_strip_dims(dims, direction, match_image_size)
 
     if direction in {"left", "right"}:
         return (
@@ -336,76 +396,86 @@ def _validate_output_dimensions(width: int, height: int) -> None:
     )
 
 
-def _validate_input_pixels(dimensions: list[tuple[int, int]]) -> None:
-    """Bound the source tensors, which are all held in memory at once."""
-    pixels = sum(max(1, int(w)) * max(1, int(h)) for w, h in dimensions)
-    if pixels <= _MAX_INPUT_PIXELS:
+def _validate_source_pixels(item: dict, width: int, height: int) -> None:
+    """Bound one original as it will be decoded, whatever crop follows.
+
+    A crop shrinks what lands on the canvas, not what must be decoded and
+    transformed first, so this looks at the full oriented source size.
+    """
+    pixels = int(width) * int(height)
+    if pixels <= _MAX_SOURCE_PIXELS:
         return
 
     megapixels = pixels / 1_000_000
-    approx_gib = pixels * 3 * 4 / (1024 ** 3)
-    limit_mp = _MAX_INPUT_PIXELS / 1_000_000
+    limit_mp = _MAX_SOURCE_PIXELS / 1_000_000
     raise ValueError(
-        "Multi Stitch Images: the "
-        f"{len(dimensions)} source image(s) total {megapixels:.1f} MP "
-        f"(~{approx_gib:.2f} GiB float32 once decoded), which exceeds the "
-        f"safety limit ({limit_mp:.1f} MP). "
-        "Remove some images, or crop/resize the sources before stitching."
+        f"Multi Stitch Images: '{item.get('filename', '?')}' is "
+        f"{width:,} × {height:,} ({megapixels:.1f} MP), above the per-image "
+        f"limit of {limit_mp:.1f} MP. Resize it before adding it to the node."
     )
 
 
+Loader = Callable[[], torch.Tensor]
+
+
+def _blank_canvas(width: int, height: int, color_tuple: tuple[float, float, float]) -> torch.Tensor:
+    color = torch.tensor(color_tuple, dtype=torch.float32)
+    return color.view(1, 1, 1, 3).expand(1, height, width, 3).clone()
+
+
+def _load_checked(loader: Loader, expected: tuple[int, int], index: int) -> torch.Tensor:
+    """Decode one source and make a measurement mismatch a clear error."""
+    image = loader()
+    width, height = expected
+    if image.dim() != 4 or image.shape[1] != height or image.shape[2] != width:
+        got = "×".join(str(v) for v in tuple(image.shape))
+        raise ValueError(
+            f"Multi Stitch Images: image {index + 1} decoded to {got} but was "
+            f"measured as {width}×{height}×3; the file changed while stitching."
+        )
+    return image
+
+
 def _compose_strip(
-    images: list[torch.Tensor],
+    loaders: list[Loader],
+    dimensions: list[tuple[int, int]],
     direction: str,
     match_image_size: bool,
     spacing_width: int,
     color_tuple: tuple[float, float, float],
 ) -> torch.Tensor:
-    first_h, first_w = images[0].shape[1], images[0].shape[2]
-    if match_image_size:
-        prepared = [images[0]]
-        prepared.extend(_resize_for_direction(img, direction, first_h, first_w) for img in images[1:])
-    else:
-        prepared = images
-
+    # Every position comes from the measured dimensions, so the canvas is
+    # allocated up front and each source is decoded, placed and released in
+    # turn. spacing_color is the node's background: the canvas starts filled
+    # with it, which is what makes both the separator bars and the letterbox
+    # padding that colour in strip and grid alike.
+    prepared = _prepared_strip_dims(dimensions, direction, match_image_size)
+    order = list(range(len(prepared)))
     if direction in {"left", "up"}:
-        prepared = list(reversed(prepared))
+        order.reverse()
+    horizontal = direction in {"left", "right"}
 
-    # spacing_color is the node's background: it fills both the separator bars
-    # and the letterbox padding. Upstream ImageStitch pads named RGB colours
-    # with black instead, which made strip and grid disagree for the same
-    # setting (red separators over a black background in strip, red everywhere
-    # in grid).
-    color = torch.tensor(color_tuple, dtype=prepared[0].dtype, device=prepared[0].device)
-    pad_color = color
+    if horizontal:
+        out_h = max(h for _, h in prepared)
+        out_w = sum(w for w, _ in prepared) + spacing_width * (len(prepared) - 1)
+    else:
+        out_w = max(w for w, _ in prepared)
+        out_h = sum(h for _, h in prepared) + spacing_width * (len(prepared) - 1)
+    output = _blank_canvas(out_w, out_h, color_tuple)
 
-    if direction in {"left", "right"}:
-        out_h = max(img.shape[1] for img in prepared)
-        out_w = sum(img.shape[2] for img in prepared) + spacing_width * (len(prepared) - 1)
-        output = pad_color.view(1, 1, 1, 3).expand(1, out_h, out_w, 3).clone()
-        cursor = 0
-        for i, img in enumerate(prepared):
-            h, w = img.shape[1], img.shape[2]
-            y = (out_h - h) // 2
-            output[:, y:y + h, cursor:cursor + w, :] = img
-            cursor += w
-            if i < len(prepared) - 1 and spacing_width:
-                output[:, :, cursor:cursor + spacing_width, :] = color
-                cursor += spacing_width
-        return output
-
-    out_w = max(img.shape[2] for img in prepared)
-    out_h = sum(img.shape[1] for img in prepared) + spacing_width * (len(prepared) - 1)
-    output = pad_color.view(1, 1, 1, 3).expand(1, out_h, out_w, 3).clone()
     cursor = 0
-    for i, img in enumerate(prepared):
-        h, w = img.shape[1], img.shape[2]
-        x = (out_w - w) // 2
-        output[:, cursor:cursor + h, x:x + w, :] = img
-        cursor += h
-        if i < len(prepared) - 1 and spacing_width:
-            output[:, cursor:cursor + spacing_width, :, :] = color
-            cursor += spacing_width
+    for index in order:
+        w, h = prepared[index]
+        image = _resize_exact(_load_checked(loaders[index], dimensions[index], index), h, w)
+        if horizontal:
+            y = (out_h - h) // 2
+            output[:, y:y + h, cursor:cursor + w, :] = image.to(output)
+            cursor += w + spacing_width
+        else:
+            x = (out_w - w) // 2
+            output[:, cursor:cursor + h, x:x + w, :] = image.to(output)
+            cursor += h + spacing_width
+        del image  # release this source before the next one is decoded
     return output
 
 
@@ -422,44 +492,43 @@ def _grid_position(index: int, rows: int, cols: int, direction: str) -> tuple[in
 
 
 def _compose_grid(
-    images: list[torch.Tensor],
+    loaders: list[Loader],
+    dimensions: list[tuple[int, int]],
     direction: str,
     match_image_size: bool,
     grid_columns: int,
     spacing_width: int,
     color_tuple: tuple[float, float, float],
 ) -> torch.Tensor:
-    rows, cols = _grid_shape(len(images), grid_columns, direction)
+    rows, cols = _grid_shape(len(dimensions), grid_columns, direction)
 
     if match_image_size:
-        cell_h, cell_w = images[0].shape[1], images[0].shape[2]
-        prepared = [_fit_to_cell(img, cell_h, cell_w) for img in images]
+        cell_w, cell_h = dimensions[0]
+        placed = [_fit_size(w, h, cell_w, cell_h) for w, h in dimensions]
     else:
-        cell_h = max(img.shape[1] for img in images)
-        cell_w = max(img.shape[2] for img in images)
-        prepared = images
+        cell_w = max(w for w, _ in dimensions)
+        cell_h = max(h for _, h in dimensions)
+        placed = list(dimensions)
 
-    color = torch.tensor(color_tuple, dtype=prepared[0].dtype, device=prepared[0].device)
-    out_h = rows * cell_h + spacing_width * (rows - 1)
     out_w = cols * cell_w + spacing_width * (cols - 1)
-    output = color.view(1, 1, 1, 3).expand(1, out_h, out_w, 3).clone()
+    out_h = rows * cell_h + spacing_width * (rows - 1)
+    output = _blank_canvas(out_w, out_h, color_tuple)
 
-    for index, img in enumerate(prepared):
+    for index, loader in enumerate(loaders):
         row, col = _grid_position(index, rows, cols, direction)
-        if row >= rows or col >= cols:
-            continue
-        h, w = img.shape[1], img.shape[2]
-        cell_y = row * (cell_h + spacing_width)
-        cell_x = col * (cell_w + spacing_width)
-        y = cell_y + (cell_h - h) // 2
-        x = cell_x + (cell_w - w) // 2
-        output[:, y:y + h, x:x + w, :] = img
+        w, h = placed[index]
+        image = _resize_exact(_load_checked(loader, dimensions[index], index), h, w)
+        y = row * (cell_h + spacing_width) + (cell_h - h) // 2
+        x = col * (cell_w + spacing_width) + (cell_w - w) // 2
+        output[:, y:y + h, x:x + w, :] = image.to(output)
+        del image  # release this source before the next one is decoded
 
     return output
 
 
-def _compose(
-    images: list[torch.Tensor],
+def _compose_from(
+    loaders: list[Loader],
+    dimensions: list[tuple[int, int]],
     layout_mode: str,
     direction: str,
     match_image_size: bool,
@@ -468,15 +537,23 @@ def _compose(
     spacing_color: str,
     custom_spacing_color: str,
 ) -> torch.Tensor:
-    if not images:
+    """Compose from lazy sources: each loader is called once, in placement order.
+
+    Validation happens before any loader runs, so an oversized result is
+    rejected without decoding a single image. The output is CPU float32
+    [1, H, W, 3] as ComfyUI expects.
+    """
+    if not loaders:
         raise ValueError("Multi Stitch Images: paste or add at least one image first.")
+    if len(loaders) != len(dimensions):
+        raise ValueError("Multi Stitch Images: internal error, one measurement per image is required.")
 
     direction = _require_choice("direction", direction, _DIRECTIONS)
     layout_mode = _require_choice("layout_mode", layout_mode, _LAYOUT_MODES)
     spacing_width = max(0, int(spacing_width))
     color_tuple = _resolve_color(spacing_color, custom_spacing_color)
+    dimensions = [(max(1, int(w)), max(1, int(h))) for w, h in dimensions]
 
-    dimensions = [(int(img.shape[2]), int(img.shape[1])) for img in images]
     out_w, out_h = _estimate_output_dimensions(
         dimensions,
         layout_mode,
@@ -489,20 +566,47 @@ def _compose(
 
     if layout_mode == "grid":
         return _compose_grid(
-            images,
+            loaders,
+            dimensions,
             direction,
             match_image_size,
             grid_columns,
             spacing_width,
             color_tuple,
         )
-
     return _compose_strip(
-        images,
+        loaders,
+        dimensions,
         direction,
         match_image_size,
         spacing_width,
         color_tuple,
+    )
+
+
+def _compose(
+    images: list[torch.Tensor],
+    layout_mode: str,
+    direction: str,
+    match_image_size: bool,
+    grid_columns: int,
+    spacing_width: int,
+    spacing_color: str,
+    custom_spacing_color: str,
+) -> torch.Tensor:
+    """Compose already-decoded tensors; the same path stitch() streams through."""
+    dimensions = [(int(img.shape[2]), int(img.shape[1])) for img in images]
+    loaders: list[Loader] = [functools.partial(lambda tensor: tensor, img) for img in images]
+    return _compose_from(
+        loaders,
+        dimensions,
+        layout_mode,
+        direction,
+        match_image_size,
+        grid_columns,
+        spacing_width,
+        spacing_color,
+        custom_spacing_color,
     )
 
 
@@ -553,27 +657,29 @@ class MultiStitchImages:
 
         if not isinstance(items, list):
             raise ValueError("Multi Stitch Images: image list must be an array.")
-        if len(items) > 256:
-            raise ValueError("Multi Stitch Images: maximum 256 images per node.")
+        if len(items) > _MAX_IMAGES:
+            raise ValueError(f"Multi Stitch Images: maximum {_MAX_IMAGES} images per node.")
 
         valid_items = [item for item in items if isinstance(item, dict)]
-        dimensions = [_item_output_dimensions(item) for item in valid_items]
-        _validate_input_pixels(dimensions)
-        out_w, out_h = _estimate_output_dimensions(
-            dimensions,
-            layout_mode,
-            direction,
-            match_image_size,
-            grid_columns,
-            spacing_width,
-        )
-        _validate_output_dimensions(out_w, out_h)
 
+        # Header-only pass: measure every source and its footprint on the
+        # canvas, and refuse an original that would be too big to decode.
+        dimensions = []
+        for item in valid_items:
+            (source_w, source_h), output_size = _inspect_item(item)
+            _validate_source_pixels(item, source_w, source_h)
+            dimensions.append(output_size)
+
+        # Decode pass: _compose_from validates the canvas first, then pulls
+        # each source through its loader one at a time.
         background = _resolve_color(spacing_color, custom_spacing_color)
-        images = [_load_image(item, background) for item in valid_items]
+        loaders: list[Loader] = [
+            functools.partial(_load_image, item, background) for item in valid_items
+        ]
         return (
-            _compose(
-                images,
+            _compose_from(
+                loaders,
+                dimensions,
                 layout_mode,
                 direction,
                 match_image_size,

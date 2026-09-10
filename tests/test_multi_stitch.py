@@ -2,14 +2,17 @@ import importlib
 import importlib.util
 import inspect
 import json
+import re
 import sys
 import tempfile
 import types
 import unittest
+import weakref
 from pathlib import Path
 
+import numpy as np
 import torch
-from PIL import Image
+from PIL import Image, ImageFile, ImageOps
 
 
 # ComfyUI supplies folder_paths at runtime. CI intentionally tests this custom
@@ -192,18 +195,110 @@ class MultiStitchTests(unittest.TestCase):
                 )
         self.assertEqual(ms._normalize_transform({"rotation": -90}), (270, False, False))
 
-    def test_input_pixel_guard_rejects_oversized_sources(self):
-        """A small canvas can still decode gigabytes of sources first."""
-        dimensions = [(32, 32)] + [(4000, 3000)] * 255
-        # The output guard alone lets this through: match_image_size sizes every
-        # cell from the first (tiny) image.
-        width, height = ms._estimate_output_dimensions(
-            dimensions, "grid", "right", True, 16, 0
-        )
-        ms._validate_output_dimensions(width, height)
-        with self.assertRaisesRegex(ValueError, "source image"):
-            ms._validate_input_pixels(dimensions)
-        ms._validate_input_pixels([(4000, 3000)] * 10)
+    def test_source_pixel_guard_looks_at_the_original_not_the_crop(self):
+        """A tiny crop still costs a full decode of the original."""
+        item = {"filename": "huge.png", "crop": {"x": 0, "y": 0, "w": 0.01, "h": 0.01}}
+        with self.assertRaisesRegex(ValueError, r"huge\.png.*20,000 × 20,000.*per-image"):
+            ms._validate_source_pixels(item, 20000, 20000)
+        ms._validate_source_pixels(item, 8000, 6000)
+
+    def test_inspect_item_reports_source_and_output_sizes(self):
+        self.write_png("wide.png", (1, 2, 3), size=(40, 10))
+        item = {"filename": "wide.png", "type": "input", "rotation": 90,
+                "crop": {"x": 0, "y": 0, "w": 0.5, "h": 0.5}}
+        source, output = ms._inspect_item(item)
+        self.assertEqual(source, (40, 10))   # what decoding costs
+        self.assertEqual(output, (5, 20))    # rotated to 10x40, then half of each
+
+    def test_measurement_pass_never_decodes_pixels(self):
+        """The safety guards only earn their keep if they run before decoding."""
+        base = Image.new("RGB", (100, 60), (5, 6, 7))
+        exif = Image.Exif()
+        exif[ms._EXIF_ORIENTATION] = 6
+        base.save(self.root / "plain.png")
+        base.save(self.root / "oriented.png", exif=exif.tobytes())
+        base.save(self.root / "plain.jpg", quality=90)
+        base.save(self.root / "oriented.jpg", quality=90, exif=exif.tobytes())
+
+        real_load = ImageFile.ImageFile.load
+        for name in ("plain.png", "oriented.png", "plain.jpg", "oriented.jpg"):
+            loads = []
+            ImageFile.ImageFile.load = lambda image: (loads.append(1), real_load(image))[1]
+            try:
+                source, output = ms._inspect_item({"filename": name, "type": "input"})
+            finally:
+                ImageFile.ImageFile.load = real_load
+            with self.subTest(file=name):
+                self.assertEqual(loads, [], "measuring decoded the image")
+                expected = (60, 100) if name.startswith("oriented") else (100, 60)
+                self.assertEqual(source, expected)
+                self.assertEqual(output, expected)
+
+    def test_exif_orientation_matches_pillow_for_every_value(self):
+        """Measured size, decoded size and pixels agree with exif_transpose."""
+        base = Image.new("RGB", (8, 5))
+        for x in range(8):
+            for y in range(5):
+                base.putpixel((x, y), (x * 30, y * 50, 9))
+        for orientation in range(1, 9):
+            exif = Image.Exif()
+            exif[ms._EXIF_ORIENTATION] = orientation
+            path = self.root / f"o{orientation}.png"
+            base.save(path, exif=exif.tobytes())
+            item = {"filename": path.name, "type": "input"}
+            with self.subTest(orientation=orientation):
+                _, (width, height) = ms._inspect_item(item)
+                tensor = ms._load_image(item)
+                self.assertEqual((tensor.shape[2], tensor.shape[1]), (width, height))
+                with Image.open(path) as image:
+                    reference = np.asarray(ImageOps.exif_transpose(image).convert("RGB"))
+                decoded = (tensor[0].numpy() * 255).round().astype(np.uint8)
+                self.assertTrue(np.array_equal(decoded, reference))
+
+    def test_compose_streams_one_source_at_a_time(self):
+        """Loaders run once each, in placement order, and never overlap in memory."""
+        dims = [(4, 3), (6, 2), (3, 5), (2, 2)]
+        refs, order, alive_at_call = [], [], []
+
+        def loader(index, width, height):
+            def load():
+                alive_at_call.append(sum(1 for ref in refs if ref() is not None))
+                tensor = torch.full((1, height, width, 3), index / 10)
+                refs.append(weakref.ref(tensor))
+                order.append(index)
+                return tensor
+            return load
+
+        for layout, direction in (("grid", "down"), ("strip", "left"), ("strip", "up")):
+            refs.clear(); order.clear(); alive_at_call.clear()
+            with self.subTest(layout=layout, direction=direction):
+                loaders = [loader(i, w, h) for i, (w, h) in enumerate(dims)]
+                streamed = ms._compose_from(loaders, dims, layout, direction, True, 3, 1, "white", "#808080")
+                eager = ms._compose(
+                    [torch.full((1, h, w, 3), i / 10) for i, (w, h) in enumerate(dims)],
+                    layout, direction, True, 3, 1, "white", "#808080",
+                )
+                self.assertEqual(sorted(order), list(range(len(dims))))
+                self.assertEqual(alive_at_call, [0] * len(dims), "a previous source was still resident")
+                self.assertTrue(torch.equal(streamed, eager))
+
+    def test_compose_from_validates_before_calling_any_loader(self):
+        calls = []
+        loaders = [lambda: (calls.append(1), torch.zeros(1, 1, 1, 3))[1]] * 2
+        with self.assertRaisesRegex(ValueError, "estimated output"):
+            ms._compose_from(loaders, [(100000, 100000), (1, 1)], "strip", "right", False, 3, 0, "white", "#808080")
+        self.assertEqual(calls, [])
+
+    def test_compose_from_reports_a_source_that_changed_size(self):
+        loaders = [lambda: torch.zeros(1, 9, 9, 3)]
+        with self.assertRaisesRegex(ValueError, "decoded to 1×9×9×3 but was measured as 4×4"):
+            ms._compose_from(loaders, [(4, 4)], "strip", "right", False, 3, 0, "white", "#808080")
+
+    def test_image_cap_is_shared_with_the_frontend(self):
+        shared_js = (MODULE_PATH.parent / "web" / "shared.js").read_text(encoding="utf-8")
+        match = re.search(r"export const MAX_IMAGES = (\d+);", shared_js)
+        self.assertIsNotNone(match, "web/shared.js must export MAX_IMAGES")
+        self.assertEqual(int(match.group(1)), ms._MAX_IMAGES)
 
     def test_node_loads_as_a_comfyui_package(self):
         """A broken __init__ or RETURN_TYPES must fail here, not in ComfyUI."""

@@ -24,3 +24,7 @@ env/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Frontend test tooling
+node_modules/
+test-results/

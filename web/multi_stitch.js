@@ -8,6 +8,7 @@ import {
     isCropped,
     isTransformed,
     loadTransformedThumb,
+    MAX_IMAGES,
     normalizeCrop,
     normalizeTransform,
     safeJsonParse,
@@ -123,11 +124,11 @@ function drawContained(ctx, image, crop, rect) {
 function transformedCropDims(node, item) {
     const state = loadTransformedThumb(node, item);
     if (!state.ready) return null;
-    const size = mediaSize(state.image);
+    // The thumbnail canvas is downscaled; the estimate must use the true size.
     const c = normalizeCrop(item.crop);
     return {
-        w: Math.max(1, Math.round(size.w * c.w)),
-        h: Math.max(1, Math.round(size.h * c.h)),
+        w: Math.max(1, Math.round(state.width * c.w)),
+        h: Math.max(1, Math.round(state.height * c.h)),
     };
 }
 
@@ -476,36 +477,98 @@ function normalizeItems(list) {
     return usable.map(normalizeItem);
 }
 
+function syncUploadUi(node, baseTitle) {
+    const run = node._msUpload;
+    const button = getWidget(node, "Add images…");
+    if (run) {
+        node.title = `${baseTitle || "Multi Stitch Images"} • uploading ${run.done}/${run.total}…`;
+        if (button) button.label = `Cancel upload (${run.done}/${run.total})`;
+    } else if (button) {
+        button.label = button.name;
+    }
+    node.graph?.setDirtyCanvas(true, false);
+}
+
+// Stops the current upload run. Images already added stay; the one in flight
+// is aborted, and a response that still arrives is discarded because the run
+// no longer matches the node's upload generation.
+function cancelUpload(node) {
+    const run = node._msUpload;
+    if (!run) return false;
+    node._msUploadGeneration = (node._msUploadGeneration || 0) + 1;
+    run.abort.abort();
+    return true;
+}
+
 async function addFiles(node, files) {
     const images = Array.from(files || []).filter((file) => file && file.type?.startsWith("image/"));
     if (!images.length) return;
-    if (node._msUploading) {
+    if (node._msUpload) {
         // Uploads run sequentially and can take seconds, so say why nothing
         // happened rather than swallowing the paste.
+        const run = node._msUpload;
         notify(
             "Upload in progress",
-            `Still uploading — ${images.length} image(s) were not added. Try again in a moment.`,
+            `Still uploading (${run.done}/${run.total}) — ${images.length} image(s) were not added. ` +
+            "Wait for it, or click Cancel upload.",
             "warn",
         );
         return;
     }
 
-    node._msUploading = true;
+    // The backend refuses more than MAX_IMAGES at run time; refusing here
+    // saves uploading files that could never be used.
+    const remaining = MAX_IMAGES - (node._msImages?.length || 0);
+    if (remaining <= 0) {
+        notify(
+            "Image limit reached",
+            `This node holds at most ${MAX_IMAGES} images. Remove some before adding more.`,
+            "warn",
+        );
+        return;
+    }
+    let queue = images;
+    if (queue.length > remaining) {
+        notify(
+            "Image limit",
+            `Only ${remaining} more image${remaining === 1 ? "" : "s"} fit (max ${MAX_IMAGES}); ` +
+            `${queue.length - remaining} skipped.`,
+            "warn",
+        );
+        queue = queue.slice(0, remaining);
+    }
+
+    node._msUploadGeneration = (node._msUploadGeneration || 0) + 1;
+    const run = {
+        generation: node._msUploadGeneration,
+        abort: new AbortController(),
+        total: queue.length,
+        done: 0,
+    };
+    node._msUpload = run;
     const originalTitle = node.title;
-    node.title = "Multi Stitch Images • uploading…";
-    node.graph?.setDirtyCanvas(true, true);
+    syncUploadUi(node, originalTitle);
 
     try {
-        for (const file of images) {
-            node._msImages.push(await uploadFile(file));
+        for (const file of queue) {
+            const item = await uploadFile(file, run.abort.signal);
+            // Clear all or Cancel upload ran during the await: the file is on
+            // disk, but it must not reappear on a list the user just reset.
+            if (node._msUploadGeneration !== run.generation) break;
+            node._msImages.push(item);
+            run.done += 1;
             changed(node);
+            syncUploadUi(node, originalTitle);
         }
     } catch (error) {
-        console.error("[Multi Stitch Images]", error);
-        alert(`Multi Stitch Images\n${error?.message || error}`);
+        if (error?.name !== "AbortError") {
+            console.error("[Multi Stitch Images]", error);
+            notify("Upload failed", String(error?.message || error), "error");
+        }
     } finally {
-        node._msUploading = false;
+        if (node._msUpload === run) node._msUpload = null;
         node.title = originalTitle || "Multi Stitch Images";
+        syncUploadUi(node, originalTitle);
         node.graph?.setDirtyCanvas(true, true);
     }
 }
@@ -722,16 +785,20 @@ function setupNode(node) {
     node._msTransformedCache = new Map();
 
     if (!node.widgets?.some((w) => w.name === "Add images…")) {
-        const add = node.addWidget("button", "Add images…", null, () => chooseFiles(node));
+        // The same button cancels a running upload; its label says which.
+        const add = node.addWidget("button", "Add images…", null, () => {
+            if (!cancelUpload(node)) chooseFiles(node);
+        });
         add.serialize = false;
 
         const clear = node.addWidget("button", "Clear all", null, () => {
-            if (!node._msImages.length || confirm(`Remove all ${node._msImages.length} images from this node?`)) {
-                node._msImages = [];
-                node._msThumbCache.clear();
-                node._msTransformedCache.clear();
-                changed(node);
-            }
+            const count = node._msImages.length;
+            if (count && !confirm(`Remove all ${count} images from this node?`)) return;
+            cancelUpload(node);
+            node._msImages = [];
+            node._msThumbCache.clear();
+            node._msTransformedCache.clear();
+            changed(node);
         });
         clear.serialize = false;
 
