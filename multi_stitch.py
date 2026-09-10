@@ -1,4 +1,5 @@
 import functools
+import hashlib
 import json
 import math
 import re
@@ -174,23 +175,43 @@ def _flatten_alpha(image: Image.Image, background: tuple[float, float, float]) -
 
 
 def _exif_orientation(source: Image.Image) -> int:
-    """EXIF orientation from the bytes the header already exposed.
-
-    Deliberately not ``source.getexif()``: Pillow's PNG plugin decodes the
-    whole image inside getexif() when no eXIf chunk preceded the pixel data,
-    which is every pasted screenshot. ImageOps.exif_transpose() goes further
-    and always decodes, because it copies the image even when nothing needs
-    transposing. Both the measurement pass and the decode pass use this one
-    function, so they can never disagree about an image's orientation.
-    """
-    raw = source.info.get("exif")
-    if not raw:
+    """Read orientation without decoding pixels, including late PNG eXIf."""
+    if source.format == "TIFF":
+        # Pillow's TIFF plugin already publishes the oriented size and applies
+        # its orientation during load; transposing again would rotate twice.
         return 1
     try:
-        exif = Image.Exif()
-        exif.load(raw)
-        return int(exif.get(_EXIF_ORIENTATION, 1))
-    except Exception:  # a malformed EXIF block must not make a decodable image unusable
+        # Bypass PNG's override, whose getexif() calls load(). The base method
+        # also supports TIFF tags that are not stored in info["exif"].
+        orientation = int(Image.Image.getexif(source).get(_EXIF_ORIENTATION, 1))
+        if source.format != "PNG" or source.fp is None:
+            return orientation
+        stream = source.fp
+        position = stream.tell()
+        try:
+            stream.seek(0, 2)
+            file_size = stream.tell()
+            stream.seek(8)
+            while stream.tell() + 12 <= file_size:
+                header = stream.read(8)
+                length, kind = int.from_bytes(header[:4], "big"), header[4:]
+                if stream.tell() + length + 4 > file_size:
+                    raise ValueError("Multi Stitch Images: truncated PNG chunk.")
+                if kind == b"eXIf":
+                    if length > 1024 * 1024:
+                        raise ValueError("Multi Stitch Images: PNG EXIF exceeds 1 MiB.")
+                    exif = Image.Exif()
+                    exif.load(stream.read(length))
+                    orientation = int(exif.get(_EXIF_ORIENTATION, 1))
+                    stream.seek(4, 1)
+                else:
+                    stream.seek(length + 4, 1)
+                if kind == b"IEND":
+                    break
+        finally:
+            stream.seek(position)
+        return orientation
+    except (OSError, TypeError, SyntaxError):
         return 1
 
 
@@ -548,6 +569,8 @@ def _compose_from(
     output_limit: str = "none",
     output_limit_px: int = 2048,
     output_cells: bool = False,
+    cells_resolution: str = "placed",
+    minimum_image_side: int = 0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Compose from lazy sources: each loader is called once, in list order.
 
@@ -571,10 +594,15 @@ def _compose_from(
     _validate_output_dimensions(out_w, out_h)
     final_w, final_h = _limited_size(out_w, out_h, output_limit, output_limit_px)
 
+    _require_choice("cells_resolution", cells_resolution, ("placed", "source"))
+    if not isinstance(minimum_image_side, int) or not 0 <= minimum_image_side <= _MAX_OUTPUT_SIDE:
+        raise ValueError("Multi Stitch Images: minimum_image_side must be an integer between 0 and 131072.")
+    if minimum_image_side and any(min(w * final_w / out_w, h * final_h / out_h) < minimum_image_side for x, y, w, h in placements):
+        raise ValueError("Multi Stitch Images: a placed image is below minimum_image_side. Increase output size, disable size matching, or lower the minimum.")
     cells = None
     if output_cells:
-        cell_w = max(w for _, _, w, _ in placements)
-        cell_h = max(h for _, _, _, h in placements)
+        cell_w = max(w for w, h in dimensions) if cells_resolution == "source" else max(w for _, _, w, _ in placements)
+        cell_h = max(h for w, h in dimensions) if cells_resolution == "source" else max(h for _, _, _, h in placements)
         _validate_cells_output(len(placements), cell_w, cell_h)
         color = torch.tensor(color_tuple, dtype=torch.float32)
         cells = color.view(1, 1, 1, 3).expand(len(placements), cell_h, cell_w, 3).clone()
@@ -583,13 +611,17 @@ def _compose_from(
     # separator bars and letterbox padding that colour in either layout.
     output = _blank_canvas(out_w, out_h, color_tuple)
     for index, (loader, (x, y, w, h)) in enumerate(zip(loaders, placements)):
-        image = _resize_exact(_load_checked(loader, dimensions[index], index), h, w).to(output)
+        source = _load_checked(loader, dimensions[index], index).to(output)
+        image = _resize_exact(source, h, w)
         output[:, y:y + h, x:x + w, :] = image
         if cells is not None:
-            cx = (cells.shape[2] - w) // 2
-            cy = (cells.shape[1] - h) // 2
-            cells[index:index + 1, cy:cy + h, cx:cx + w, :] = image
-        del image  # release this source before the next one is decoded
+            cell_image = source if cells_resolution == "source" else image
+            cell_h, cell_w = cell_image.shape[1:3]
+            cx = (cells.shape[2] - cell_w) // 2
+            cy = (cells.shape[1] - cell_h) // 2
+            cells[index:index + 1, cy:cy + cell_h, cx:cx + cell_w, :] = cell_image
+            del cell_image
+        del source, image  # release this source before the next one is decoded
 
     if (final_w, final_h) != (out_w, out_h):
         output = _resize_exact(output, final_h, final_w)
@@ -626,26 +658,24 @@ def _compose(
 
 
 def _frame_loader(frame: torch.Tensor, background: tuple[float, float, float]) -> tuple[Loader, tuple[int, int]]:
-    """Wrap one frame of a connected IMAGE batch as a source.
-
-    RGBA frames are composited onto the background like transparent files;
-    single-channel frames are expanded to RGB.
-    """
+    """Validate shape now; convert and composite only when streaming this frame."""
     if frame.dim() != 3 or frame.shape[0] < 1 or frame.shape[1] < 1:
-        raise ValueError(
-            f"Multi Stitch Images: the IMAGE input must be [batch, height, width, channels], got {tuple(frame.shape)}."
-        )
-    tensor = frame.unsqueeze(0).float()
-    channels = tensor.shape[-1]
-    if channels == 4:
-        alpha = tensor[..., 3:4]
-        colour = torch.tensor(background, dtype=tensor.dtype, device=tensor.device).view(1, 1, 1, 3)
-        tensor = tensor[..., :3] * alpha + colour * (1.0 - alpha)
-    elif channels == 1:
-        tensor = tensor.expand(-1, -1, -1, 3)
-    elif channels != 3:
+        raise ValueError(f"Multi Stitch Images: the IMAGE input must be [batch, height, width, channels], got {tuple(frame.shape)}.")
+    channels = frame.shape[-1]
+    if channels not in (1, 3, 4):
         raise ValueError(f"Multi Stitch Images: the IMAGE input has {channels} channels; expected 1, 3 or 4.")
-    return functools.partial(lambda t: t, tensor), (int(tensor.shape[2]), int(tensor.shape[1]))
+    size = int(frame.shape[1]), int(frame.shape[0])
+    _validate_source_pixels({"filename": "IMAGE input"}, *size)
+    def load():
+        tensor = frame.detach().unsqueeze(0).to(device="cpu", dtype=torch.float32)
+        if channels == 4:
+            alpha = tensor[..., 3:4]
+            colour = torch.tensor(background, dtype=tensor.dtype).view(1, 1, 1, 3)
+            tensor = tensor[..., :3] * alpha + colour * (1.0 - alpha)
+        elif channels == 1:
+            tensor = tensor.expand(-1, -1, -1, 3)
+        return tensor
+    return load, size
 
 
 class MultiStitchImages:
@@ -658,7 +688,7 @@ class MultiStitchImages:
                 # Keep the first five widgets in the original v1 order so older
                 # saved workflows load without widget-value shifting.
                 "direction": (["right", "down", "left", "up"], {"default": "right"}),
-                "match_image_size": ("BOOLEAN", {"default": True}),
+                "match_image_size": ("BOOLEAN", {"default": False}),
                 "spacing_width": ("INT", {"default": 0, "min": 0, "max": 1024, "step": 2}),
                 "spacing_color": (["white", "black", "red", "green", "blue", "custom"], {"default": "white"}),
                 "images_json": ("STRING", {"default": "[]", "multiline": True}),
@@ -679,6 +709,8 @@ class MultiStitchImages:
                 # images, so a generated or upscaled result can be stitched
                 # without saving and re-adding it.
                 "images": ("IMAGE",),
+                "cells_resolution": (["placed", "source"], {"default": "placed"}),
+                "minimum_image_side": ("INT", {"default": 0, "min": 0, "max": 131072}),
             },
         }
 
@@ -707,6 +739,8 @@ class MultiStitchImages:
         grid_cell_height=0,
         output_cells=False,
         images=None,
+        cells_resolution="placed",
+        minimum_image_side=0,
     ):
         try:
             items = json.loads(images_json or "[]")
@@ -716,6 +750,8 @@ class MultiStitchImages:
         if not isinstance(items, list):
             raise ValueError("Multi Stitch Images: image list must be an array.")
         valid_items = [item for item in items if isinstance(item, dict)]
+        if images is not None and (images.dim() != 4 or images.shape[0] < 1):
+            raise ValueError("Multi Stitch Images: the IMAGE input must be a nonempty [batch, height, width, channels] tensor.")
         frames = list(images) if images is not None else []
         if len(valid_items) + len(frames) > _MAX_IMAGES:
             raise ValueError(
@@ -755,7 +791,24 @@ class MultiStitchImages:
             output_limit=output_limit,
             output_limit_px=output_limit_px,
             output_cells=output_cells,
+            cells_resolution=cells_resolution,
+            minimum_image_side=minimum_image_side,
         )
+
+    @classmethod
+    def IS_CHANGED(cls, images_json="[]", **kwargs):
+        try:
+            entries = json.loads(images_json or "[]")
+            fingerprints = []
+            for item in entries:
+                if not isinstance(item, dict):
+                    continue
+                path = _safe_input_path(item)
+                stat = path.stat()
+                fingerprints.append((str(path), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns))
+            return hashlib.sha256(repr(fingerprints).encode()).hexdigest()
+        except (ValueError, TypeError, OSError, AttributeError):
+            return float("nan")
 
 
 NODE_CLASS_MAPPINGS = {

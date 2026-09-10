@@ -348,7 +348,7 @@ class MultiStitchTests(unittest.TestCase):
                 "output_cells",
             ],
         )
-        self.assertEqual(list(inputs["optional"]), ["images"])
+        self.assertEqual(list(inputs["optional"]), ["images", "cells_resolution", "minimum_image_side"])
         self.assertEqual(inputs["optional"]["images"], ("IMAGE",))
         parameters = inspect.signature(ms.MultiStitchImages.stitch).parameters
         self.assertEqual(list(parameters)[1:], list(required) + list(inputs["optional"]))
