@@ -184,8 +184,8 @@ describe("copy original image", () => {
             const node = window.__makeNode(name);
             window.__toasts.length = 0;
             const options = [];
-            // graph_mouse over card 0: 118px below the widgets, 130px cells.
-            window.__nodeType.prototype.getExtraMenuOptions.call(node, { graph_mouse: [73, 164] }, options);
+            // graph_mouse over card 0: the list starts 148px down (toolbar row included), 130px cells.
+            window.__nodeType.prototype.getExtraMenuOptions.call(node, { graph_mouse: [73, 194] }, options);
             await options[0].callback();
             await new Promise((resolve) => setTimeout(resolve, 200));
             const toast = window.__toasts[0];

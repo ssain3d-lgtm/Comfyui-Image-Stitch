@@ -23,11 +23,14 @@ beforeEach(() => {
 });
 
 const toasts = () => app.extensionManager.toast.log.map((t) => `${t.severity}/${t.summary}`);
+// Row 0 of the list on a node with the preview off: the 92px widget block,
+// the status line and the 24px toolbar sit above it (toolbarRect/listTop).
+const LIST_TOP = 148;
 const card = (index) => {
-    // Mirrors thumbLayout(): 3 columns of 130px under a 92px widget block.
+    // Mirrors thumbLayout(): 3 columns of 130px under the toolbar.
     const col = index % 3;
     const row = Math.floor(index / 3);
-    return { x: 8 + col * 137, y: 118 + row * 99, w: 130, h: 92 };
+    return { x: 8 + col * 137, y: LIST_TOP + row * 99, w: 130, h: 92 };
 };
 const pointer = (x, y, client = [x, y]) => ({
     button: 0, canvasX: x, canvasY: y, clientX: client[0], clientY: client[1],
@@ -41,6 +44,22 @@ async function waitForThumbs(node) {
     }
     assert.fail("thumbnail queue did not settle");
 }
+
+// Toolbar pills under the status line, y 120..140 on a 420px node:
+// add x 8..72, clear 76..124, copy 128..184, undo 188..212, redo 216..240,
+// preview 244..314, options 318..402.
+const control = {
+    add: [40, 130], clear: [100, 130], copy: [156, 130], undo: [200, 130], redo: [228, 130],
+    preview: [279, 130], options: [360, 130],
+};
+const click = (node, [x, y]) => nodeType.prototype.onMouseDown.call(node, pointer(x, y), [x, y], {});
+const until = async (condition, ms = 2000) => {
+    const start = Date.now();
+    while (!condition()) {
+        if (Date.now() - start > ms) assert.fail("timed out waiting");
+        await tick(2);
+    }
+};
 
 describe("paste and upload", () => {
     it("uploads pasted images and mirrors the list into the widget and properties", async () => {
@@ -89,31 +108,30 @@ describe("paste and upload", () => {
         assert.deepEqual(toasts(), ["warn/Image limit reached"]);
     });
 
-    it("shows progress, and the Add button cancels while keeping what already landed", async () => {
+    it("shows progress, and the Add pill cancels while keeping what already landed", async () => {
         const node = makeNode(nodeType);
-        const add = widget(node, "Add images…");
         api.knobs.delayMs = 20;
         const running = node.pasteFiles(imageFiles(5, "c"));
         await tick(50);
-        assert.match(add.label, /^Cancel upload \(\d\/5\)$/);
+        assert.ok(paintedText(nodeType, node).some((t) => /^Cancel \d\/5$/.test(t)), "the Add pill turns into Cancel");
         assert.match(node.title, /uploading \d\/5…$/);
 
-        add.callback();
+        assert.equal(click(node, control.add), true);
         await running;
         assert.ok(node._msImages.length >= 1 && node._msImages.length < 5, `kept ${node._msImages.length}`);
         assert.equal(node._msImages.length, api.uploads.length, "every upload that finished is on the node");
-        assert.equal(add.label, "Add images…");
+        assert.ok(paintedText(nodeType, node).includes("+ Add"), "the pill is Add again");
         assert.equal(node.title, "Multi Stitch Images");
         assert.equal(node._msUpload, null);
         assert.deepEqual(toasts(), [], "a cancel is not an error");
     });
 
-    it("Clear all during an upload cancels it and nothing reappears afterwards", async () => {
+    it("Clear during an upload cancels it and nothing reappears afterwards", async () => {
         const node = makeNode(nodeType);
         api.knobs.delayMs = 15;
         const running = node.pasteFiles(imageFiles(4, "k"));
         await tick(40);
-        widget(node, "Clear all").callback();
+        click(node, control.clear);
         assert.equal(node._msImages.length, 0);
         await running;
         await tick(60);
@@ -215,7 +233,7 @@ describe("save and restore", () => {
 
         // The first real edit replaces it.
         node._msImages.push(items()[0]);
-        widget(node, "Clear all").callback();
+        click(node, control.clear);
         assert.equal(widget(node, "images_json").value, "[]");
         assert.equal(node._msUnreadable, null);
     });
@@ -286,11 +304,19 @@ describe("conditional widgets", () => {
         assert.equal(Object.prototype.hasOwnProperty.call(columns, "computeSize"), false, "the override is gone, not replaced by undefined");
     });
 
-    it("shows the cell size only for grid and the pixel cap only when a limit is chosen", () => {
+    it("folds every advanced option by default and, once opened, shows only the relevant ones", () => {
         const node = makeNode(nodeType);
-        assert.equal(widget(node, "grid_cell_width").options.hidden, true);
+        const advanced = ["output_limit", "output_limit_px", "grid_cell_width", "grid_cell_height", "output_cells", "cells_resolution", "minimum_image_side"];
+        for (const name of advanced) assert.equal(widget(node, name).options.hidden, true, `${name} starts folded`);
+
+        assert.equal(click(node, control.options), true);
+        assert.equal(widget(node, "output_limit").options.hidden, false);
+        assert.equal(widget(node, "output_cells").options.hidden, false);
+        assert.equal(widget(node, "minimum_image_side").options.hidden, false);
+        assert.equal(widget(node, "grid_cell_width").options.hidden, true, "cell size needs grid");
         assert.equal(widget(node, "grid_cell_height").options.hidden, true);
-        assert.equal(widget(node, "output_limit_px").options.hidden, true);
+        assert.equal(widget(node, "output_limit_px").options.hidden, true, "the pixel cap needs a limit");
+        assert.equal(widget(node, "cells_resolution").options.hidden, true, "cell resolution needs the cells output");
 
         widget(node, "layout_mode").value = "grid";
         nodeType.prototype.onWidgetChanged.call(node, "layout_mode", "grid", "strip", widget(node, "layout_mode"));
@@ -300,21 +326,68 @@ describe("conditional widgets", () => {
         widget(node, "output_limit").value = "max_width";
         nodeType.prototype.onWidgetChanged.call(node, "output_limit", "max_width", "none", widget(node, "output_limit"));
         assert.equal(widget(node, "output_limit_px").options.hidden, false);
+
+        widget(node, "output_cells").value = true;
+        nodeType.prototype.onWidgetChanged.call(node, "output_cells", true, false, widget(node, "output_cells"));
+        assert.equal(widget(node, "cells_resolution").options.hidden, false);
     });
 });
 
-// Header controls sit at the right end of the status line: y 98..116,
-// undo at x 292..316, redo 320..344, preview 348..412 on a 420px node.
-// The copy pill sits left of undo: x 236..288.
-const control = { copy: [262, 107], undo: [304, 107], redo: [332, 107], preview: [380, 107] };
-const until = async (condition, ms = 2000) => {
-    const start = Date.now();
-    while (!condition()) {
-        if (Date.now() - start > ms) assert.fail("timed out waiting");
-        await tick(2);
-    }
-};
-const click = (node, [x, y]) => nodeType.prototype.onMouseDown.call(node, pointer(x, y), [x, y], {});
+describe("toolbar and folded options", () => {
+    it("spends the widget rows of a fresh node on five settings and no buttons", () => {
+        const node = makeNode(nodeType);
+        const shown = node.widgets.filter((w) => !w.options.hidden).map((w) => w.name);
+        assert.deepEqual(shown, ["direction", "match_image_size", "spacing_width", "spacing_color", "layout_mode"]);
+        assert.deepEqual(node.widgets.filter((w) => w.type === "button").map((w) => w.name), ["custom_color_picker"]);
+        const painted = paintedText(nodeType, node);
+        for (const label of ["+ Add", "Clear", "⧉ Copy", "↶", "↷", "Preview ✓", "Options ▸"]) {
+            assert.ok(painted.includes(label), `${label} is on the toolbar`);
+        }
+    });
+
+    it("keeps a non-default option visible while folded and counts it on the pill", () => {
+        const node = makeNode(nodeType);
+        widget(node, "output_limit").value = "max_width";
+        nodeType.prototype.onWidgetChanged.call(node, "output_limit", "max_width", "none", widget(node, "output_limit"));
+        assert.equal(widget(node, "output_limit").options.hidden, false, "a value that changes the output stays on the node");
+        assert.equal(widget(node, "output_limit_px").options.hidden, true, "its dependent keeps the default, so it stays folded");
+        assert.ok(paintedText(nodeType, node).includes("Options ▸ (1)"));
+
+        widget(node, "output_limit_px").value = 512;
+        nodeType.prototype.onWidgetChanged.call(node, "output_limit_px", 512, 2048, widget(node, "output_limit_px"));
+        assert.equal(widget(node, "output_limit_px").options.hidden, false);
+        assert.ok(paintedText(nodeType, node).includes("Options ▸ (2)"));
+
+        assert.equal(click(node, control.options), true);
+        assert.equal(node.properties.multi_stitch_advanced, true);
+        assert.ok(paintedText(nodeType, node).includes("Options ▾"));
+        assert.equal(widget(node, "minimum_image_side").options.hidden, false);
+        click(node, control.options);
+        assert.equal(node.properties.multi_stitch_advanced, false);
+        assert.equal(widget(node, "minimum_image_side").options.hidden, true);
+        assert.equal(widget(node, "output_limit_px").options.hidden, false, "still non-default, still shown");
+    });
+
+    it("opens the file picker from the Add pill and from the empty box", () => {
+        const node = plainNode(nodeType);
+        dom.inputs.length = 0;
+        assert.equal(click(node, control.add), true);
+        assert.equal(dom.inputs.length, 1);
+        assert.equal(dom.inputs[0].accept, "image/*");
+        assert.equal(dom.inputs[0].multiple, true);
+
+        assert.equal(click(node, [card(0).x + 60, card(0).y + 40]), true);
+        assert.equal(dom.inputs.length, 2, "the dashed box is an add target too");
+        for (const input of dom.inputs) input.remove();
+
+        // Copy and Preview do nothing on an empty node; Clear asks nothing.
+        assert.equal(click(node, control.copy), true);
+        assert.ok(!node._msCopying);
+        assert.equal(click(node, control.preview), true);
+        assert.equal(node.properties.multi_stitch_preview, false, "unchanged");
+        assert.equal(dom.inputs.length, 2, "no picker from the other pills");
+    });
+});
 
 describe("preview", () => {
     it("draws every image into the band and reports the final size after the output cap", async () => {
@@ -333,7 +406,7 @@ describe("preview", () => {
         assert.equal(painted.drawImage, 4, "two images in the preview and two thumbnails");
     });
 
-    it("toggles from the header control and gives the rows the band's height back", async () => {
+    it("toggles from the toolbar and gives the rows the band's height back", async () => {
         const node = makeNode(nodeType);
         dom.imageSizes.set("a.png", [40, 20]);
         setImages(node, [item("a.png")]);
@@ -387,7 +460,7 @@ describe("undo and redo", () => {
         assert.equal(node._msImages.length, 2);
     });
 
-    it("undoes a drag reorder and a Clear all", async () => {
+    it("undoes a drag reorder and a Clear", async () => {
         const node = plainNode(nodeType);
         setImages(node, imageFiles(3).map((f) => item(f.name)));
         node._msCommitted = JSON.stringify(node._msImages);
@@ -400,7 +473,7 @@ describe("undo and redo", () => {
         click(node, control.undo);
         assert.deepEqual(node._msImages.map((i) => i.filename), ["img0.png", "img1.png", "img2.png"]);
 
-        widget(node, "Clear all").callback();
+        click(node, control.clear);
         assert.equal(node._msImages.length, 0);
         click(node, control.undo);
         assert.equal(node._msImages.length, 3);
@@ -423,20 +496,20 @@ describe("scrollable list", () => {
         node._msImages = imageFiles(12).map((f) => item(f.name));   // four rows
         node._msSized = false;                                      // take the default height
         paintedCalls(nodeType, node);
-        assert.equal(node.size[1], 118 + 3 * 99 - 7 + 12, "three rows tall");
+        assert.equal(node.size[1], LIST_TOP + 3 * 99 - 7 + 12, "three rows tall");
 
         // Row 3 (cards 9-11) is off-screen: its position is not clickable.
-        const off = nodeType.prototype.onMouseDown.call(node, pointer(20, 118 + 3 * 99 + 10), null, {});
+        const off = nodeType.prototype.onMouseDown.call(node, pointer(20, LIST_TOP + 3 * 99 + 10), null, {});
         assert.equal(off, false);
         assert.equal(node._msImages.length, 12);
 
         // The ▾ at the bottom of the scrollbar brings row 3 into view.
-        assert.equal(click(node, [408, 118 + 290 - 5]), true);
+        assert.equal(click(node, [408, LIST_TOP + 290 - 5]), true);
         assert.equal(node._msScrollRow, 1);
         // Card 9 now sits on visible row 2, in the narrower cards next to the bar.
         const cellW = (420 - 16 - 14 - 14) / 3;
         const removeX = 8 + cellW - 23 + 10;
-        const removeY = 118 + 2 * 99 + 3 + 9;
+        const removeY = LIST_TOP + 2 * 99 + 3 + 9;
         assert.equal(click(node, [removeX, removeY]), true);
         assert.equal(node._msImages.length, 11);
         assert.equal(node._msImages.some((i) => i.filename === "img9.png"), false);
@@ -452,10 +525,10 @@ describe("scrollable list", () => {
         setImages(node, imageFiles(12).map((f) => item(f.name)));
         node.size = [420, 5000];
         nodeType.prototype.onResize.call(node, node.size);
-        assert.equal(node.size[1], 118 + 4 * 99 - 7 + 12, "no taller than the four rows");
+        assert.equal(node.size[1], LIST_TOP + 4 * 99 - 7 + 12, "no taller than the four rows");
         node.size = [300, 50];
         nodeType.prototype.onResize.call(node, node.size);
-        assert.deepEqual(node.size, [420, 118 + 92 + 12], "no narrower than the minimum, no shorter than one row");
+        assert.deepEqual(node.size, [420, LIST_TOP + 92 + 12], "no narrower than the minimum, no shorter than one row");
     });
 });
 

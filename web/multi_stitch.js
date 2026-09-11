@@ -42,6 +42,21 @@ const NAMED_COLORS = { white: "#ffffff", black: "#000000", red: "#ff0000", green
 // "Copy stitched result" renders the composite in the browser. Bounded so a
 // canvas the browser cannot allocate or encode fails with a message.
 const COPY_MAX_PIXELS = 64 * 1024 * 1024;
+// One toolbar row under the status line holds every action, so no widget
+// rows are spent on buttons.
+const TOOLBAR_H = 24;
+// Options most workflows never touch stay folded behind "Options". A widget
+// whose value is not the default stays visible even when folded, so nothing
+// acts on the output without showing on the node.
+const ADVANCED_DEFAULTS = {
+    output_limit: "none",
+    output_limit_px: 2048,
+    grid_cell_width: 0,
+    grid_cell_height: 0,
+    output_cells: false,
+    cells_resolution: "placed",
+    minimum_image_side: 0,
+};
 
 function visibleWidgetBottom(node) {
     let bottom = 92;
@@ -60,14 +75,21 @@ function previewEnabled(node) {
     return node.properties?.multi_stitch_preview !== false;
 }
 
+function toolbarRect(node) {
+    return { x: 8, y: visibleWidgetBottom(node) + 26, w: nodeWidth(node) - 16, h: TOOLBAR_H };
+}
+
 function previewRect(node) {
     if (!previewEnabled(node) || !(node._msImages?.length)) return null;
-    return { x: 8, y: visibleWidgetBottom(node) + 26, w: nodeWidth(node) - 16, h: PREVIEW_HEIGHT };
+    const bar = toolbarRect(node);
+    return { x: 8, y: bar.y + bar.h + 6, w: nodeWidth(node) - 16, h: PREVIEW_HEIGHT };
 }
 
 function listTop(node) {
     const preview = previewRect(node);
-    return preview ? preview.y + preview.h + 8 : visibleWidgetBottom(node) + 26;
+    if (preview) return preview.y + preview.h + 8;
+    const bar = toolbarRect(node);
+    return bar.y + bar.h + 6;
 }
 
 function rowsOf(node) {
@@ -124,15 +146,59 @@ function thumbLayout(node, index) {
     };
 }
 
-// Undo / redo / preview controls at the right end of the status line.
-function headerControls(node) {
-    const y = visibleWidgetBottom(node) + 6;
-    const right = nodeWidth(node) - 8;
-    const preview = { x: right - 64, y, w: 64, h: 18 };
-    const redo = { x: preview.x - 4 - 24, y, w: 24, h: 18 };
-    const undo = { x: redo.x - 4 - 24, y, w: 24, h: 18 };
-    const copy = { x: undo.x - 4 - 52, y, w: 52, h: 18 };
-    return { copy, undo, redo, preview };
+// Toolbar pills, left to right. Widths are fixed so the whole row fits a
+// 420px node: 64+48+56+24+24+70+84 plus six 4px gaps = 394 of 404.
+function toolbarControls(node) {
+    const bar = toolbarRect(node);
+    const y = bar.y + 2;
+    const h = bar.h - 4;
+    const widths = [["add", 64], ["clear", 48], ["copy", 56], ["undo", 24], ["redo", 24], ["preview", 70], ["options", 84]];
+    const rects = {};
+    let x = bar.x;
+    for (const [name, w] of widths) {
+        rects[name] = { x, y, w, h };
+        x += w + 4;
+    }
+    return rects;
+}
+
+function advancedOpen(node) {
+    return node.properties?.multi_stitch_advanced === true;
+}
+
+function isDefaultValue(widget, fallback) {
+    const value = widget?.value;
+    if (value === undefined || value === null || value === "") return true;
+    return String(value) === String(fallback);
+}
+
+// Which advanced widgets matter for the current settings, and which of those
+// carry a non-default value.
+function advancedState(node) {
+    const layout = getWidget(node, "layout_mode")?.value || "strip";
+    const outputLimit = getWidget(node, "output_limit")?.value || "none";
+    const cellsOn = !!getWidget(node, "output_cells")?.value;
+    const relevant = {
+        output_limit: true,
+        output_limit_px: outputLimit !== "none",
+        grid_cell_width: layout === "grid",
+        grid_cell_height: layout === "grid",
+        output_cells: true,
+        cells_resolution: cellsOn,
+        minimum_image_side: true,
+    };
+    const active = Object.keys(ADVANCED_DEFAULTS).filter(
+        (name) => relevant[name] && !isDefaultValue(getWidget(node, name), ADVANCED_DEFAULTS[name]),
+    );
+    return { open: advancedOpen(node), relevant, active };
+}
+
+function toggleAdvanced(node) {
+    node.properties ||= {};
+    node.properties.multi_stitch_advanced = !advancedOpen(node);
+    syncConditionalWidgets(node);
+    scheduleNodeLayout(node);
+    node.graph?.setDirtyCanvas(true, true);
 }
 
 function thumbActionRects(r) {
@@ -301,6 +367,25 @@ function drawPill(ctx, rect, label, active = true) {
     ctx.textAlign = "left";
 }
 
+function drawToolbar(ctx, node) {
+    const count = node._msImages?.length || 0;
+    const history = historyOf(node);
+    const controls = toolbarControls(node);
+    const run = node._msUpload;
+    const advanced = advancedState(node);
+    drawPill(ctx, controls.add, run ? `Cancel ${run.done}/${run.total}` : "+ Add");
+    drawPill(ctx, controls.clear, "Clear", count > 0 || !!run);
+    drawPill(ctx, controls.copy, node._msCopying ? "…" : "⧉ Copy", count > 0 && !node._msCopying);
+    drawPill(ctx, controls.undo, "↶", history.past.length > 0);
+    drawPill(ctx, controls.redo, "↷", history.future.length > 0);
+    drawPill(ctx, controls.preview, previewEnabled(node) ? "Preview ✓" : "Preview", count > 0);
+    drawPill(
+        ctx,
+        controls.options,
+        advanced.open ? "Options ▾" : `Options ▸${advanced.active.length ? ` (${advanced.active.length})` : ""}`,
+    );
+}
+
 function drawPreview(ctx, node, rect) {
     ctx.fillStyle = "#101010";
     ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
@@ -444,7 +529,6 @@ function drawThumbs(node, ctx) {
     ctx.font = "12px sans-serif";
     ctx.fillStyle = "#b8b8b8";
     const predicted = predictedSize(node);
-    const controls = headerControls(node);
     const noun = `${count} image${count === 1 ? "" : "s"}`;
     const estimate = predicted
         ? `  •  ~${predicted.w}×${predicted.h}${predicted.skipped ? ` (${predicted.skipped} not loaded)` : ""}`
@@ -454,17 +538,12 @@ function drawThumbs(node, ctx) {
     const candidates = count
         ? [`${noun}${estimate}${inputNote}`, `${noun}${estimate}`, noun]
         : [node._msUnreadable
-            ? "Image list unreadable — kept as-is. Add or Clear all to replace."
+            ? "Image list unreadable — kept as-is. Add or Clear to replace."
             : "Select this node, then Ctrl+V images"];
-    const room = controls.copy.x - 9 - 6;
+    const room = nodeWidth(node) - 18;
     const status = candidates.find((text) => (ctx.measureText?.(text)?.width ?? 0) <= room) ?? candidates[candidates.length - 1];
     ctx.fillText(status, 9, top + 12);
-
-    const history = historyOf(node);
-    drawPill(ctx, controls.copy, node._msCopying ? "…" : "⧉ Copy", count > 0 && !node._msCopying);
-    drawPill(ctx, controls.undo, "↶", history.past.length > 0);
-    drawPill(ctx, controls.redo, "↷", history.future.length > 0);
-    drawPill(ctx, controls.preview, previewEnabled(node) ? "Preview ✓" : "Preview", count > 0);
+    drawToolbar(ctx, node);
 
     if (!count) {
         const r = thumbLayout(node, 0);
@@ -768,6 +847,16 @@ function restoreHistory(node, step) {
     return true;
 }
 
+function clearAllImages(node) {
+    const count = node._msImages?.length || 0;
+    if (count && !confirm(`Remove all ${count} images from this node?`)) return;
+    cancelUpload(node);
+    node._msImages = [];
+    node._msThumbCache?.clear();
+    node._msTransformedCache?.clear();
+    changed(node);
+}
+
 function togglePreview(node) {
     node.properties ||= {};
     node.properties.multi_stitch_preview = !previewEnabled(node);
@@ -863,13 +952,7 @@ function normalizeItems(list) {
 
 function syncUploadUi(node, baseTitle) {
     const run = node._msUpload;
-    const button = getWidget(node, "Add images…");
-    if (run) {
-        node.title = `${baseTitle || "Multi Stitch Images"} • uploading ${run.done}/${run.total}…`;
-        if (button) button.label = `Cancel upload (${run.done}/${run.total})`;
-    } else if (button) {
-        button.label = button.name;
-    }
+    if (run) node.title = `${baseTitle || "Multi Stitch Images"} • uploading ${run.done}/${run.total}…`;
     node.graph?.setDirtyCanvas(true, false);
 }
 
@@ -894,7 +977,7 @@ async function addFiles(node, files) {
         notify(
             "Upload in progress",
             `Still uploading (${run.done}/${run.total}) — ${images.length} image(s) were not added. ` +
-            "Wait for it, or click Cancel upload.",
+            "Wait for it, or click Cancel in the toolbar.",
             "warn",
         );
         return;
@@ -936,7 +1019,7 @@ async function addFiles(node, files) {
     try {
         for (const file of queue) {
             const item = await uploadFile(file, run.abort.signal);
-            // Clear all or Cancel upload ran during the await: the file is on
+            // Clear or Cancel ran during the await: the file is on
             // disk, but it must not reappear on a list the user just reset.
             if (node._msUploadGeneration !== run.generation) break;
             node._msImages.push(item);
@@ -1012,13 +1095,13 @@ function setWidgetVisible(widget, visible) {
 function syncConditionalWidgets(node) {
     const layout = getWidget(node, "layout_mode")?.value || "strip";
     const spacingColor = getWidget(node, "spacing_color")?.value || "white";
-    const outputLimit = getWidget(node, "output_limit")?.value || "none";
     setWidgetVisible(getWidget(node, "grid_columns"), layout === "grid");
-    setWidgetVisible(getWidget(node, "grid_cell_width"), layout === "grid");
-    setWidgetVisible(getWidget(node, "grid_cell_height"), layout === "grid");
-    setWidgetVisible(getWidget(node, "output_limit_px"), outputLimit !== "none");
     setWidgetVisible(getWidget(node, "custom_color_picker"), spacingColor === "custom");
-    setWidgetVisible(getWidget(node, "cells_resolution"), !!getWidget(node, "output_cells")?.value);
+
+    const { open, relevant, active } = advancedState(node);
+    for (const name of Object.keys(ADVANCED_DEFAULTS)) {
+        setWidgetVisible(getWidget(node, name), relevant[name] && (open || active.includes(name)));
+    }
 }
 
 function updateCustomColorButton(node) {
@@ -1185,24 +1268,7 @@ function setupNode(node) {
     node._msScrollRow = 0;
     resetHistory(node);
 
-    if (!node.widgets?.some((w) => w.name === "Add images…")) {
-        // The same button cancels a running upload; its label says which.
-        const add = node.addWidget("button", "Add images…", null, () => {
-            if (!cancelUpload(node)) chooseFiles(node);
-        });
-        add.serialize = false;
-
-        const clear = node.addWidget("button", "Clear all", null, () => {
-            const count = node._msImages.length;
-            if (count && !confirm(`Remove all ${count} images from this node?`)) return;
-            cancelUpload(node);
-            node._msImages = [];
-            node._msThumbCache.clear();
-            node._msTransformedCache.clear();
-            changed(node);
-        });
-        clear.serialize = false;
-
+    if (!node.widgets?.some((w) => w.name === "custom_color_picker")) {
         const picker = node.addWidget("button", "custom_color_picker", null, () => chooseCustomColor(node));
         picker.serialize = false;
     }
@@ -1289,7 +1355,7 @@ app.registerExtension({
         const widgetChanged = nodeType.prototype.onWidgetChanged;
         nodeType.prototype.onWidgetChanged = function (name, value, oldValue, widget) {
             const r = widgetChanged?.apply(this, arguments);
-            if (name === "layout_mode" || name === "spacing_color" || name === "output_limit" || name === "output_cells") {
+            if (name === "layout_mode" || name === "spacing_color" || name in ADVANCED_DEFAULTS) {
                 syncConditionalWidgets(this);
                 scheduleNodeLayout(this);
             }
@@ -1303,13 +1369,24 @@ app.registerExtension({
             const primary = event?.button === undefined || event.button === 0;
             if (primary && !this.flags?.collapsed) {
                 const [x, y] = localPos(this, event, pos, graphCanvas);
-                const controls = headerControls(this);
-                if (inRect(x, y, controls.copy) || inRect(x, y, controls.undo) || inRect(x, y, controls.redo) || inRect(x, y, controls.preview)) {
-                    if (inRect(x, y, controls.copy)) {
+                const hit = Object.entries(toolbarControls(this)).find(([, rect]) => inRect(x, y, rect))?.[0];
+                if (hit) {
+                    if (hit === "add") {
+                        if (!cancelUpload(this)) chooseFiles(this);
+                    } else if (hit === "clear") clearAllImages(this);
+                    else if (hit === "copy") {
                         if (this._msImages?.length) copyStitchedResult(this);
-                    } else if (inRect(x, y, controls.undo)) restoreHistory(this, undoImages);
-                    else if (inRect(x, y, controls.redo)) restoreHistory(this, redoImages);
-                    else if (this._msImages?.length) togglePreview(this);
+                    } else if (hit === "undo") restoreHistory(this, undoImages);
+                    else if (hit === "redo") restoreHistory(this, redoImages);
+                    else if (hit === "preview") {
+                        if (this._msImages?.length) togglePreview(this);
+                    } else if (hit === "options") toggleAdvanced(this);
+                    stopEvent(event, graphCanvas);
+                    return true;
+                }
+                // With no images yet, the dashed box is the "add" target too.
+                if (!this._msImages?.length && inRect(x, y, thumbLayout(this, 0))) {
+                    chooseFiles(this);
                     stopEvent(event, graphCanvas);
                     return true;
                 }
