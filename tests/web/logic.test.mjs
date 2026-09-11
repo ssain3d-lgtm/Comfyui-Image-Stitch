@@ -775,7 +775,7 @@ describe("match reference", () => {
         change(node, "match_image_size", true, false);
         click(node, control.options);
         assert.equal(widget(node, "match_reference").options.hidden, true);
-        change(node, "match_reference", "smallest", "first");
+        change(node, "match_reference", "largest", "smallest");
         assert.equal(widget(node, "match_reference").options.hidden, false, "a non-default value stays visible");
         assert.ok(paintedText(nodeType, node).includes("Options ▸ (1)"));
     });
@@ -808,7 +808,7 @@ describe("match reference", () => {
         widget(node, "layout_mode").value = "mosaic";
         widget(node, "spacing_width").value = 8;
         nodeType.prototype.onConfigure.call(node, { properties: { multi_stitch_images: "[]" } });
-        assert.equal(widget(node, "match_reference").value, "first");
+        assert.equal(widget(node, "match_reference").value, "first", "the behaviour the workflow was saved with, not today's default");
         assert.equal(widget(node, "output_limit").value, "none");
         assert.equal(widget(node, "layout_mode").value, "strip");
         assert.equal(widget(node, "spacing_width").value, 8, "a valid value is kept");
@@ -816,10 +816,10 @@ describe("match reference", () => {
 });
 
 describe("native-reference refinements", () => {
-    it("matches new nodes to the first image and keeps an explicit saved choice", () => {
+    it("matches new nodes to the smallest image and keeps an explicit saved choice", () => {
         const node = makeNode(nodeType);
         assert.equal(widget(node, "match_image_size").value, true);
-        assert.equal(widget(node, "match_reference").value, "first");
+        assert.equal(widget(node, "match_reference").value, "smallest");
         widget(node, "match_image_size").value = false;
         nodeType.prototype.onConfigure.call(node, { properties: { multi_stitch_images: "[]" } });
         assert.equal(widget(node, "match_image_size").value, false);

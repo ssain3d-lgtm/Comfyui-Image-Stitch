@@ -51,6 +51,11 @@ _ORIENTATIONS_THAT_SWAP_AXES = {5, 6, 7, 8}
 _DIRECTIONS = ("right", "down", "left", "up")
 _LAYOUT_MODES = ("strip", "grid")
 _MATCH_REFERENCES = ("first", "largest", "smallest")
+# New nodes match to the smallest image, so nothing is ever upscaled. A prompt
+# that omits the value — one written before the option existed — keeps "first",
+# the behaviour it had then, which is why stitch() defaults differently.
+_DEFAULT_MATCH_REFERENCE = "smallest"
+_LEGACY_MATCH_REFERENCE = "first"
 _OUTPUT_LIMITS = ("none", "max_width", "max_height", "max_long_side")
 
 
@@ -736,8 +741,8 @@ class MultiStitchImages:
                 }),
                 "match_image_size": ("BOOLEAN", {
                     "default": True,
-                    "tooltip": "Scale every image to the reference image (match_reference, the first by default): "
-                               "its height (or width) in a strip, fitted inside its cell in a grid. "
+                    "tooltip": "Scale every image to the reference image (match_reference, the smallest by "
+                               "default): its height (or width) in a strip, fitted inside its cell in a grid. "
                                "Off keeps each image at its own size.",
                 }),
                 "spacing_width": ("INT", {
@@ -817,7 +822,7 @@ class MultiStitchImages:
                 # in saved workflows. The UI keeps it under Options, and only
                 # while match_image_size is on.
                 "match_reference": (list(_MATCH_REFERENCES), {
-                    "default": "first",
+                    "default": _DEFAULT_MATCH_REFERENCE,
                     "tooltip": "Which image the others are scaled to when match_image_size is on. first: the "
                                "first in the list. largest / smallest: the tallest or shortest image in a "
                                "horizontal strip (widest or narrowest in a vertical one), the largest or "
@@ -859,7 +864,7 @@ class MultiStitchImages:
         images=None,
         cells_resolution="placed",
         minimum_image_side=0,
-        match_reference="first",
+        match_reference=_LEGACY_MATCH_REFERENCE,
     ):
         try:
             items = json.loads(images_json or "[]")

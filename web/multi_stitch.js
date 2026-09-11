@@ -65,8 +65,12 @@ const ADVANCED_DEFAULTS = {
     output_cells: false,
     cells_resolution: "placed",
     minimum_image_side: 0,
-    match_reference: "first",
+    match_reference: "smallest",
 };
+// A widget whose slot is missing from a saved workflow gets the value the
+// node behaved with before the widget existed, not necessarily today's
+// default: match_image_size used to match the first image.
+const LEGACY_VALUES = { match_reference: "first" };
 
 function visibleWidgetBottom(node) {
     let bottom = 92;
@@ -312,7 +316,7 @@ function readSettings(node) {
     return {
         direction: value("direction", "right"),
         match: !!value("match_image_size", true),
-        matchReference: value("match_reference", "first"),
+        matchReference: value("match_reference", "smallest"),
         spacing: Math.max(0, Number(value("spacing_width", 0)) || 0),
         layout: value("layout_mode", "strip"),
         gridColumns: Math.max(1, Math.min(16, Number(value("grid_columns", 3)) || 3)),
@@ -1384,7 +1388,8 @@ function dragDistancePx(press, event, localX, localY) {
 
 // A widget added after a workflow was saved gets whatever sat in its slot of
 // widgets_values — nothing, or the null a removed button widget left behind.
-// Put the definition's default back so the run does not fail validation.
+// Put a valid value back (the legacy behaviour where it differs from the
+// definition's default) so the run does not fail validation.
 function restoreInvalidWidgetValues(node) {
     const defaults = node._msWidgetDefaults;
     if (!defaults) return [];
@@ -1396,7 +1401,7 @@ function restoreInvalidWidgetValues(node) {
         const invalid = value === undefined || value === null
             || (Array.isArray(choices) && choices.length > 0 && !choices.includes(value));
         if (!invalid) continue;
-        widget.value = defaults.get(widget.name);
+        widget.value = widget.name in LEGACY_VALUES ? LEGACY_VALUES[widget.name] : defaults.get(widget.name);
         restored.push(widget.name);
     }
     return restored;

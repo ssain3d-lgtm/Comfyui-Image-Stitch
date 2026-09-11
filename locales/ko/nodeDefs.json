@@ -14,7 +14,7 @@
       },
       "match_image_size": {
         "name": "이미지 크기 맞춤",
-        "tooltip": "모든 이미지를 기준 이미지(크기 맞춤 기준, 기본은 첫 번째)에 맞춥니다. Strip에서는 높이(또는 너비), Grid에서는 셀 안에 맞춰 넣습니다. 끄면 각 이미지가 원래 크기를 유지합니다. (match_image_size)"
+        "tooltip": "모든 이미지를 기준 이미지(크기 맞춤 기준, 기본은 가장 작은 이미지)에 맞춥니다. Strip에서는 높이(또는 너비), Grid에서는 셀 안에 맞춰 넣습니다. 끄면 각 이미지가 원래 크기를 유지합니다. (match_image_size)"
       },
       "spacing_width": {
         "name": "간격 (px)",
@@ -96,7 +96,7 @@
       },
       "match_reference": {
         "name": "크기 맞춤 기준",
-        "tooltip": "이미지 크기 맞춤이 켜졌을 때 어떤 이미지에 맞출지 정합니다. first: 목록의 첫 번째. largest / smallest: 가로 Strip에서는 가장 높은/낮은 이미지, 세로 Strip에서는 가장 넓은/좁은 이미지, Grid에서는 면적이 가장 큰/작은 이미지. 기준 이미지는 원래 크기를 유지하므로 smallest는 아무것도 확대하지 않습니다. (match_reference)",
+        "tooltip": "이미지 크기 맞춤이 켜졌을 때 어떤 이미지에 맞출지 정합니다. first: 목록의 첫 번째. largest / smallest: 가로 Strip에서는 가장 높은/낮은 이미지, 세로 Strip에서는 가장 넓은/좁은 이미지, Grid에서는 면적이 가장 큰/작은 이미지. 기준 이미지는 원래 크기를 유지하므로 기본값인 smallest는 아무것도 확대하지 않습니다. (match_reference)",
         "options": {
           "first": "첫 번째 이미지",
           "largest": "가장 큰 이미지",

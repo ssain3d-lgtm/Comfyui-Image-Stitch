@@ -23,16 +23,21 @@ class ReferenceQualityTests(unittest.TestCase):
         args.update(kwargs)
         return ms.MultiStitchImages().stitch(**args)
 
-    def test_new_node_matches_the_first_image_at_native_resolution(self):
+    def test_new_node_matches_the_smallest_image_at_native_resolution(self):
         inputs = ms.MultiStitchImages.INPUT_TYPES()
         self.assertTrue(inputs['required']['match_image_size'][1]['default'])
         self.assertEqual(inputs['required']['output_limit'][1]['default'], 'none')
-        self.assertEqual(inputs['optional']['match_reference'][1]['default'], 'first')
-        a = self.write_png('a.png', (255, 0, 0), (30, 10))
-        b = self.write_png('b.png', (0, 0, 255), (60, 40))
-        # The defaults: b takes a's height, nothing is enlarged or capped.
-        output, _ = self.run_node([a, b], match_image_size=inputs['required']['match_image_size'][1]['default'])
+        self.assertEqual(inputs['optional']['match_reference'][1]['default'], 'smallest')
+        a = self.write_png('a.png', (255, 0, 0), (60, 40))
+        b = self.write_png('b.png', (0, 0, 255), (30, 10))
+        defaults = dict(match_image_size=inputs['required']['match_image_size'][1]['default'],
+                        match_reference=inputs['optional']['match_reference'][1]['default'])
+        # The defaults: a shrinks to b's height, nothing is enlarged or capped.
+        output, _ = self.run_node([a, b], **defaults)
         self.assertEqual(tuple(output.shape), (1, 10, 45, 3))
+        # A prompt without match_reference behaves as before the option existed.
+        output, _ = self.run_node([a, b], match_image_size=True)
+        self.assertEqual(tuple(output.shape), (1, 40, 180, 3))
         # Matching off still keeps every native size.
         output, _ = self.run_node([a, b], match_image_size=False)
         self.assertEqual(tuple(output.shape), (1, 40, 90, 3))

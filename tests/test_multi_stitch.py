@@ -353,9 +353,11 @@ class MultiStitchTests(unittest.TestCase):
         )
         self.assertEqual(inputs["optional"]["images"][0], "IMAGE")
         self.assertEqual(inputs["optional"]["match_reference"][0], list(ms._MATCH_REFERENCES))
-        self.assertEqual(inputs["optional"]["match_reference"][1]["default"], "first")
+        self.assertEqual(inputs["optional"]["match_reference"][1]["default"], "smallest")
         parameters = inspect.signature(ms.MultiStitchImages.stitch).parameters
         self.assertEqual(list(parameters)[1:], list(required) + list(inputs["optional"]))
+        # A prompt that omits the value predates the option: keep matching to the first image.
+        self.assertEqual(parameters["match_reference"].default, "first")
         # Defaults reproduce the behaviour before these widgets existed.
         for name in ("output_limit", "output_limit_px", "grid_cell_width", "grid_cell_height", "output_cells"):
             self.assertEqual(parameters[name].default, required[name][1]["default"], name)
