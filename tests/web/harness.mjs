@@ -200,20 +200,24 @@ export const imageFiles = (count, prefix = "img") =>
     Array.from({ length: count }, (_, i) => ({ name: `${prefix}${i}.png`, type: "image/png" }));
 
 // Renders the node through the real onDrawForeground and reports what it
-// painted: every string, and how many images were drawn.
-export function paintedCalls(nodeType, node) {
+// painted: every string, how many images were drawn and from which sources.
+// `pixelScale` is the canvas transform's device pixels per graph unit (zoom
+// times the HiDPI factor), as ctx.getTransform() would report it.
+export function paintedCalls(nodeType, node, { pixelScale = 1 } = {}) {
     const text = [];
+    const sources = [];
     let drawImage = 0;
     const ctx = new Proxy({}, {
         get: (target, key) => (key === "fillText" ? (value) => text.push(String(value))
-            : key === "drawImage" ? () => { drawImage += 1; }
+            : key === "drawImage" ? (source) => { drawImage += 1; sources.push(source); }
                 : key === "measureText" ? () => ({ width: 8 })
                     : key === "createLinearGradient" ? () => ({ addColorStop() {} })
-                        : () => {}),
+                        : key === "getTransform" ? () => ({ a: pixelScale, b: 0, c: 0, d: pixelScale, e: 0, f: 0 })
+                            : () => {}),
         set: () => true,
     });
     nodeType.prototype.onDrawForeground.call(node, ctx);
-    return { text, drawImage };
+    return { text, drawImage, sources };
 }
 
 export function paintedText(nodeType, node) {

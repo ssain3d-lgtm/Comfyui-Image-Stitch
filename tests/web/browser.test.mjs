@@ -15,7 +15,7 @@ const PAGE = `<!doctype html><meta charset="utf-8"><title>Multi Stitch Images te
 <script type="module">
 import { app } from "./scripts/app.js";
 import { openCropEditor } from "./pkg/web/crop_editor.js";
-import { loadTransformedThumb } from "./pkg/web/shared.js";
+import { drawImageScaled, loadTransformedThumb } from "./pkg/web/shared.js";
 await import("./pkg/web/multi_stitch.js");
 const nodeType = { prototype: {} };
 await app.extension.beforeRegisterNodeDef(nodeType, { name: "MultiStitchImages" });
@@ -24,6 +24,7 @@ window.__nodeType = nodeType;
 window.__toasts = app.extensionManager.toast.log;
 window.__openCropEditor = openCropEditor;
 window.__loadTransformedThumb = loadTransformedThumb;
+window.__drawImageScaled = drawImageScaled;
 window.__makeNode = (filename) => ({
   pos: [0, 0], size: [420, 600], flags: {}, properties: { multi_stitch_preview: false }, graph: { setDirtyCanvas() {} }, widgets: [],
   _msImages: [{ filename, type: "input", crop: { x: 0, y: 0, w: 1, h: 1 }, rotation: 0, flip_h: false, flip_v: false }],
@@ -175,6 +176,38 @@ describe("copy stitched result", () => {
         assert.equal(r.stillCopying, false);
         assert.deepEqual(errors, []);
         await page.close();
+    });
+});
+
+describe("high-quality scaling", () => {
+    it("reduces a fine checkerboard to an even grey instead of aliasing", async () => {
+        const { page, errors } = await openPage();
+        const r = await page.evaluate(() => {
+            const source = document.createElement("canvas");
+            source.width = source.height = 1024;
+            const sctx = source.getContext("2d");
+            const pattern = sctx.createImageData(1024, 1024);
+            for (let i = 0; i < pattern.data.length; i += 4) {
+                const p = i / 4;
+                const on = ((p % 1024) + Math.floor(p / 1024)) % 2 === 0;
+                pattern.data[i] = pattern.data[i + 1] = pattern.data[i + 2] = on ? 255 : 0;
+                pattern.data[i + 3] = 255;
+            }
+            sctx.putImageData(pattern, 0, 0);
+
+            const out = document.createElement("canvas");
+            out.width = out.height = 64;
+            const ctx = out.getContext("2d");
+            window.__drawImageScaled(ctx, source, 0, 0, 1024, 1024, 0, 0, 64, 64);
+            const data = ctx.getImageData(0, 0, 64, 64).data;
+            let min = 255, max = 0;
+            for (let i = 0; i < data.length; i += 4) { min = Math.min(min, data[i]); max = Math.max(max, data[i]); }
+            return { min, max, quality: ctx.imageSmoothingQuality };
+        });
+        assert.equal(errors.length, 0, errors.join("\n"));
+        assert.equal(r.quality, "high");
+        // Every output pixel averages a 16×16 block: 128 within rounding.
+        assert.ok(r.min >= 112 && r.max <= 144, `expected an even grey, got ${r.min}..${r.max}`);
     });
 });
 

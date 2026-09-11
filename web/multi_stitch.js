@@ -3,6 +3,7 @@ import { openCropEditor } from "./crop_editor.js";
 import {
     commitImages,
     cropPixelBox,
+    drawImageScaled,
     getWidget,
     hideWidget,
     historyOf,
@@ -42,6 +43,14 @@ const NAMED_COLORS = { white: "#ffffff", black: "#000000", red: "#ff0000", green
 // "Copy stitched result" renders the composite in the browser. Bounded so a
 // canvas the browser cannot allocate or encode fails with a message.
 const COPY_MAX_PIXELS = 64 * 1024 * 1024;
+// The preview band normally draws the 512px thumbnails. Once the canvas zoom
+// or a HiDPI screen would stretch them, the composite is redrawn from the
+// original files at the size the band needs — bounded, cached per node, and
+// re-rendered only when the layout, the images or the needed size change.
+const PREVIEW_RENDER_MAX_SIDE = 2048;
+const PREVIEW_RENDER_MAX_PIXELS = 4 * 1024 * 1024;
+const PREVIEW_RENDER_STEP = 256;
+const PREVIEW_RENDER_DELAY_MS = 150;
 // One toolbar row under the status line holds every action, so no widget
 // rows are spent on buttons.
 const TOOLBAR_H = 24;
@@ -276,6 +285,8 @@ function drawContained(ctx, image, crop, rect) {
     const scale = Math.min(rect.w / sw, rect.h / sh);
     const dw = sw * scale;
     const dh = sh * scale;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
     ctx.drawImage(
         image,
         sx, sy, sw, sh,
@@ -418,10 +429,21 @@ function drawPreview(ctx, node, rect) {
     ctx.fillRect(ox, oy, pw, ph);
 
     const items = node._msImages;
+    const pixelScale = devicePixelScale(ctx);
+    const contentKey = previewContentKey(node, planned);
+    let render = node._msPreviewRender;
+    if (needsSharpPreview(node, planned, scale * pixelScale)) {
+        render = sharpPreview(node, planned, contentKey, pw * pixelScale, ph * pixelScale);
+    }
+    const bitmap = render && render.contentKey === contentKey ? (render.canvas || render.previous) : null;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    if (bitmap) ctx.drawImage(bitmap, ox, oy, pw, ph);
     planned.placements.forEach((p, index) => {
         const dest = { x: ox + p.x * scale, y: oy + p.y * scale, w: Math.max(1, p.w * scale), h: Math.max(1, p.h * scale) };
         const state = loadTransformedThumb(node, items[index]);
         if (state.ready && !planned.failed[index]) {
+            if (bitmap) return;
             const size = mediaSize(state.image);
             const c = normalizeCrop(items[index].crop);
             ctx.drawImage(
@@ -693,30 +715,22 @@ function releaseImage(image) {
     image.src = "";
 }
 
-// Draws the stitched result in the browser at its final size: the same
-// placements the backend will use, but from the original files rather than
-// the thumbnails, one image at a time. Frames from a connected IMAGE input
-// exist only at run time and are not included; an image that failed to load
-// is left as background. Resampling is the browser's, so a downscaled image
-// can differ very slightly from the backend's bicubic result.
-async function renderStitched(node, onProgress) {
-    const planned = plannedLayout(node);
-    if (!planned) throw new Error("thumbnails are still loading — try again in a moment");
-    if (planned.finalWidth * planned.finalHeight > COPY_MAX_PIXELS) {
-        throw new Error(
-            `${planned.finalWidth}×${planned.finalHeight} is too large to render in the browser ` +
-            `(limit ${Math.round(COPY_MAX_PIXELS / 1_000_000)} MP); set output_limit, or queue the workflow instead`,
-        );
-    }
-
+// Draws the composite from the original files, one image at a time, into a
+// canvas of the given size: the same placements the backend will use. Frames
+// from a connected IMAGE input exist only at run time and are not included;
+// an image that failed to load is left as background. `alive` lets a caller
+// abandon a render that is no longer wanted between images. Resampling is
+// the browser's (stepwise, high quality), so a downscaled image can differ
+// very slightly from the backend's bicubic result.
+async function renderComposite(node, planned, { width, height, onProgress, alive }) {
     const canvas = document.createElement("canvas");
-    canvas.width = planned.finalWidth;
-    canvas.height = planned.finalHeight;
+    canvas.width = Math.max(1, Math.round(width));
+    canvas.height = Math.max(1, Math.round(height));
     const ctx = canvas.getContext("2d");
     ctx.fillStyle = backgroundColor(planned.settings);
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    const scaleX = planned.finalWidth / planned.width;
-    const scaleY = planned.finalHeight / planned.height;
+    const scaleX = canvas.width / planned.width;
+    const scaleY = canvas.height / planned.height;
 
     const items = node._msImages;
     let skipped = 0;
@@ -730,11 +744,12 @@ async function renderStitched(node, onProgress) {
         const place = planned.placements[index];
         const image = await loadFullImage(imageUrl(item));
         try {
+            if (alive && !alive()) return null;
             const view = isTransformed(item) ? renderTransformedImage(image, item, 0) : image;
             const size = mediaSize(view);
             const box = cropPixelBox(size.w, size.h, item.crop);
-            ctx.drawImage(
-                view,
+            drawImageScaled(
+                ctx, view,
                 box.x, box.y, box.w, box.h,
                 place.x * scaleX, place.y * scaleY, place.w * scaleX, place.h * scaleY,
             );
@@ -742,6 +757,118 @@ async function renderStitched(node, onProgress) {
             releaseImage(image);
         }
     }
+    return { canvas, skipped };
+}
+
+// Device pixels per graph unit under the current canvas transform: zoom and
+// the HiDPI backing store together.
+function devicePixelScale(ctx) {
+    const t = ctx.getTransform?.();
+    if (!t || !Number.isFinite(t.a) || !Number.isFinite(t.b)) return 1;
+    return Math.max(0.01, Math.hypot(t.a, t.b));
+}
+
+// True when some image would be drawn larger on screen than its thumbnail
+// holds, while the original has more pixels to give.
+function needsSharpPreview(node, planned, drawScale) {
+    const items = node._msImages;
+    return planned.placements.some((p, index) => {
+        if (planned.failed[index]) return false;
+        const state = loadTransformedThumb(node, items[index]);
+        if (!state.ready) return false;
+        const c = normalizeCrop(items[index].crop);
+        const thumb = mediaSize(state.image);
+        const have = Math.max(thumb.w * c.w, thumb.h * c.h);
+        const native = Math.max(state.width * c.w, state.height * c.h);
+        const need = Math.max(p.w, p.h) * drawScale;
+        return need > have + 0.5 && have < native - 0.5;
+    });
+}
+
+// Everything the composite's pixels depend on; the needed size is separate
+// so a zoom step can keep showing the previous bitmap while a new one renders.
+function previewContentKey(node, planned) {
+    const s = planned.settings;
+    return JSON.stringify([
+        node._msImages.map((i) => [i.type, i.subfolder, i.filename, normalizeCrop(i.crop), normalizeTransform(i)]),
+        [s.layout, s.direction, s.match, s.matchReference, s.gridColumns, s.spacing,
+            s.cellWidth, s.cellHeight, s.spacingColor, s.customColor],
+        planned.failed,
+    ]);
+}
+
+// The bitmap size the band needs, rounded up in steps so small zoom changes
+// reuse the cache, never larger than the composite, and bounded.
+function previewRenderSize(planned, deviceWidth, deviceHeight) {
+    const step = (v) => Math.ceil(v / PREVIEW_RENDER_STEP) * PREVIEW_RENDER_STEP;
+    let scale = Math.min(step(deviceWidth) / planned.width, step(deviceHeight) / planned.height, 1);
+    scale = Math.min(scale, PREVIEW_RENDER_MAX_SIDE / Math.max(planned.width, planned.height));
+    const pixels = planned.width * planned.height * scale * scale;
+    if (pixels > PREVIEW_RENDER_MAX_PIXELS) scale *= Math.sqrt(PREVIEW_RENDER_MAX_PIXELS / pixels);
+    return {
+        width: Math.max(1, Math.round(planned.width * scale)),
+        height: Math.max(1, Math.round(planned.height * scale)),
+    };
+}
+
+// Returns the node's sharp-preview state for this content and size, starting
+// a render (after a short delay, so a zoom gesture or a slider drag settles)
+// when there is none yet. The previous bitmap stays on screen while a new
+// size renders for the same content.
+function sharpPreview(node, planned, contentKey, deviceWidth, deviceHeight) {
+    const { width, height } = previewRenderSize(planned, deviceWidth, deviceHeight);
+    const key = `${contentKey}|${width}x${height}`;
+    const current = node._msPreviewRender;
+    if (current?.key === key) return current;
+    clearTimeout(current?.timer);
+    const render = {
+        key,
+        contentKey,
+        ready: false,
+        failed: false,
+        canvas: null,
+        previous: current?.contentKey === contentKey ? (current.canvas || current.previous) : null,
+        timer: null,
+    };
+    const alive = () => !node._msDisposed && node._msPreviewRender === render;
+    render.timer = setTimeout(() => {
+        render.timer = null;
+        renderComposite(node, planned, { width, height, alive })
+            .then((out) => {
+                if (!alive()) return;
+                if (out) {
+                    render.canvas = out.canvas;
+                    render.ready = true;
+                    render.previous = null;
+                }
+                node.graph?.setDirtyCanvas(true, false);
+            })
+            .catch(() => {
+                if (!alive()) return;
+                render.failed = true;
+                node.graph?.setDirtyCanvas(true, false);
+            });
+    }, PREVIEW_RENDER_DELAY_MS);
+    node._msPreviewRender = render;
+    return render;
+}
+
+// Draws the stitched result at its final size for the clipboard.
+async function renderStitched(node, onProgress) {
+    const planned = plannedLayout(node);
+    if (!planned) throw new Error("thumbnails are still loading — try again in a moment");
+    if (planned.finalWidth * planned.finalHeight > COPY_MAX_PIXELS) {
+        throw new Error(
+            `${planned.finalWidth}×${planned.finalHeight} is too large to render in the browser ` +
+            `(limit ${Math.round(COPY_MAX_PIXELS / 1_000_000)} MP); set output_limit, or queue the workflow instead`,
+        );
+    }
+
+    const { canvas, skipped } = await renderComposite(node, planned, {
+        width: planned.finalWidth,
+        height: planned.finalHeight,
+        onProgress,
+    });
 
     const blob = await new Promise((resolve, reject) => {
         canvas.toBlob(
@@ -1569,6 +1696,8 @@ app.registerExtension({
             cancelUpload(this);
             for (const state of this._msThumbCache?.values() || []) state.cancel?.();
             this._msThumbCache?.clear(); this._msTransformedCache?.clear();
+            clearTimeout(this._msPreviewRender?.timer);
+            this._msPreviewRender = null;
             detachPressFallback(this._msThumbPress);
             return removed?.apply(this, arguments);
         };

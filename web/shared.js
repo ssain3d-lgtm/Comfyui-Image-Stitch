@@ -383,26 +383,44 @@ function thumbKey(item) {
     return `${item.type || "input"}:${item.subfolder || ""}/${item.filename}`;
 }
 
-// Shrink to at most maxSide on the long edge, halving in steps first: a single
-// drawImage() from 4000px down to 500px aliases visibly.
-function scaledCanvas(source, width, height, maxSide) {
+function smoothContext(canvas) {
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    return ctx;
+}
+
+// Draws a region of `source` into `ctx` at (dx, dy, dw, dh) at the best
+// quality a canvas offers: smoothing set to "high", and a reduction below
+// one half done by halving through intermediate canvases first, since a
+// single drawImage() from 4000px down to 500px aliases visibly.
+export function drawImageScaled(ctx, source, sx, sy, sw, sh, dx, dy, dw, dh) {
     let current = source;
-    let w = width;
-    let h = height;
-    while (Math.max(w, h) / 2 >= maxSide) {
+    let cx = sx, cy = sy, cw = sw, ch = sh;
+    while (cw / 2 >= dw && ch / 2 >= dh && cw >= 2 && ch >= 2) {
         const step = document.createElement("canvas");
-        step.width = Math.max(1, Math.round(w / 2));
-        step.height = Math.max(1, Math.round(h / 2));
-        step.getContext("2d").drawImage(current, 0, 0, step.width, step.height);
+        step.width = Math.max(1, Math.round(cw / 2));
+        step.height = Math.max(1, Math.round(ch / 2));
+        smoothContext(step).drawImage(current, cx, cy, cw, ch, 0, 0, step.width, step.height);
         current = step;
-        w = step.width;
-        h = step.height;
+        cx = 0;
+        cy = 0;
+        cw = step.width;
+        ch = step.height;
     }
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(current, cx, cy, cw, ch, dx, dy, dw, dh);
+}
+
+// Shrink to at most maxSide on the long edge, through the same stepwise
+// reduction.
+function scaledCanvas(source, width, height, maxSide) {
     const scale = Math.min(1, maxSide / Math.max(width, height));
     const out = document.createElement("canvas");
     out.width = Math.max(1, Math.round(width * scale));
     out.height = Math.max(1, Math.round(height * scale));
-    out.getContext("2d").drawImage(current, 0, 0, out.width, out.height);
+    drawImageScaled(smoothContext(out), source, 0, 0, width, height, 0, 0, out.width, out.height);
     return out;
 }
 

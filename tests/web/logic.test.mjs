@@ -437,6 +437,84 @@ describe("preview", () => {
     });
 });
 
+describe("sharp preview", () => {
+    const bitmapOf = (node) => node._msPreviewRender?.canvas;
+
+    it("keeps the thumbnails while they fit, and redraws from the original once they would stretch", async () => {
+        const node = makeNode(nodeType);
+        dom.imageSizes.set("big.png", [4000, 2000]);
+        setImages(node, [item("big.png")]);
+        paintedCalls(nodeType, node);
+        await waitForThumbs(node);
+
+        // At 1:1 the 4000px image is drawn 276px wide from a 512px thumbnail.
+        paintedCalls(nodeType, node);
+        assert.equal(node._msPreviewRender, undefined, "no render while the thumbnail is not upscaled");
+
+        // Zoomed in three times it would be 828px wide: render from the file.
+        let painted = paintedCalls(nodeType, node, { pixelScale: 3 });
+        const render = node._msPreviewRender;
+        assert.ok(render && !render.ready, "a render is scheduled");
+        assert.equal(painted.drawImage, 2, "meanwhile the thumbnail still fills the band");
+        dom.canvases.length = 0;
+        await until(() => render.ready);
+        // 828 rounds up to 1024 wide; the bitmap keeps the composite's aspect.
+        const bitmap = bitmapOf(node);
+        assert.deepEqual([bitmap.width, bitmap.height], [1024, 512]);
+        assert.equal(bitmap.draws, 1, "the original was drawn into it once");
+        // 4000 → 1024 is below one half: one halving step before the final draw.
+        assert.equal(dom.canvases.length, 2, "reduced through an intermediate canvas, not in one drawImage");
+
+        painted = paintedCalls(nodeType, node, { pixelScale: 3 });
+        assert.ok(painted.sources.includes(bitmap), "the band now draws the sharp bitmap");
+        assert.equal(painted.drawImage, 2, "bitmap plus the card thumbnail, no thumbnail in the band");
+        assert.equal(node._msPreviewRender, render, "the same size reuses the cache");
+    });
+
+    it("drops the bitmap when the layout changes, but shows it through a zoom step", async () => {
+        const node = makeNode(nodeType);
+        dom.imageSizes.set("big.png", [2000, 1000]);
+        setImages(node, [item("big.png")]);
+        paintedCalls(nodeType, node);
+        await waitForThumbs(node);
+        paintedCalls(nodeType, node, { pixelScale: 3 });
+        await until(() => node._msPreviewRender.ready);
+        const first = bitmapOf(node);
+
+        // A zoom step needs a bigger bitmap: the old one stays on screen meanwhile.
+        let painted = paintedCalls(nodeType, node, { pixelScale: 5 });
+        assert.notEqual(node._msPreviewRender.key.split("|")[1], "1024x512");
+        assert.equal(node._msPreviewRender.previous, first);
+        assert.ok(painted.sources.includes(first));
+        await until(() => node._msPreviewRender.ready);
+        assert.deepEqual([bitmapOf(node).width, bitmapOf(node).height], [1536, 768]);
+
+        // A layout change makes the pixels wrong: back to thumbnails until re-rendered.
+        widget(node, "spacing_width").value = 8;
+        painted = paintedCalls(nodeType, node, { pixelScale: 5 });
+        assert.equal(node._msPreviewRender.previous, null);
+        assert.ok(!painted.sources.includes(first));
+        assert.equal(painted.drawImage, 2, "thumbnail in the band again");
+        await until(() => node._msPreviewRender.ready);
+        assert.ok(paintedCalls(nodeType, node, { pixelScale: 5 }).sources.includes(bitmapOf(node)));
+    });
+
+    it("abandons a pending render when the node is removed", async () => {
+        const node = makeNode(nodeType);
+        dom.imageSizes.set("big.png", [2000, 1000]);
+        setImages(node, [item("big.png")]);
+        paintedCalls(nodeType, node);
+        await waitForThumbs(node);
+        paintedCalls(nodeType, node, { pixelScale: 3 });
+        assert.ok(node._msPreviewRender);
+        nodeType.prototype.onRemoved.call(node);
+        assert.equal(node._msPreviewRender, null);
+        dom.canvases.length = 0;
+        await tick(250);
+        assert.equal(dom.canvases.length, 0, "nothing was rendered after removal");
+    });
+});
+
 describe("undo and redo", () => {
     it("steps back through adds, forward again, and forgets the future after a new edit", async () => {
         const node = plainNode(nodeType);
