@@ -36,6 +36,15 @@
 - 일반 `IMAGE` 출력 → `Preview Image`, `Save Image`, `VAE Encode` 등에 바로 연결
 - 추가 Python 패키지 불필요
 
+### 1.2에서 달라진 점
+
+- **툴바 한 줄** `+ Add · Clear · ⧉ Copy · ↶ ↷ · Preview · Options`와 **접히는 고급 옵션** — 기본 상태 위젯 10행 → 5행. 기본값이 아닌 옵션은 접혀 있어도 보입니다.
+- **`⧉ Copy`** — 합성 결과를 Queue 없이 브라우저에서 만들어 클립보드에 넣습니다.
+- 모든 위젯과 출력에 **툴팁** — 마우스를 올리면 설명이 보입니다.
+- **한국어 UI** — ComfyUI 언어를 한국어로 두면 위젯 이름·선택지·툴팁·노드 설명이 한국어로 표시됩니다.
+- **예제 워크플로우** 2개 — 템플릿 브라우저의 `Comfyui-Image-Stitch` 항목(붙여넣기 → Strip, IMAGE 배치 → Grid + cells).
+- 전체 이력은 [CHANGELOG.md](CHANGELOG.md)에 있습니다.
+
 ### 1.1에서 달라진 점
 
 - 새 노드는 **원본 크기 유지**가 기본입니다: `match_image_size = false`, `output_limit = none`. 저장된 워크플로우는 자기 설정을 그대로 유지하고 출력 연결도 바뀌지 않습니다.
@@ -44,7 +53,7 @@
 - 참조 파일이 바뀌면(크기·수정 시각) 노드가 **자동으로 다시 실행**됩니다.
 - 썸네일 원본 디코딩을 **동시에 2개**로 제한하고, PNG 끝에 붙은 EXIF도 디코딩 없이 읽습니다.
 
-> 아래 한국어 이미지는 이해를 돕기 위해 일부 버튼/설명을 번역한 가이드 이미지입니다. 실제 노드의 옵션 이름은 ComfyUI에서 영문으로 표시될 수 있습니다.
+> 아래 한국어 이미지는 이해를 돕기 위해 일부 버튼/설명을 번역한 가이드 이미지입니다. 실제 노드의 옵션 이름은 ComfyUI 언어 설정에 따라 영문 또는 한국어로 표시됩니다.
 
 ## 전체 사용 예시
 
@@ -88,6 +97,10 @@ image/transform → Multi Stitch Images
 4. ComfyUI 재시작
 
 > 폴더가 `Comfyui-Image-Stitch/Comfyui-Image-Stitch/...`처럼 이중으로 들어가지 않게 확인하세요.
+
+### 방법 C — ComfyUI Manager
+
+Comfy Registry에 게시된 뒤에는 ComfyUI Manager의 **Custom Nodes Manager**에서 `Multi Stitch Images`를 검색해 설치할 수 있습니다.
 
 ## 업데이트
 
@@ -210,6 +223,8 @@ grid_columns = 3
 
 ## 파라미터
 
+각 위젯과 출력 슬롯에 마우스를 올리면 **툴팁 설명**이 표시됩니다. 아래 표는 그 요약입니다.
+
 | 위젯 | 값 | 기본값 |
 | --- | --- | --- |
 | `direction` | `right` / `down` / `left` / `up` | `right` |
@@ -269,6 +284,12 @@ white / black / red / green / blue / custom
 
 한도를 초과하면 예상 해상도 / MP / float32 메모리 크기를 표시하고 실행을 중단합니다. 이 경우 이미지 수를 줄이거나, Crop/Resize를 하거나, Grid를 사용하거나, `match_image_size = true`를 사용하세요.
 
+## 예제 워크플로우 · 한국어 UI
+
+**예제 워크플로우** — ComfyUI 템플릿 브라우저(사이드바의 Templates)에 `Comfyui-Image-Stitch` 항목으로 두 워크플로우가 나타납니다. `multi-stitch-paste-strip`은 노드를 선택하고 Ctrl+V 하는 기본 흐름이고, `multi-stitch-grid-from-image-batch`는 ComfyUI에 포함된 `example.png` 세 장을 `Batch Images`로 묶어 `images` 입력에 넣고 2열 Grid와 `cells` 출력까지 보여 주므로 바로 Queue 할 수 있습니다. 파일은 `example_workflows/`에 있습니다.
+
+**한국어 UI** — 설정(⚙) → Locale을 한국어로 두면 이 노드의 위젯 이름, 선택지, 툴팁, 노드 설명이 한국어로 표시됩니다(`locales/ko/nodeDefs.json`). 노드 이름 `Multi Stitch Images`와 이 문서의 파라미터 표기는 영문 그대로라 검색과 대조가 그대로 됩니다. 툴바 버튼의 문구는 영문입니다.
+
 ## 붙여넣기 / 저장 방식
 
 최신 ComfyUI의 이미지 paste routing을 이용합니다. 노드는 `previewMediaType = "image"`와 `pasteFiles()`를 제공하여 전역 Ctrl+V 가로채기를 최소화합니다.
@@ -324,6 +345,15 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 - Standard `IMAGE` output → `Preview Image`, `Save Image`, `VAE Encode`, etc.
 - No extra Python packages required
 
+### What changed in 1.2
+
+- **One toolbar row** `+ Add · Clear · ⧉ Copy · ↶ ↷ · Preview · Options` and **folded advanced options** — a fresh node shows five widget rows instead of ten. A non-default option stays visible while folded.
+- **`⧉ Copy`** renders the stitched result in the browser and puts it on the clipboard without queueing.
+- **Tooltips** on every widget and output.
+- **Korean UI** — with ComfyUI's locale set to Korean, widget names, option labels, tooltips and the node description are shown in Korean.
+- **Two example workflows** in the template browser under `Comfyui-Image-Stitch` (paste → strip, IMAGE batch → grid + cells).
+- Full history in [CHANGELOG.md](CHANGELOG.md).
+
 ### What changed in 1.1
 
 - New nodes keep **native size** by default: `match_image_size = false`, `output_limit = none`. Saved workflows keep their own settings, and the output slots are unchanged.
@@ -374,6 +404,10 @@ Done. No `pip install` is required.
 4. Restart ComfyUI
 
 > Make sure you do not end up with a nested folder such as `Comfyui-Image-Stitch/Comfyui-Image-Stitch/...`.
+
+### Method C — ComfyUI Manager
+
+Once the node is published on the Comfy Registry, search for `Multi Stitch Images` in ComfyUI Manager's **Custom Nodes Manager** and install it from there.
 
 ## Updating
 
@@ -494,6 +528,8 @@ With `match_image_size = true`, the **first image in the list** — edited or no
 
 ## Parameters
 
+Hover any widget or output slot for its **tooltip**; the table below is the summary.
+
 | Widget | Values | Default |
 | --- | --- | --- |
 | `direction` | `right` / `down` / `left` / `up` | `right` |
@@ -553,6 +589,12 @@ The default is **original size, no extra downscaling**. For a reference sheet (i
 
 If the limit would be exceeded, execution stops with the estimated resolution, megapixels, and approximate float32 output memory. Reduce the image count, Crop/Resize the sources, use Grid, or enable `match_image_size`.
 
+## Example workflows · Korean UI
+
+**Example workflows** — ComfyUI's template browser (Templates in the sidebar) lists two workflows under `Comfyui-Image-Stitch`. `multi-stitch-paste-strip` is the everyday flow: select the node and Ctrl+V. `multi-stitch-grid-from-image-batch` batches three copies of ComfyUI's bundled `example.png` with `Batch Images` into the `images` input and shows a two-column grid plus the `cells` output, so it queues as-is. The files live in `example_workflows/`.
+
+**Korean UI** — with Settings (⚙) → Locale set to Korean, this node's widget names, option labels, tooltips and description appear in Korean (`locales/ko/nodeDefs.json`). The node name `Multi Stitch Images` and the parameter names in this document stay in English, so search and cross-reference keep working. The toolbar labels are English.
+
 ## Paste / storage behavior
 
 The node uses current ComfyUI image paste routing through `previewMediaType = "image"` and `pasteFiles()`, minimizing global Ctrl+V interception.
@@ -588,6 +630,8 @@ If you move the workflow to another machine, copy the referenced input images as
 - GitHub Actions, backend job (Python 3.10 and 3.12): a package-import smoke test (so a node that would not load in ComfyUI fails CI), `INPUT_TYPES` widget order against the `stitch()` signature, per-pixel rotation/flip checks across all 16 transform combinations, EXIF orientation 1–8 against Pillow, a spy proving the measurement pass never decodes pixels, streaming composition (each source loaded once, never two resident), Strip directions, Grid placement with no unused row or column, spacing-colour fill in both layouts, transparency compositing, rejected enum values, unsafe paths, the image-count cap and the size guards. A parity test runs the browser maths (`normalizeCrop`, `gridShape`, crop↔transform mapping) under Node and compares it with Python. `tests/test_reference_quality.py` adds the 1.1 behaviour: the native-size default, `cells_resolution = source`, the cells memory check and `minimum_image_side` both rejecting before any decode, PNG EXIF after the pixel data read without decoding, a malformed EXIF chunk degrading to "no orientation" instead of an error, TIFF orientation, cache invalidation when a file changes, and lazy IMAGE frames.
 - GitHub Actions, frontend job (Node 22): `tests/web/logic.test.mjs` drives the real `web/*.js` against a stub ComfyUI — paste, the 256 cap, cancel and Clear during upload, ≡ reorder through window events, save → reopen round-trip, an unreadable list kept verbatim, bounded thumbnails, a failed thumbnail not hiding the estimate, conditional widgets, and the copy action. `tests/web/browser.test.mjs` runs the crop editor (corner handles, rotate, apply, cancel), the clipboard copy of an original (PNG, JPEG re-encode, missing file) and the stitched-result copy (two originals with a blue separator, read back from the clipboard pixel by pixel) in real Chromium via Playwright. Run locally with `npm ci && npx playwright install chromium && npm test`.
 - The frontend suite also covers the preview band (draw calls and the final-size caption), the toolbar undo/redo controls (adds, a drag reorder, Clear, history reset on load), the scrollable list (default height, scrollbar arrows and track, hit-testing only visible rows, resize clamping), the new conditional widgets, relinking a missing file, the stitched-result copy (final size after the cap, both originals drawn, a missing image left blank, the browser size limit, the context-menu entry), and the toolbar with folded options (all advanced widgets hidden by default, a non-default value staying visible and counted on the pill, no button widgets left, the empty-state box opening the picker). The parity test compares `layoutPlacements` / `limitedSize` with `_layout` / `_limited_size` over 700 cases and `cropPixelBox` with `_crop_box` over 500, including sizes that land on exact halves where Python's half-even rounding differs from `Math.round`. Three further logic tests cover the native-size default surviving a reopen, crop-edge and quarter-turn rounding, and the two-at-a-time thumbnail queue releasing everything when a node is removed.
+- `tests/test_packaging.py` checks what ships around the node: every input and output has a tooltip, the Korean locale covers the node definition exactly (names, tooltips, option labels), the example workflows match `INPUT_TYPES` (widget count and order, value ranges, link consistency), and the version in `pyproject.toml`, the changelog and this README agree.
+- Releases: bump `pyproject.toml`, add the entry to `CHANGELOG.md`, merge to `main` and tag `v<version>`. `.github/workflows/publish_action.yml` then publishes to the Comfy Registry; it needs a `REGISTRY_ACCESS_TOKEN` repository secret (an API key of the publisher named in `pyproject.toml`, created at registry.comfy.org) and skips with a notice until one is set.
 - Not covered by automation: interaction inside a live ComfyUI session, and the Vue-based "Node 2.0" renderer. The extension sets `options.hidden` for that renderer and swaps `draw`/`computeSize` for the legacy canvas; only the legacy path is exercised by the tests.
 
 ## Credits

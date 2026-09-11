@@ -690,30 +690,89 @@ class MultiStitchImages:
             "required": {
                 # Keep the first five widgets in the original v1 order so older
                 # saved workflows load without widget-value shifting.
-                "direction": (["right", "down", "left", "up"], {"default": "right"}),
-                "match_image_size": ("BOOLEAN", {"default": False}),
-                "spacing_width": ("INT", {"default": 0, "min": 0, "max": 1024, "step": 2}),
-                "spacing_color": (["white", "black", "red", "green", "blue", "custom"], {"default": "white"}),
-                "images_json": ("STRING", {"default": "[]", "multiline": True}),
-                "layout_mode": (["strip", "grid"], {"default": "strip"}),
-                "grid_columns": ("INT", {"default": 3, "min": 1, "max": 16, "step": 1}),
-                "custom_spacing_color": ("STRING", {"default": "#808080"}),
+                "direction": (["right", "down", "left", "up"], {
+                    "default": "right",
+                    "tooltip": "Strip: where each next image goes. Grid: the fill order — "
+                               "right/left fill row by row, down/up fill column by column.",
+                }),
+                "match_image_size": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Scale every image to the first image: its height (or width) in a strip, "
+                               "fitted inside its cell in a grid. Off keeps each image at its own size.",
+                }),
+                "spacing_width": ("INT", {
+                    "default": 0, "min": 0, "max": 1024, "step": 2,
+                    "tooltip": "Gap between images in pixels, filled with spacing_color. Odd values work too.",
+                }),
+                "spacing_color": (["white", "black", "red", "green", "blue", "custom"], {
+                    "default": "white",
+                    "tooltip": "Colour of the gaps and of any letterbox area around a smaller image. "
+                               "custom uses custom_spacing_color.",
+                }),
+                "images_json": ("STRING", {
+                    "default": "[]", "multiline": True,
+                    "tooltip": "The pasted image list with each crop, rotation and flip. "
+                               "Managed by the node's own UI and hidden.",
+                }),
+                "layout_mode": (["strip", "grid"], {
+                    "default": "strip",
+                    "tooltip": "strip: one row or one column. grid: rows and columns, grid_columns wide.",
+                }),
+                "grid_columns": ("INT", {
+                    "default": 3, "min": 1, "max": 16, "step": 1,
+                    "tooltip": "Number of columns in grid mode. The rows follow from the image count.",
+                }),
+                "custom_spacing_color": ("STRING", {
+                    "default": "#808080",
+                    "tooltip": "Hex colour (#RRGGBB) used when spacing_color is custom. "
+                               "Pick it with the colour button on the node.",
+                }),
                 # Later additions stay after the original widgets so saved
                 # workflows keep their widget values aligned; defaults reproduce
                 # the previous behaviour exactly.
-                "output_limit": (list(_OUTPUT_LIMITS), {"default": "none"}),
-                "output_limit_px": ("INT", {"default": 2048, "min": 64, "max": 16384, "step": 8}),
-                "grid_cell_width": ("INT", {"default": 0, "min": 0, "max": 16384, "step": 8}),
-                "grid_cell_height": ("INT", {"default": 0, "min": 0, "max": 16384, "step": 8}),
-                "output_cells": ("BOOLEAN", {"default": False}),
+                "output_limit": (list(_OUTPUT_LIMITS), {
+                    "default": "none",
+                    "tooltip": "Scale the finished result down so its width, height or long side is at most "
+                               "output_limit_px. Never scales up. none keeps the native size.",
+                }),
+                "output_limit_px": ("INT", {
+                    "default": 2048, "min": 64, "max": 16384, "step": 8,
+                    "tooltip": "Pixel cap used by output_limit.",
+                }),
+                "grid_cell_width": ("INT", {
+                    "default": 0, "min": 0, "max": 16384, "step": 8,
+                    "tooltip": "Grid only: fixed cell width in pixels; every image is fitted inside the cell, "
+                               "never stretched. 0 sizes the cells from the largest image.",
+                }),
+                "grid_cell_height": ("INT", {
+                    "default": 0, "min": 0, "max": 16384, "step": 8,
+                    "tooltip": "Grid only: fixed cell height in pixels; every image is fitted inside the cell, "
+                               "never stretched. 0 sizes the cells from the largest image.",
+                }),
+                "output_cells": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Also fill the cells output with one frame per image, each centred in a uniform "
+                               "cell, for using the references separately. Off: cells repeats the stitched image.",
+                }),
             },
             "optional": {
                 # Frames from a connected batch are appended after the pasted
                 # images, so a generated or upscaled result can be stitched
                 # without saving and re-adding it.
-                "images": ("IMAGE",),
-                "cells_resolution": (["placed", "source"], {"default": "placed"}),
-                "minimum_image_side": ("INT", {"default": 0, "min": 0, "max": 131072}),
+                "images": ("IMAGE", {
+                    "tooltip": "Optional IMAGE batch appended after the pasted images, so a generated result "
+                               "can be stitched without saving it first.",
+                }),
+                "cells_resolution": (["placed", "source"], {
+                    "default": "placed",
+                    "tooltip": "placed: each cell at the size the image has in the stitched result. "
+                               "source: at the original cropped size, unscaled.",
+                }),
+                "minimum_image_side": ("INT", {
+                    "default": 0, "min": 0, "max": 131072,
+                    "tooltip": "Stop before decoding if any placed image's short side would be smaller than "
+                               "this many pixels. 0 turns the check off.",
+                }),
             },
         }
 
@@ -724,6 +783,11 @@ class MultiStitchImages:
     DESCRIPTION = (
         "Paste multiple images directly into this node with Ctrl+V, click an image to edit, "
         "drag its ≡ handle to reorder, then output a strip or grid."
+    )
+    OUTPUT_TOOLTIPS = (
+        "The stitched strip or grid.",
+        "One frame per image, centred in a uniform cell, when output_cells is on; "
+        "otherwise the stitched image again.",
     )
 
     def stitch(

@@ -1,0 +1,109 @@
+{
+  "MultiStitchImages": {
+    "description": "이미지를 Ctrl+V로 이 노드에 바로 붙여 넣고, 썸네일을 클릭해 자르기·회전·뒤집기를 한 뒤, ≡ 핸들로 순서를 바꿔 한 줄(Strip) 또는 격자(Grid)로 이어 붙입니다.",
+    "inputs": {
+      "direction": {
+        "name": "방향",
+        "tooltip": "Strip: 다음 이미지를 붙이는 방향. Grid: 채우는 순서 — right/left는 행 단위, down/up은 열 단위로 채웁니다. (direction)",
+        "options": {
+          "right": "오른쪽",
+          "down": "아래",
+          "left": "왼쪽",
+          "up": "위"
+        }
+      },
+      "match_image_size": {
+        "name": "첫 이미지 크기에 맞춤",
+        "tooltip": "모든 이미지를 첫 번째 이미지에 맞춥니다. Strip에서는 높이(또는 너비), Grid에서는 셀 안에 맞춰 넣습니다. 끄면 각 이미지가 원래 크기를 유지합니다. (match_image_size)"
+      },
+      "spacing_width": {
+        "name": "간격 (px)",
+        "tooltip": "이미지 사이 간격(픽셀). 간격 색상으로 채워집니다. 홀수도 됩니다. (spacing_width)"
+      },
+      "spacing_color": {
+        "name": "간격 색상",
+        "tooltip": "간격과, 작은 이미지 주변의 여백을 채우는 색입니다. custom이면 사용자 지정 색상을 씁니다. (spacing_color)",
+        "options": {
+          "white": "흰색",
+          "black": "검정",
+          "red": "빨강",
+          "green": "초록",
+          "blue": "파랑",
+          "custom": "사용자 지정"
+        }
+      },
+      "images_json": {
+        "name": "이미지 목록 (내부)",
+        "tooltip": "붙여 넣은 이미지 목록과 각 이미지의 자르기·회전·뒤집기 정보입니다. 노드 UI가 관리하며 숨겨져 있습니다. (images_json)"
+      },
+      "layout_mode": {
+        "name": "배치 방식",
+        "tooltip": "strip: 한 줄 또는 한 열. grid: 여러 행과 열, 열 수는 그리드 열 수를 따릅니다. (layout_mode)",
+        "options": {
+          "strip": "스트립 (한 줄)",
+          "grid": "그리드"
+        }
+      },
+      "grid_columns": {
+        "name": "그리드 열 수",
+        "tooltip": "Grid 모드의 열 수입니다. 행 수는 이미지 개수에 따라 정해집니다. (grid_columns)"
+      },
+      "custom_spacing_color": {
+        "name": "사용자 지정 색상",
+        "tooltip": "간격 색상이 custom일 때 쓰는 16진수 색(#RRGGBB)입니다. 노드의 색상 버튼으로 고릅니다. (custom_spacing_color)"
+      },
+      "output_limit": {
+        "name": "출력 크기 제한",
+        "tooltip": "완성된 결과의 너비·높이·긴 변이 출력 제한 픽셀을 넘지 않도록 축소합니다. 확대는 하지 않습니다. none이면 원본 크기 그대로입니다. (output_limit)",
+        "options": {
+          "none": "없음 (원본 크기)",
+          "max_width": "최대 너비",
+          "max_height": "최대 높이",
+          "max_long_side": "최대 긴 변"
+        }
+      },
+      "output_limit_px": {
+        "name": "출력 제한 픽셀",
+        "tooltip": "출력 크기 제한에 쓰는 픽셀 상한입니다. (output_limit_px)"
+      },
+      "grid_cell_width": {
+        "name": "그리드 셀 너비",
+        "tooltip": "Grid 전용: 셀 너비를 픽셀로 고정합니다. 모든 이미지가 셀 안에 맞춰지며 늘어나지 않습니다. 0이면 가장 큰 이미지 기준으로 셀을 정합니다. (grid_cell_width)"
+      },
+      "grid_cell_height": {
+        "name": "그리드 셀 높이",
+        "tooltip": "Grid 전용: 셀 높이를 픽셀로 고정합니다. 모든 이미지가 셀 안에 맞춰지며 늘어나지 않습니다. 0이면 가장 큰 이미지 기준으로 셀을 정합니다. (grid_cell_height)"
+      },
+      "output_cells": {
+        "name": "개별 셀 출력",
+        "tooltip": "cells 출력에 이미지마다 한 프레임씩, 같은 크기의 셀 가운데에 놓아 내보냅니다. 참조 이미지를 따로 쓸 때 유용합니다. 끄면 cells는 합성 이미지를 그대로 냅니다. (output_cells)"
+      },
+      "images": {
+        "name": "이미지 배치 입력",
+        "tooltip": "선택 입력. 붙여 넣은 이미지 뒤에 이어 붙는 IMAGE 배치입니다. 생성 결과를 저장하지 않고 바로 합칠 수 있습니다. (images)"
+      },
+      "cells_resolution": {
+        "name": "셀 해상도",
+        "tooltip": "placed: 합성 결과에 배치된 크기로. source: 자른 원본 크기 그대로, 축소 없이. (cells_resolution)",
+        "options": {
+          "placed": "배치 크기",
+          "source": "원본 크기"
+        }
+      },
+      "minimum_image_side": {
+        "name": "최소 짧은 변 (px)",
+        "tooltip": "배치된 이미지 중 짧은 변이 이 값보다 작아지는 것이 있으면 디코딩 전에 실행을 멈춥니다. 0이면 검사하지 않습니다. (minimum_image_side)"
+      }
+    },
+    "outputs": {
+      "0": {
+        "name": "이미지",
+        "tooltip": "이어 붙인 Strip 또는 Grid 결과입니다."
+      },
+      "1": {
+        "name": "셀",
+        "tooltip": "개별 셀 출력이 켜져 있으면 이미지마다 한 프레임씩 같은 크기의 셀에 담아 내보내고, 꺼져 있으면 합성 이미지를 그대로 냅니다."
+      }
+    }
+  }
+}
