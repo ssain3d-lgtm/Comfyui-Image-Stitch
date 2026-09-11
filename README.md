@@ -40,7 +40,8 @@
 
 - **툴바 한 줄** `+ Add · Clear · ⧉ Copy · ↶ ↷ · Preview · Options`와 **접히는 고급 옵션** — 기본 상태 위젯 10행 → 5행. 기본값이 아닌 옵션은 접혀 있어도 보입니다.
 - **`⧉ Copy`** — 합성 결과를 Queue 없이 브라우저에서 만들어 클립보드에 넣습니다.
-- **`match_reference`** — `match_image_size`의 기준을 첫 번째 / 가장 큰 / 가장 작은 이미지 중에서 고릅니다. `smallest`면 순서를 바꾸지 않아도 확대 없이 높이가 맞습니다.
+- **`match_image_size` 기본값이 `true`** — 새 노드는 처음부터 이미지 높이(세로 Strip은 너비)를 맞춰 붙입니다. 저장된 워크플로우는 자기 값을 유지합니다.
+- **`match_reference`** — `match_image_size`의 기준을 첫 번째 / 가장 큰 / 가장 작은 이미지 중에서 고릅니다(`Options ▸` 안). `smallest`면 순서를 바꾸지 않아도 확대 없이 높이가 맞습니다.
 - 모든 위젯과 출력에 **툴팁** — 마우스를 올리면 설명이 보입니다.
 - **한국어 UI** — ComfyUI 언어를 한국어로 두면 위젯 이름·선택지·툴팁·노드 설명이 한국어로 표시됩니다.
 - **예제 워크플로우** 2개 — 템플릿 브라우저의 `Comfyui-Image-Stitch` 항목(붙여넣기 → Strip, IMAGE 배치 → Grid + cells).
@@ -48,7 +49,7 @@
 
 ### 1.1에서 달라진 점
 
-- 새 노드는 **원본 크기 유지**가 기본입니다: `match_image_size = false`, `output_limit = none`. 저장된 워크플로우는 자기 설정을 그대로 유지하고 출력 연결도 바뀌지 않습니다.
+- 새 노드는 **원본 크기 유지**가 기본이었습니다: `match_image_size = false`, `output_limit = none` (1.2에서 `match_image_size` 기본값은 다시 `true`가 되었고, `output_limit = none`은 그대로입니다). 저장된 워크플로우는 자기 설정을 그대로 유지하고 출력 연결도 바뀌지 않습니다.
 - `cells` 출력에 **`cells_resolution = source`** 가 추가되어 개별 이미지를 축소 없이 원본 크기로 받을 수 있습니다.
 - **`minimum_image_side`** — 배치된 이미지의 짧은 변이 지정값보다 작아지면 디코딩 전에 실행을 중단합니다(기본 0 = 끄기).
 - 참조 파일이 바뀌면(크기·수정 시각) 노드가 **자동으로 다시 실행**됩니다.
@@ -200,7 +201,7 @@ grid_columns = 3
 - `down` → 위 → 아래, 좌 → 우
 - `up` → 아래 → 위, 좌 → 우
 
-`match_image_size = true`이면 **기준 이미지**의 크기를 셀 기준으로 사용하고 다른 이미지는 종횡비를 유지한 채 Fit 합니다. Strip에서는 기준 이미지의 높이(세로 Strip은 너비)에 맞춥니다. 기준은 `match_reference`로 고릅니다(켜면 나타나는 위젯).
+`match_image_size = true`이면 **기준 이미지**의 크기를 셀 기준으로 사용하고 다른 이미지는 종횡비를 유지한 채 Fit 합니다. Strip에서는 기준 이미지의 높이(세로 Strip은 너비)에 맞춥니다. 기준은 `match_reference`로 고릅니다(`match_image_size`가 켜져 있을 때 툴바 `Options ▸` 안에 있습니다).
 
 - `first` (기본) — 목록의 첫 번째 이미지(편집 여부와 무관). ComfyUI 기본 Stitch Images와 같은 규칙입니다.
 - `largest` — 가로 Strip에서는 가장 높은 이미지, 세로 Strip에서는 가장 넓은 이미지, Grid에서는 면적이 가장 큰 이미지. 나머지가 **확대**됩니다.
@@ -210,7 +211,7 @@ grid_columns = 3
 
 ## 미리보기 · 목록 · 편집 이력
 
-**툴바와 Options** — 위젯 아래 한 줄에 `+ Add · Clear · ⧉ Copy · ↶ ↷ · Preview · Options`가 있고, 버튼용 위젯 행은 없습니다. 자주 쓰지 않는 옵션(`output_limit` 이후: 출력 제한, Grid 셀 크기, `output_cells`, `cells_resolution`, `minimum_image_side`)은 **`Options ▸`를 눌러야 보입니다**. 단 **기본값이 아닌 값은 접혀 있어도 항상 표시**되고 `Options ▸ (2)`처럼 개수를 알려 주므로, 숨은 설정이 몰래 결과를 바꾸는 일은 없습니다. 접힘 여부는 워크플로우에 저장됩니다. 기본 상태의 위젯은 `direction`, `match_image_size`, `spacing_width`, `spacing_color`, `layout_mode`(Grid면 `grid_columns`) 다섯 개입니다.
+**툴바와 Options** — 위젯 아래 한 줄에 `+ Add · Clear · ⧉ Copy · ↶ ↷ · Preview · Options`가 있고, 버튼용 위젯 행은 없습니다. 자주 쓰지 않는 옵션(`output_limit` 이후: 출력 제한, Grid 셀 크기, `output_cells`, `cells_resolution`, `minimum_image_side`, `match_reference`)은 **`Options ▸`를 눌러야 보입니다**. 단 **기본값이 아닌 값은 접혀 있어도 항상 표시**되고 `Options ▸ (2)`처럼 개수를 알려 주므로, 숨은 설정이 몰래 결과를 바꾸는 일은 없습니다. 접힘 여부는 워크플로우에 저장됩니다. 기본 상태의 위젯은 `direction`, `match_image_size`, `spacing_width`, `spacing_color`, `layout_mode`(Grid면 `grid_columns`) 다섯 개입니다.
 
 **최종 합성 미리보기** — 썸네일 위의 띠에 실제 배치(Strip/Grid, 방향, 간격, 배경색, 출력 크기 제한)를 축소해 보여줍니다. 백엔드와 **같은 레이아웃 계산**(`_layout` ↔ `layoutPlacements`)을 쓰고 CI에서 픽셀 단위로 대조하므로, Queue 전에 보이는 배치가 곧 결과입니다. 툴바의 **`Preview`** 버튼으로 끄고 켤 수 있고(워크플로우에 저장), 아직 로드되지 않았거나 없는 이미지는 `?` 자리표시자로 표시됩니다.
 
@@ -235,7 +236,7 @@ grid_columns = 3
 | 위젯 | 값 | 기본값 |
 | --- | --- | --- |
 | `direction` | `right` / `down` / `left` / `up` | `right` |
-| `match_image_size` | `true` / `false` | `false` |
+| `match_image_size` | `true` / `false` | `true` |
 | `spacing_width` | `0` – `1024` (step 2) | `0` |
 | `spacing_color` | `white` / `black` / `red` / `green` / `blue` / `custom` | `white` |
 | `layout_mode` | `strip` / `grid` | `strip` |
@@ -250,7 +251,7 @@ grid_columns = 3
 | `match_reference` | `first` / `largest` / `smallest` — `match_image_size`가 켜졌을 때 기준 이미지 | `first` |
 | `images` (입력) | 선택 IMAGE 배치 — 붙여넣은 이미지 뒤에 추가 | — |
 
-`output_limit`부터 `minimum_image_side`까지는 툴바의 `Options ▸`를 열어야 보이는 고급 옵션입니다(기본값이 아닌 값은 항상 표시). `match_reference`는 `match_image_size`를 켜면 나타납니다. `spacing_width`는 홀수도 동작합니다 — step 2는 위젯의 증감 단위일 뿐입니다. 목록에 없는 값을 API로 직접 넣으면 조용히 기본값으로 바뀌지 않고 **에러가 발생**합니다.
+`output_limit`부터 `minimum_image_side`까지는 툴바의 `Options ▸`를 열어야 보이는 고급 옵션입니다(기본값이 아닌 값은 항상 표시). `match_reference`도 같은 고급 옵션이며 `match_image_size`가 켜져 있을 때만 관련이 있습니다. `spacing_width`는 홀수도 동작합니다 — step 2는 위젯의 증감 단위일 뿐입니다. 목록에 없는 값을 API로 직접 넣으면 조용히 기본값으로 바뀌지 않고 **에러가 발생**합니다.
 
 ## Spacing Color
 
@@ -268,7 +269,7 @@ white / black / red / green / blue / custom
 
 ## Output Size Safety Guard
 
-여러 장의 고해상도 이미지를 `match_image_size = false`(기본값)로 길게 붙이면 결과 Tensor가 매우 커질 수 있습니다. 이 노드는 실행 시 **파일 헤더만 읽어** (픽셀 디코딩 없이 — EXIF 방향까지 헤더에서 계산) 최종 캔버스 크기와 각 원본의 크기를 먼저 확인합니다.
+여러 장의 고해상도 이미지를 `match_image_size = false`로 길게 붙이면 결과 Tensor가 매우 커질 수 있습니다. 이 노드는 실행 시 **파일 헤더만 읽어** (픽셀 디코딩 없이 — EXIF 방향까지 헤더에서 계산) 최종 캔버스 크기와 각 원본의 크기를 먼저 확인합니다.
 
 합성은 **한 장씩 스트리밍**됩니다: 캔버스를 먼저 할당하고, 원본을 하나 디코딩해 제자리에 넣은 뒤 바로 해제합니다. 따라서 이미지가 몇 장이든 작업 메모리에는 주로 **캔버스 + 처리 중인 원본·리사이즈 버퍼**가 존재합니다. `output_cells=true`이면 셀 배치도 보관합니다. 원본 한 장의 한도는 Crop 이후가 아니라 **디코딩되는 원본 전체 크기** 기준입니다 — 작은 영역만 잘라 써도 디코딩 비용은 원본 전체이기 때문입니다.
 
@@ -357,7 +358,8 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 
 - **One toolbar row** `+ Add · Clear · ⧉ Copy · ↶ ↷ · Preview · Options` and **folded advanced options** — a fresh node shows five widget rows instead of ten. A non-default option stays visible while folded.
 - **`⧉ Copy`** renders the stitched result in the browser and puts it on the clipboard without queueing.
-- **`match_reference`** — choose the image `match_image_size` matches to: first, largest or smallest. `smallest` lines images up without upscaling and without reordering.
+- **`match_image_size` defaults to `true`** — a new node lines images up by height (width in a vertical strip) from the start. Saved workflows keep their own value.
+- **`match_reference`** — choose the image `match_image_size` matches to: first, largest or smallest (under `Options ▸`). `smallest` lines images up without upscaling and without reordering.
 - **Tooltips** on every widget and output.
 - **Korean UI** — with ComfyUI's locale set to Korean, widget names, option labels, tooltips and the node description are shown in Korean.
 - **Two example workflows** in the template browser under `Comfyui-Image-Stitch` (paste → strip, IMAGE batch → grid + cells).
@@ -365,7 +367,7 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 
 ### What changed in 1.1
 
-- New nodes keep **native size** by default: `match_image_size = false`, `output_limit = none`. Saved workflows keep their own settings, and the output slots are unchanged.
+- New nodes kept **native size** by default: `match_image_size = false`, `output_limit = none` (1.2 returns `match_image_size` to `true`; `output_limit = none` stays). Saved workflows keep their own settings, and the output slots are unchanged.
 - The `cells` output gains **`cells_resolution = source`** for the individual images at their original size, unscaled.
 - **`minimum_image_side`** stops execution before decoding when any placed image's short side would fall below the value (default 0 = off).
 - A referenced file that changes on disk (size or modification time) makes the node **re-execute automatically**.
@@ -513,7 +515,7 @@ Grid fill order follows `direction`.
 - `down` → top-to-bottom, then left-to-right
 - `up` → bottom-to-top, then left-to-right
 
-With `match_image_size = true`, a **reference image** defines the cell size and the remaining images are fit into that cell while preserving aspect ratio; in a strip the others take the reference's height (width in a vertical strip). `match_reference` picks it (the widget appears when matching is on).
+With `match_image_size = true`, a **reference image** defines the cell size and the remaining images are fit into that cell while preserving aspect ratio; in a strip the others take the reference's height (width in a vertical strip). `match_reference` picks it (under `Options ▸` in the toolbar while `match_image_size` is on).
 
 - `first` (default) — the first image in the list, edited or not; the same rule as ComfyUI's built-in Stitch Images.
 - `largest` — the tallest image in a horizontal strip, the widest in a vertical one, the largest by area in a grid. The others are **enlarged**.
@@ -523,7 +525,7 @@ The reference keeps its own size, and on a tie the earlier image wins. No reorde
 
 ## Preview · list · edit history
 
-**Toolbar and Options** — one row under the widgets holds `+ Add · Clear · ⧉ Copy · ↶ ↷ · Preview · Options`; no widget rows are spent on buttons. The options most workflows never touch (everything from `output_limit` on: the output cap, Grid cell size, `output_cells`, `cells_resolution`, `minimum_image_side`) appear only after **`Options ▸`** is clicked. Any of them holding a **non-default value stays visible even when folded**, and the pill counts them (`Options ▸ (2)`), so a hidden setting can never quietly change the output. The fold state is saved with the workflow. A node in its default state shows five widgets: `direction`, `match_image_size`, `spacing_width`, `spacing_color`, `layout_mode` (plus `grid_columns` for Grid).
+**Toolbar and Options** — one row under the widgets holds `+ Add · Clear · ⧉ Copy · ↶ ↷ · Preview · Options`; no widget rows are spent on buttons. The options most workflows never touch (everything from `output_limit` on: the output cap, Grid cell size, `output_cells`, `cells_resolution`, `minimum_image_side`, `match_reference`) appear only after **`Options ▸`** is clicked. Any of them holding a **non-default value stays visible even when folded**, and the pill counts them (`Options ▸ (2)`), so a hidden setting can never quietly change the output. The fold state is saved with the workflow. A node in its default state shows five widgets: `direction`, `match_image_size`, `spacing_width`, `spacing_color`, `layout_mode` (plus `grid_columns` for Grid).
 
 **Composite preview** — the band above the thumbnails shows the real arrangement (Strip/Grid, direction, spacing, background colour, output cap) scaled down. It uses the **same layout maths** as the backend (`_layout` ↔ `layoutPlacements`), compared pixel for pixel in CI, so what you see before queueing is what you get. The **`Preview`** button in the toolbar toggles it (saved with the workflow); an image that is still loading or missing shows as a `?` placeholder.
 
@@ -548,7 +550,7 @@ Hover any widget or output slot for its **tooltip**; the table below is the summ
 | Widget | Values | Default |
 | --- | --- | --- |
 | `direction` | `right` / `down` / `left` / `up` | `right` |
-| `match_image_size` | `true` / `false` | `false` |
+| `match_image_size` | `true` / `false` | `true` |
 | `spacing_width` | `0` – `1024` (step 2) | `0` |
 | `spacing_color` | `white` / `black` / `red` / `green` / `blue` / `custom` | `white` |
 | `layout_mode` | `strip` / `grid` | `strip` |
@@ -563,7 +565,7 @@ Hover any widget or output slot for its **tooltip**; the table below is the summ
 | `match_reference` | `first` / `largest` / `smallest` — the reference image while `match_image_size` is on | `first` |
 | `images` (input) | optional IMAGE batch, appended after the pasted images | — |
 
-`output_limit` through `minimum_image_side` are advanced options, shown after `Options ▸` in the toolbar (a non-default value is always shown). `match_reference` appears once `match_image_size` is on. Odd `spacing_width` values work — the step of 2 is only the widget's increment. A value outside the listed set, passed directly through the API, **raises an error** rather than being silently replaced with the default.
+`output_limit` through `minimum_image_side` are advanced options, shown after `Options ▸` in the toolbar (a non-default value is always shown). `match_reference` is one of them and only matters while `match_image_size` is on. Odd `spacing_width` values work — the step of 2 is only the widget's increment. A value outside the listed set, passed directly through the API, **raises an error** rather than being silently replaced with the default.
 
 ## Spacing Color
 
@@ -581,7 +583,7 @@ A PNG with transparency is composited onto that background color.
 
 ## Output Size Safety Guard
 
-A long strip of high-resolution images can create a very large float32 tensor, especially with `match_image_size = false` (the default). At run time the node reads **only the file headers** (no pixel decoding — EXIF orientation is taken from the header too) to check the final canvas size and the size of every original first.
+A long strip of high-resolution images can create a very large float32 tensor, especially with `match_image_size = false`. At run time the node reads **only the file headers** (no pixel decoding — EXIF orientation is taken from the header too) to check the final canvas size and the size of every original first.
 
 Composition then **streams one source at a time**: the canvas is allocated up front, each original is decoded, placed and released before the next one is read. Whatever the image count, working memory mainly holds **the canvas plus the current original and resize buffers**; `output_cells=true` also retains the cells batch. The per-image limit is measured on the **full decoded original, not the crop** — a small crop still costs a full decode.
 

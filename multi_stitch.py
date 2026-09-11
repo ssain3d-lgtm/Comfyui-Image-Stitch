@@ -735,7 +735,7 @@ class MultiStitchImages:
                                "right/left fill row by row, down/up fill column by column.",
                 }),
                 "match_image_size": ("BOOLEAN", {
-                    "default": False,
+                    "default": True,
                     "tooltip": "Scale every image to the reference image (match_reference, the first by default): "
                                "its height (or width) in a strip, fitted inside its cell in a grid. "
                                "Off keeps each image at its own size.",
@@ -814,8 +814,8 @@ class MultiStitchImages:
                                "this many pixels. 0 turns the check off.",
                 }),
                 # Added after 1.1: last, so every earlier widget keeps its slot
-                # in saved workflows. Shown by the UI only while
-                # match_image_size is on.
+                # in saved workflows. The UI keeps it under Options, and only
+                # while match_image_size is on.
                 "match_reference": (list(_MATCH_REFERENCES), {
                     "default": "first",
                     "tooltip": "Which image the others are scaled to when match_image_size is on. first: the "

@@ -248,7 +248,7 @@
       },
       "widgets_values": [
         "right",
-        false,
+        true,
         8,
         "black",
         "[]",

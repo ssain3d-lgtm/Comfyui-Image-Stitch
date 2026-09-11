@@ -686,13 +686,20 @@ describe("match reference", () => {
         nodeType.prototype.onWidgetChanged.call(node, name, value, old, widget(node, name));
     };
 
-    it("shows match_reference only while match_image_size is on", () => {
+    it("keeps match_reference under Options while matching is on and hides it when matching is off", () => {
         const node = makeNode(nodeType);
-        assert.equal(widget(node, "match_reference").options.hidden, true);
-        change(node, "match_image_size", true, false);
+        assert.equal(widget(node, "match_image_size").value, true, "matching is on by default");
+        assert.equal(widget(node, "match_reference").options.hidden, true, "folded with the other options");
+        assert.equal(click(node, control.options), true);
         assert.equal(widget(node, "match_reference").options.hidden, false);
         change(node, "match_image_size", false, true);
+        assert.equal(widget(node, "match_reference").options.hidden, true, "irrelevant while matching is off");
+        change(node, "match_image_size", true, false);
+        click(node, control.options);
         assert.equal(widget(node, "match_reference").options.hidden, true);
+        change(node, "match_reference", "smallest", "first");
+        assert.equal(widget(node, "match_reference").options.hidden, false, "a non-default value stays visible");
+        assert.ok(paintedText(nodeType, node).includes("Options ▸ (1)"));
     });
 
     it("matches a strip to the smallest or largest image without reordering", async () => {
@@ -731,12 +738,13 @@ describe("match reference", () => {
 });
 
 describe("native-reference refinements", () => {
-    it("uses original size for new nodes and retains explicit saved matching", () => {
+    it("matches new nodes to the first image and keeps an explicit saved choice", () => {
         const node = makeNode(nodeType);
-        assert.equal(widget(node, "match_image_size").value, false);
-        widget(node, "match_image_size").value = true;
-        nodeType.prototype.onConfigure.call(node, { properties: { multi_stitch_images: "[]" } });
         assert.equal(widget(node, "match_image_size").value, true);
+        assert.equal(widget(node, "match_reference").value, "first");
+        widget(node, "match_image_size").value = false;
+        nodeType.prototype.onConfigure.call(node, { properties: { multi_stitch_images: "[]" } });
+        assert.equal(widget(node, "match_image_size").value, false);
     });
     it("rounds crop edges and quarter-turns exactly like Python", () => {
         assert.deepEqual(shared.cropPixelBox(10, 10, { x: .15, y: .15, w: .3, h: .3 }), { x: 2, y: 2, w: 2, h: 2 });

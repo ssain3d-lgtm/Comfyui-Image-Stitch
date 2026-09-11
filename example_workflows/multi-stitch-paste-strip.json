@@ -72,7 +72,7 @@
       },
       "widgets_values": [
         "right",
-        false,
+        true,
         0,
         "white",
         "[]",

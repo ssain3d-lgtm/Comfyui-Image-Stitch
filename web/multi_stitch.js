@@ -56,6 +56,7 @@ const ADVANCED_DEFAULTS = {
     output_cells: false,
     cells_resolution: "placed",
     minimum_image_side: 0,
+    match_reference: "first",
 };
 
 function visibleWidgetBottom(node) {
@@ -178,6 +179,7 @@ function advancedState(node) {
     const layout = getWidget(node, "layout_mode")?.value || "strip";
     const outputLimit = getWidget(node, "output_limit")?.value || "none";
     const cellsOn = !!getWidget(node, "output_cells")?.value;
+    const matching = !!getWidget(node, "match_image_size")?.value;
     const relevant = {
         output_limit: true,
         output_limit_px: outputLimit !== "none",
@@ -186,6 +188,7 @@ function advancedState(node) {
         output_cells: true,
         cells_resolution: cellsOn,
         minimum_image_side: true,
+        match_reference: matching,
     };
     const active = Object.keys(ADVANCED_DEFAULTS).filter(
         (name) => relevant[name] && !isDefaultValue(getWidget(node, name), ADVANCED_DEFAULTS[name]),
@@ -297,7 +300,7 @@ function readSettings(node) {
     };
     return {
         direction: value("direction", "right"),
-        match: !!value("match_image_size", false),
+        match: !!value("match_image_size", true),
         matchReference: value("match_reference", "first"),
         spacing: Math.max(0, Number(value("spacing_width", 0)) || 0),
         layout: value("layout_mode", "strip"),
@@ -1098,7 +1101,6 @@ function syncConditionalWidgets(node) {
     const layout = getWidget(node, "layout_mode")?.value || "strip";
     const spacingColor = getWidget(node, "spacing_color")?.value || "white";
     setWidgetVisible(getWidget(node, "grid_columns"), layout === "grid");
-    setWidgetVisible(getWidget(node, "match_reference"), !!getWidget(node, "match_image_size")?.value);
     setWidgetVisible(getWidget(node, "custom_color_picker"), spacingColor === "custom");
 
     const { open, relevant, active } = advancedState(node);
