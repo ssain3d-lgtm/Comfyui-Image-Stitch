@@ -145,7 +145,7 @@ const WIDGET_DEFAULTS = [
     ["grid_columns", 3], ["custom_spacing_color", "#808080"],
     ["output_limit", "none"], ["output_limit_px", 2048], ["grid_cell_width", 0],
     ["grid_cell_height", 0], ["output_cells", false],
-    ["cells_resolution", "placed"], ["minimum_image_side", 0],
+    ["cells_resolution", "placed"], ["minimum_image_side", 0], ["match_reference", "first"],
 ];
 
 // A LiteGraph-shaped node with the widgets INPUT_TYPES declares, then run

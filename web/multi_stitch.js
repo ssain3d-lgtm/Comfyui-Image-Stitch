@@ -298,6 +298,7 @@ function readSettings(node) {
     return {
         direction: value("direction", "right"),
         match: !!value("match_image_size", false),
+        matchReference: value("match_reference", "first"),
         spacing: Math.max(0, Number(value("spacing_width", 0)) || 0),
         layout: value("layout_mode", "strip"),
         gridColumns: Math.max(1, Math.min(16, Number(value("grid_columns", 3)) || 3)),
@@ -334,6 +335,7 @@ function plannedLayout(node) {
         layout = layoutPlacements(
             dims, settings.layout, settings.direction, settings.match,
             settings.gridColumns, settings.spacing, settings.cellWidth, settings.cellHeight,
+            settings.matchReference,
         );
     } catch (_) {
         return null;
@@ -1096,6 +1098,7 @@ function syncConditionalWidgets(node) {
     const layout = getWidget(node, "layout_mode")?.value || "strip";
     const spacingColor = getWidget(node, "spacing_color")?.value || "white";
     setWidgetVisible(getWidget(node, "grid_columns"), layout === "grid");
+    setWidgetVisible(getWidget(node, "match_reference"), !!getWidget(node, "match_image_size")?.value);
     setWidgetVisible(getWidget(node, "custom_color_picker"), spacingColor === "custom");
 
     const { open, relevant, active } = advancedState(node);
@@ -1250,10 +1253,31 @@ function dragDistancePx(press, event, localX, localY) {
     return Math.hypot(localX - press.startX, localY - press.startY);
 }
 
+// A widget added after a workflow was saved gets whatever sat in its slot of
+// widgets_values — nothing, or the null a removed button widget left behind.
+// Put the definition's default back so the run does not fail validation.
+function restoreInvalidWidgetValues(node) {
+    const defaults = node._msWidgetDefaults;
+    if (!defaults) return [];
+    const restored = [];
+    for (const widget of node.widgets || []) {
+        if (widget.type === "button" || !defaults.has(widget.name)) continue;
+        const choices = widget.options?.values;
+        const value = widget.value;
+        const invalid = value === undefined || value === null
+            || (Array.isArray(choices) && choices.length > 0 && !choices.includes(value));
+        if (!invalid) continue;
+        widget.value = defaults.get(widget.name);
+        restored.push(widget.name);
+    }
+    return restored;
+}
+
 function setupNode(node) {
     node._msDisposed = false;
     node.previewMediaType = "image";
     node.properties ||= {};
+    node._msWidgetDefaults = new Map((node.widgets || []).map((w) => [w.name, w.value]));
 
     const imagesWidget = getWidget(node, "images_json");
     hideWidget(imagesWidget);
@@ -1296,6 +1320,10 @@ app.registerExtension({
         const configured = nodeType.prototype.onConfigure;
         nodeType.prototype.onConfigure = function (info) {
             const r = configured?.apply(this, arguments);
+            const reset = restoreInvalidWidgetValues(this);
+            if (reset.length) {
+                console.warn(`[Multi Stitch Images] restored defaults for ${reset.join(", ")} (saved workflow predates them)`);
+            }
             const widget = getWidget(this, "images_json");
             const rawWidget = widget?.value;
             const rawProps = info?.properties?.multi_stitch_images || this.properties?.multi_stitch_images;
@@ -1355,7 +1383,7 @@ app.registerExtension({
         const widgetChanged = nodeType.prototype.onWidgetChanged;
         nodeType.prototype.onWidgetChanged = function (name, value, oldValue, widget) {
             const r = widgetChanged?.apply(this, arguments);
-            if (name === "layout_mode" || name === "spacing_color" || name in ADVANCED_DEFAULTS) {
+            if (name === "layout_mode" || name === "spacing_color" || name === "match_image_size" || name in ADVANCED_DEFAULTS) {
                 syncConditionalWidgets(this);
                 scheduleNodeLayout(this);
             }

@@ -38,8 +38,8 @@ const out = {
     grid: (cases.grid || []).map(([n, gc, d]) => gridShape(n, gc, d)),
     forward: (cases.mapping || []).map(([c, t]) => cropSourceToView(c, t)),
     roundtrip: (cases.mapping || []).map(([c, t]) => cropViewToSource(cropSourceToView(c, t), t)),
-    layout: (cases.layout || []).map(([dims, layout, direction, match, gc, sw, cw, ch]) =>
-        layoutPlacements(dims.map(([w, h]) => ({ w, h })), layout, direction, match, gc, sw, cw, ch)),
+    layout: (cases.layout || []).map(([dims, layout, direction, match, gc, sw, cw, ch, ref]) =>
+        layoutPlacements(dims.map(([w, h]) => ({ w, h })), layout, direction, match, gc, sw, cw, ch, ref)),
     limit: (cases.limit || []).map(([w, h, mode, px]) => limitedSize(w, h, mode, px)),
     box: (cases.box || []).map(([w, h, c]) => cropPixelBox(w, h, c)),
 };
@@ -151,10 +151,16 @@ class FrontendParityTests(unittest.TestCase):
             layout_cases.append([
                 dims, rng.choice(ms._LAYOUT_MODES), rng.choice(ms._DIRECTIONS), rng.choice([True, False]),
                 rng.randint(1, 6), rng.choice([0, 1, 3, 7]), *rng.choice([(0, 0), (25, 15), (40, 40), (7, 0)]),
+                rng.choice(ms._MATCH_REFERENCES),
             ])
         # Include sizes that hit exact .5 after scaling, where half-even rounding matters.
-        layout_cases.append([[(4, 1), (5, 2)], "strip", "right", True, 3, 0, 0, 0])
-        layout_cases.append([[(1, 4), (2, 5)], "strip", "down", True, 3, 0, 0, 0])
+        layout_cases.append([[(4, 1), (5, 2)], "strip", "right", True, 3, 0, 0, 0, "first"])
+        layout_cases.append([[(1, 4), (2, 5)], "strip", "down", True, 3, 0, 0, 0, "first"])
+        layout_cases.append([[(5, 2), (4, 1)], "strip", "right", True, 3, 0, 0, 0, "smallest"])
+        # Ties: equal heights, equal areas — the earlier image must win on both sides.
+        layout_cases.append([[(10, 10), (20, 10), (5, 10)], "strip", "right", True, 3, 0, 0, 0, "largest"])
+        layout_cases.append([[(10, 60), (90, 5), (30, 20), (60, 10)], "grid", "down", True, 2, 1, 0, 0, "largest"])
+        layout_cases.append([[(6, 6), (9, 4), (4, 9)], "grid", "up", True, 2, 0, 0, 0, "smallest"])
         limit_cases = [
             [w, h, mode, px]
             for w, h in ((400, 200), (1, 1), (5000, 3), (777, 777), (2048, 1024))
@@ -165,8 +171,10 @@ class FrontendParityTests(unittest.TestCase):
         got = self.run_js({"layout": layout_cases, "limit": limit_cases})
 
         for case, js in zip(layout_cases, got["layout"]):
-            dims, layout, direction, match, columns, spacing, cell_w, cell_h = case
-            width, height, placements = ms._layout(dims, layout, direction, match, columns, spacing, cell_w, cell_h)
+            dims, layout, direction, match, columns, spacing, cell_w, cell_h, reference = case
+            width, height, placements = ms._layout(
+                dims, layout, direction, match, columns, spacing, cell_w, cell_h, match_reference=reference,
+            )
             with self.subTest(layout=case):
                 self.assertEqual((js["width"], js["height"]), (width, height))
                 self.assertEqual(

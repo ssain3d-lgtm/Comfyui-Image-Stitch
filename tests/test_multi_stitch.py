@@ -348,8 +348,12 @@ class MultiStitchTests(unittest.TestCase):
                 "output_cells",
             ],
         )
-        self.assertEqual(list(inputs["optional"]), ["images", "cells_resolution", "minimum_image_side"])
+        self.assertEqual(
+            list(inputs["optional"]), ["images", "cells_resolution", "minimum_image_side", "match_reference"]
+        )
         self.assertEqual(inputs["optional"]["images"][0], "IMAGE")
+        self.assertEqual(inputs["optional"]["match_reference"][0], list(ms._MATCH_REFERENCES))
+        self.assertEqual(inputs["optional"]["match_reference"][1]["default"], "first")
         parameters = inspect.signature(ms.MultiStitchImages.stitch).parameters
         self.assertEqual(list(parameters)[1:], list(required) + list(inputs["optional"]))
         # Defaults reproduce the behaviour before these widgets existed.
@@ -514,6 +518,35 @@ class MultiStitchTests(unittest.TestCase):
                     "white", "#808080", grid_cell_width=cell_w, grid_cell_height=cell_h,
                 )
                 self.assertEqual((image.shape[2], image.shape[1]), (width, height))
+
+    def test_match_reference_picks_the_shared_side_in_a_strip_and_area_in_a_grid(self):
+        """largest/smallest never depend on list order; the reference keeps its size."""
+        dims = [(40, 40), (20, 20), (30, 60)]
+        strip = ms._prepared_strip_dims
+        self.assertEqual(strip(dims, "right", True), [(40, 40), (40, 40), (20, 40)])
+        self.assertEqual(strip(dims, "right", True, "smallest"), [(20, 20), (20, 20), (10, 20)])
+        self.assertEqual(strip(dims, "right", True, "largest"), [(60, 60), (60, 60), (30, 60)])
+        # Vertical strips share the width instead.
+        self.assertEqual(strip(dims, "down", True, "smallest"), [(20, 20), (20, 20), (20, 40)])
+        self.assertEqual(strip(dims, "up", True, "largest"), [(40, 40), (40, 40), (40, 80)])
+        # A tie goes to the earlier image, so nothing moves.
+        self.assertEqual(strip([(10, 10), (20, 10)], "right", True, "largest"), [(10, 10), (20, 10)])
+        self.assertEqual(strip(dims, "right", False, "largest"), dims, "off means native sizes")
+
+        # Grid: the reference by area becomes the cell every image is fitted into.
+        grid = [(10, 60), (90, 5), (30, 20)]
+        width, height, placed = ms._layout(grid, "grid", "right", True, 3, 0, match_reference="largest")
+        self.assertEqual((width, height), (30, 60), "the 10×60 image wins the 600-pixel tie by coming first")
+        self.assertEqual([(w, h) for _, _, w, h in placed], [(10, 60), (10, 1), (10, 7)])
+        width, height, placed = ms._layout(grid, "grid", "right", True, 3, 0, match_reference="smallest")
+        self.assertEqual((width, height), (270, 5))
+        self.assertEqual([(w, h) for _, _, w, h in placed], [(1, 5), (90, 5), (8, 5)])
+        self.assertEqual(ms._layout(grid, "grid", "right", True, 3, 0)[2][1][2:], (10, 1), "first is unchanged")
+
+        with self.assertRaises(ValueError):
+            ms._layout([(1, 1)], "strip", "right", True, 3, 0, match_reference="biggest")
+        with self.assertRaises(ValueError):
+            ms._layout(dims, "strip", "right", False, 3, 0, match_reference="biggest")
 
     def test_strip_left_and_up_draw_the_first_image_last(self):
         dims = [(4, 2), (6, 2), (2, 2)]

@@ -41,6 +41,7 @@ export function gridShape(count, gridColumns, direction) {
 
 export const DIRECTIONS = ["right", "down", "left", "up"];
 export const LAYOUT_MODES = ["strip", "grid"];
+export const MATCH_REFERENCES = ["first", "largest", "smallest"];
 export const OUTPUT_LIMITS = ["none", "max_width", "max_height", "max_long_side"];
 
 // Python's round() is half-to-even; Math.round is half-up. The backend sizes
@@ -60,18 +61,32 @@ function requireChoice(name, value, allowed) {
 }
 
 // Mirrors _prepared_strip_dims: sizes after match_image_size, in list order.
-export function preparedStripDims(dims, direction, matchImageSize) {
-    if (!matchImageSize || dims.length <= 1) return dims.map((d) => ({ w: d.w, h: d.h }));
-    const first = dims[0];
-    const prepared = [{ w: first.w, h: first.h }];
-    for (const { w, h } of dims.slice(1)) {
-        if (direction === "left" || direction === "right") {
-            prepared.push({ w: Math.max(1, roundHalfEven(w * (first.h / h))), h: first.h });
-        } else {
-            prepared.push({ w: first.w, h: Math.max(1, roundHalfEven(h * (first.w / w))) });
-        }
+// Mirrors _reference_index: the image the others are matched to. "largest"
+// and "smallest" go by the shared side in a strip (height when horizontal,
+// width when vertical) and by area in a grid; the earlier image wins a tie.
+export function referenceIndex(dims, layoutMode, direction, matchReference) {
+    requireChoice("match_reference", matchReference, MATCH_REFERENCES);
+    if (matchReference === "first" || dims.length <= 1) return 0;
+    const keys = dims.map((d) => (layoutMode === "grid" ? d.w * d.h
+        : (direction === "left" || direction === "right") ? d.h : d.w));
+    let best = 0;
+    for (let i = 1; i < keys.length; i++) {
+        if (matchReference === "largest" ? keys[i] > keys[best] : keys[i] < keys[best]) best = i;
     }
-    return prepared;
+    return best;
+}
+
+export function preparedStripDims(dims, direction, matchImageSize, matchReference = "first") {
+    if (!matchImageSize || dims.length <= 1) return dims.map((d) => ({ w: d.w, h: d.h }));
+    const reference = referenceIndex(dims, "strip", direction, matchReference);
+    const ref = dims[reference];
+    return dims.map(({ w, h }, index) => {
+        if (index === reference) return { w, h };
+        if (direction === "left" || direction === "right") {
+            return { w: Math.max(1, roundHalfEven(w * (ref.h / h))), h: ref.h };
+        }
+        return { w: ref.w, h: Math.max(1, roundHalfEven(h * (ref.w / w))) };
+    });
 }
 
 // Mirrors _fit_size.
@@ -97,10 +112,11 @@ export function gridPosition(index, rows, cols, direction) {
 // Mirrors the backend _layout exactly: the canvas size and the rect each
 // image occupies, in list order. The preview and the resolution estimate are
 // drawn from this, and a parity test compares it with Python case by case.
-export function layoutPlacements(dimensions, layoutMode, direction, matchImageSize, gridColumns, spacingWidth, cellWidth = 0, cellHeight = 0) {
+export function layoutPlacements(dimensions, layoutMode, direction, matchImageSize, gridColumns, spacingWidth, cellWidth = 0, cellHeight = 0, matchReference = "first") {
     if (!dimensions.length) throw new RangeError("at least one image is required");
     requireChoice("direction", direction, DIRECTIONS);
     requireChoice("layout_mode", layoutMode, LAYOUT_MODES);
+    requireChoice("match_reference", matchReference, MATCH_REFERENCES);
     const spacing = Math.max(0, Math.trunc(Number(spacingWidth) || 0));
     const dims = dimensions.map((d) => ({ w: Math.max(1, Math.trunc(d.w)), h: Math.max(1, Math.trunc(d.h)) }));
 
@@ -112,8 +128,9 @@ export function layoutPlacements(dimensions, layoutMode, direction, matchImageSi
         if (cellW > 0 && cellH > 0) {
             placed = dims.map((d) => fitSize(d.w, d.h, cellW, cellH));
         } else if (matchImageSize) {
-            cellW = dims[0].w;
-            cellH = dims[0].h;
+            const ref = dims[referenceIndex(dims, "grid", direction, matchReference)];
+            cellW = ref.w;
+            cellH = ref.h;
             placed = dims.map((d) => fitSize(d.w, d.h, cellW, cellH));
         } else {
             cellW = Math.max(...dims.map((d) => d.w));
@@ -136,7 +153,7 @@ export function layoutPlacements(dimensions, layoutMode, direction, matchImageSi
         };
     }
 
-    const prepared = preparedStripDims(dims, direction, matchImageSize);
+    const prepared = preparedStripDims(dims, direction, matchImageSize, matchReference);
     const order = prepared.map((_, i) => i);
     if (direction === "left" || direction === "up") order.reverse();
     const horizontal = direction === "left" || direction === "right";

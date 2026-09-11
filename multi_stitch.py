@@ -50,6 +50,7 @@ _ORIENTATIONS_THAT_SWAP_AXES = {5, 6, 7, 8}
 
 _DIRECTIONS = ("right", "down", "left", "up")
 _LAYOUT_MODES = ("strip", "grid")
+_MATCH_REFERENCES = ("first", "largest", "smallest")
 _OUTPUT_LIMITS = ("none", "max_width", "max_height", "max_long_side")
 
 
@@ -283,10 +284,39 @@ def _resize_exact(image: torch.Tensor, height: int, width: int) -> torch.Tensor:
     return resized.movedim(1, -1).clamp_(0.0, 1.0)
 
 
+def _reference_index(
+    dimensions: list[tuple[int, int]],
+    layout_mode: str,
+    direction: str,
+    match_reference: str,
+) -> int:
+    """Which image the others are matched to when match_image_size is on.
+
+    "first" is the list order, as ComfyUI's Stitch Images does. "largest" and
+    "smallest" pick by the side the images share in a strip (height when
+    horizontal, width when vertical) and by area in a grid; on a tie the
+    earlier image wins. The reference keeps its own size, so "smallest" never
+    enlarges anything and "largest" never shrinks a strip. Mirrored by
+    referenceIndex in web/shared.js.
+    """
+    match_reference = _require_choice("match_reference", match_reference, _MATCH_REFERENCES)
+    if match_reference == "first" or len(dimensions) <= 1:
+        return 0
+    if layout_mode == "grid":
+        keys = [w * h for w, h in dimensions]
+    elif direction in {"left", "right"}:
+        keys = [h for _, h in dimensions]
+    else:
+        keys = [w for w, _ in dimensions]
+    target = max(keys) if match_reference == "largest" else min(keys)
+    return keys.index(target)
+
+
 def _prepared_strip_dims(
     dimensions: list[tuple[int, int]],
     direction: str,
     match_image_size: bool,
+    match_reference: str = "first",
 ) -> list[tuple[int, int]]:
     """Size of each strip image after match_image_size, in list order.
 
@@ -295,13 +325,16 @@ def _prepared_strip_dims(
     """
     if not match_image_size or len(dimensions) <= 1:
         return list(dimensions)
-    first_w, first_h = dimensions[0]
-    prepared = [dimensions[0]]
-    for w, h in dimensions[1:]:
-        if direction in {"left", "right"}:
-            prepared.append((max(1, int(round(w * (first_h / h)))), first_h))
+    reference = _reference_index(dimensions, "strip", direction, match_reference)
+    ref_w, ref_h = dimensions[reference]
+    prepared = []
+    for index, (w, h) in enumerate(dimensions):
+        if index == reference:
+            prepared.append((w, h))
+        elif direction in {"left", "right"}:
+            prepared.append((max(1, int(round(w * (ref_h / h)))), ref_h))
         else:
-            prepared.append((first_w, max(1, int(round(h * (first_w / w))))))
+            prepared.append((ref_w, max(1, int(round(h * (ref_w / w))))))
     return prepared
 
 
@@ -375,6 +408,7 @@ def _layout(
     spacing_width: int,
     grid_cell_width: int = 0,
     grid_cell_height: int = 0,
+    match_reference: str = "first",
 ) -> tuple[int, int, list[Placement]]:
     """Canvas size and the (x, y, w, h) each image occupies, in list order.
 
@@ -387,6 +421,7 @@ def _layout(
 
     direction = _require_choice("direction", direction, _DIRECTIONS)
     layout_mode = _require_choice("layout_mode", layout_mode, _LAYOUT_MODES)
+    match_reference = _require_choice("match_reference", match_reference, _MATCH_REFERENCES)
     spacing_width = max(0, int(spacing_width))
     dims = [(max(1, int(w)), max(1, int(h))) for w, h in dimensions]
 
@@ -398,7 +433,7 @@ def _layout(
             # An explicit cell: every image is fitted into it, never stretched.
             placed = [_fit_size(w, h, cell_w, cell_h) for w, h in dims]
         elif match_image_size:
-            cell_w, cell_h = dims[0]
+            cell_w, cell_h = dims[_reference_index(dims, "grid", direction, match_reference)]
             placed = [_fit_size(w, h, cell_w, cell_h) for w, h in dims]
         else:
             cell_w = max(w for w, _ in dims)
@@ -417,7 +452,7 @@ def _layout(
             placements,
         )
 
-    prepared = _prepared_strip_dims(dims, direction, match_image_size)
+    prepared = _prepared_strip_dims(dims, direction, match_image_size, match_reference)
     order = list(range(len(prepared)))
     if direction in {"left", "up"}:
         order.reverse()
@@ -451,11 +486,13 @@ def _estimate_output_dimensions(
     spacing_width: int,
     grid_cell_width: int = 0,
     grid_cell_height: int = 0,
+    match_reference: str = "first",
 ) -> tuple[int, int]:
     """Exact canvas size, from the same layout the composition fills."""
     out_w, out_h, _ = _layout(
         dimensions, layout_mode, direction, match_image_size,
         grid_columns, spacing_width, grid_cell_width, grid_cell_height,
+        match_reference=match_reference,
     )
     return out_w, out_h
 
@@ -574,6 +611,7 @@ def _compose_from(
     output_cells: bool = False,
     cells_resolution: str = "placed",
     minimum_image_side: int = 0,
+    match_reference: str = "first",
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Compose from lazy sources: each loader is called once, in list order.
 
@@ -593,6 +631,7 @@ def _compose_from(
     out_w, out_h, placements = _layout(
         dimensions, layout_mode, direction, match_image_size,
         grid_columns, spacing_width, grid_cell_width, grid_cell_height,
+        match_reference=match_reference,
     )
     _validate_output_dimensions(out_w, out_h)
     final_w, final_h = _limited_size(out_w, out_h, output_limit, output_limit_px)
@@ -697,8 +736,9 @@ class MultiStitchImages:
                 }),
                 "match_image_size": ("BOOLEAN", {
                     "default": False,
-                    "tooltip": "Scale every image to the first image: its height (or width) in a strip, "
-                               "fitted inside its cell in a grid. Off keeps each image at its own size.",
+                    "tooltip": "Scale every image to the reference image (match_reference, the first by default): "
+                               "its height (or width) in a strip, fitted inside its cell in a grid. "
+                               "Off keeps each image at its own size.",
                 }),
                 "spacing_width": ("INT", {
                     "default": 0, "min": 0, "max": 1024, "step": 2,
@@ -773,6 +813,17 @@ class MultiStitchImages:
                     "tooltip": "Stop before decoding if any placed image's short side would be smaller than "
                                "this many pixels. 0 turns the check off.",
                 }),
+                # Added after 1.1: last, so every earlier widget keeps its slot
+                # in saved workflows. Shown by the UI only while
+                # match_image_size is on.
+                "match_reference": (list(_MATCH_REFERENCES), {
+                    "default": "first",
+                    "tooltip": "Which image the others are scaled to when match_image_size is on. first: the "
+                               "first in the list. largest / smallest: the tallest or shortest image in a "
+                               "horizontal strip (widest or narrowest in a vertical one), the largest or "
+                               "smallest by area in a grid. The reference keeps its own size, so smallest "
+                               "never enlarges anything.",
+                }),
             },
         }
 
@@ -808,6 +859,7 @@ class MultiStitchImages:
         images=None,
         cells_resolution="placed",
         minimum_image_side=0,
+        match_reference="first",
     ):
         try:
             items = json.loads(images_json or "[]")
@@ -860,6 +912,7 @@ class MultiStitchImages:
             output_cells=output_cells,
             cells_resolution=cells_resolution,
             minimum_image_side=minimum_image_side,
+            match_reference=match_reference,
         )
 
     @classmethod

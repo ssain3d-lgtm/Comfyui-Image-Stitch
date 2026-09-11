@@ -40,6 +40,7 @@
 
 - **툴바 한 줄** `+ Add · Clear · ⧉ Copy · ↶ ↷ · Preview · Options`와 **접히는 고급 옵션** — 기본 상태 위젯 10행 → 5행. 기본값이 아닌 옵션은 접혀 있어도 보입니다.
 - **`⧉ Copy`** — 합성 결과를 Queue 없이 브라우저에서 만들어 클립보드에 넣습니다.
+- **`match_reference`** — `match_image_size`의 기준을 첫 번째 / 가장 큰 / 가장 작은 이미지 중에서 고릅니다. `smallest`면 순서를 바꾸지 않아도 확대 없이 높이가 맞습니다.
 - 모든 위젯과 출력에 **툴팁** — 마우스를 올리면 설명이 보입니다.
 - **한국어 UI** — ComfyUI 언어를 한국어로 두면 위젯 이름·선택지·툴팁·노드 설명이 한국어로 표시됩니다.
 - **예제 워크플로우** 2개 — 템플릿 브라우저의 `Comfyui-Image-Stitch` 항목(붙여넣기 → Strip, IMAGE 배치 → Grid + cells).
@@ -199,7 +200,13 @@ grid_columns = 3
 - `down` → 위 → 아래, 좌 → 우
 - `up` → 아래 → 위, 좌 → 우
 
-`match_image_size = true`이면 **목록의 첫 번째 이미지**(편집 여부와 무관) 크기를 셀 기준으로 사용하고 다른 이미지는 종횡비를 유지한 채 Fit 합니다. Strip에서도 같은 기준을 씁니다. `direction`이 `left` / `up`이면 그 첫 번째 이미지가 화면상 **마지막**에 그려집니다.
+`match_image_size = true`이면 **기준 이미지**의 크기를 셀 기준으로 사용하고 다른 이미지는 종횡비를 유지한 채 Fit 합니다. Strip에서는 기준 이미지의 높이(세로 Strip은 너비)에 맞춥니다. 기준은 `match_reference`로 고릅니다(켜면 나타나는 위젯).
+
+- `first` (기본) — 목록의 첫 번째 이미지(편집 여부와 무관). ComfyUI 기본 Stitch Images와 같은 규칙입니다.
+- `largest` — 가로 Strip에서는 가장 높은 이미지, 세로 Strip에서는 가장 넓은 이미지, Grid에서는 면적이 가장 큰 이미지. 나머지가 **확대**됩니다.
+- `smallest` — 반대로 가장 낮은/좁은/작은 이미지. 나머지가 **축소**되므로 어떤 이미지도 확대되지 않아 화질이 유지됩니다.
+
+기준 이미지는 원래 크기를 유지하고, 같은 값이면 앞선 이미지가 기준이 됩니다. 순서를 바꾸지 않아도 되므로, 세로 사진 옆에 작은 가로 사진을 붙일 때 `smallest`로 두면 세로 사진만 줄어 나란히 맞습니다. `direction`이 `left` / `up`이면 첫 번째 이미지가 화면상 **마지막**에 그려집니다.
 
 ## 미리보기 · 목록 · 편집 이력
 
@@ -240,9 +247,10 @@ grid_columns = 3
 | `output_cells` | `true` / `false` | `false` |
 | `cells_resolution` | `placed` / `source` (output_cells 사용 시 표시) | `placed` |
 | `minimum_image_side` | `0` = 검사 끄기 / 최대 131072px | `0` |
+| `match_reference` | `first` / `largest` / `smallest` — `match_image_size`가 켜졌을 때 기준 이미지 | `first` |
 | `images` (입력) | 선택 IMAGE 배치 — 붙여넣은 이미지 뒤에 추가 | — |
 
-`output_limit`부터 `minimum_image_side`까지는 툴바의 `Options ▸`를 열어야 보이는 고급 옵션입니다(기본값이 아닌 값은 항상 표시). `spacing_width`는 홀수도 동작합니다 — step 2는 위젯의 증감 단위일 뿐입니다. 목록에 없는 값을 API로 직접 넣으면 조용히 기본값으로 바뀌지 않고 **에러가 발생**합니다.
+`output_limit`부터 `minimum_image_side`까지는 툴바의 `Options ▸`를 열어야 보이는 고급 옵션입니다(기본값이 아닌 값은 항상 표시). `match_reference`는 `match_image_size`를 켜면 나타납니다. `spacing_width`는 홀수도 동작합니다 — step 2는 위젯의 증감 단위일 뿐입니다. 목록에 없는 값을 API로 직접 넣으면 조용히 기본값으로 바뀌지 않고 **에러가 발생**합니다.
 
 ## Spacing Color
 
@@ -349,6 +357,7 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 
 - **One toolbar row** `+ Add · Clear · ⧉ Copy · ↶ ↷ · Preview · Options` and **folded advanced options** — a fresh node shows five widget rows instead of ten. A non-default option stays visible while folded.
 - **`⧉ Copy`** renders the stitched result in the browser and puts it on the clipboard without queueing.
+- **`match_reference`** — choose the image `match_image_size` matches to: first, largest or smallest. `smallest` lines images up without upscaling and without reordering.
 - **Tooltips** on every widget and output.
 - **Korean UI** — with ComfyUI's locale set to Korean, widget names, option labels, tooltips and the node description are shown in Korean.
 - **Two example workflows** in the template browser under `Comfyui-Image-Stitch` (paste → strip, IMAGE batch → grid + cells).
@@ -504,7 +513,13 @@ Grid fill order follows `direction`.
 - `down` → top-to-bottom, then left-to-right
 - `up` → bottom-to-top, then left-to-right
 
-With `match_image_size = true`, the **first image in the list** — edited or not — defines the cell size, and the remaining images are fit into that cell while preserving aspect ratio. Strip mode uses the same reference. With `direction` set to `left` / `up` that first image is drawn **last** on screen.
+With `match_image_size = true`, a **reference image** defines the cell size and the remaining images are fit into that cell while preserving aspect ratio; in a strip the others take the reference's height (width in a vertical strip). `match_reference` picks it (the widget appears when matching is on).
+
+- `first` (default) — the first image in the list, edited or not; the same rule as ComfyUI's built-in Stitch Images.
+- `largest` — the tallest image in a horizontal strip, the widest in a vertical one, the largest by area in a grid. The others are **enlarged**.
+- `smallest` — the shortest / narrowest / smallest image. The others are **reduced**, so nothing is ever upscaled and detail is kept.
+
+The reference keeps its own size, and on a tie the earlier image wins. No reordering is needed: with a tall photo next to a small landscape one, `smallest` shrinks only the tall photo so the two sit side by side. With `direction` set to `left` / `up` the first image is drawn **last** on screen.
 
 ## Preview · list · edit history
 
@@ -545,9 +560,10 @@ Hover any widget or output slot for its **tooltip**; the table below is the summ
 | `output_cells` | `true` / `false` | `false` |
 | `cells_resolution` | `placed` / `source` (shown when `output_cells` is on) | `placed` |
 | `minimum_image_side` | `0` = off, up to `131072` px | `0` |
+| `match_reference` | `first` / `largest` / `smallest` — the reference image while `match_image_size` is on | `first` |
 | `images` (input) | optional IMAGE batch, appended after the pasted images | — |
 
-`output_limit` through `minimum_image_side` are advanced options, shown after `Options ▸` in the toolbar (a non-default value is always shown). Odd `spacing_width` values work — the step of 2 is only the widget's increment. A value outside the listed set, passed directly through the API, **raises an error** rather than being silently replaced with the default.
+`output_limit` through `minimum_image_side` are advanced options, shown after `Options ▸` in the toolbar (a non-default value is always shown). `match_reference` appears once `match_image_size` is on. Odd `spacing_width` values work — the step of 2 is only the widget's increment. A value outside the listed set, passed directly through the API, **raises an error** rather than being silently replaced with the default.
 
 ## Spacing Color
 

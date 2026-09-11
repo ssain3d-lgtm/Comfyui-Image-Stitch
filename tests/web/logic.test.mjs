@@ -680,6 +680,56 @@ describe("copy the stitched result", () => {
     });
 });
 
+describe("match reference", () => {
+    const change = (node, name, value, old) => {
+        widget(node, name).value = value;
+        nodeType.prototype.onWidgetChanged.call(node, name, value, old, widget(node, name));
+    };
+
+    it("shows match_reference only while match_image_size is on", () => {
+        const node = makeNode(nodeType);
+        assert.equal(widget(node, "match_reference").options.hidden, true);
+        change(node, "match_image_size", true, false);
+        assert.equal(widget(node, "match_reference").options.hidden, false);
+        change(node, "match_image_size", false, true);
+        assert.equal(widget(node, "match_reference").options.hidden, true);
+    });
+
+    it("matches a strip to the smallest or largest image without reordering", async () => {
+        const node = plainNode(nodeType);
+        dom.imageSizes.set("a.png", [40, 40]);
+        dom.imageSizes.set("b.png", [20, 20]);
+        setImages(node, [item("a.png"), item("b.png")]);
+        widget(node, "match_image_size").value = true;
+        widget(node, "match_reference").value = "smallest";
+        paintedCalls(nodeType, node);
+        await waitForThumbs(node);
+        // a shrinks to b's height: 20×20 + 20×20.
+        assert.match(paintedText(nodeType, node)[0], /~40×20/);
+        widget(node, "match_reference").value = "largest";
+        // b grows to a's height: 40×40 + 40×40.
+        assert.match(paintedText(nodeType, node)[0], /~80×40/);
+        widget(node, "match_reference").value = "first";
+        assert.match(paintedText(nodeType, node)[0], /~80×40/);
+    });
+
+    it("restores defaults for widget values an older workflow left empty or invalid", () => {
+        const node = makeNode(nodeType);
+        // A 1.1 workflow: no slot for match_reference, and the removed button
+        // widgets left nulls; a combo can also hold a value that no longer exists.
+        widget(node, "match_reference").value = null;
+        widget(node, "output_limit").value = undefined;
+        widget(node, "layout_mode").options.values = ["strip", "grid"];
+        widget(node, "layout_mode").value = "mosaic";
+        widget(node, "spacing_width").value = 8;
+        nodeType.prototype.onConfigure.call(node, { properties: { multi_stitch_images: "[]" } });
+        assert.equal(widget(node, "match_reference").value, "first");
+        assert.equal(widget(node, "output_limit").value, "none");
+        assert.equal(widget(node, "layout_mode").value, "strip");
+        assert.equal(widget(node, "spacing_width").value, 8, "a valid value is kept");
+    });
+});
+
 describe("native-reference refinements", () => {
     it("uses original size for new nodes and retains explicit saved matching", () => {
         const node = makeNode(nodeType);
