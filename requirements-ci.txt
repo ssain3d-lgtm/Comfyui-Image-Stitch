@@ -8,7 +8,7 @@
 
 # What ComfyUI itself provides at runtime, so the node can be imported and run.
 numpy>=1.24,<3
-pillow>=10,<13
+pillow>=12.3.0,<13
 torch>=2.2,<3
 aiohttp>=3.9,<4
 
