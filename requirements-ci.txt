@@ -20,5 +20,5 @@ av>=12,<20
 # the selected B/UP sets, and that upgrade belongs in a reviewed Dependabot PR
 # rather than in the next unrelated push.
 coverage>=7.6,<8
-ruff>=0.15.8,<0.16
+ruff>=0.16.6,<0.17
 pyyaml>=6,<7
