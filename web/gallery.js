@@ -103,10 +103,12 @@ export function storageText(storage) {
 
 async function request(route, init) {
     const response = await api.fetchApi(route, init);
-    let data = null;
+    let data;
     try {
         data = await response.json();
     } catch {
+        // A route that answered with something other than JSON (a proxy error
+        // page, say) still has to produce a readable message below.
         data = null;
     }
     if (!response.ok) {

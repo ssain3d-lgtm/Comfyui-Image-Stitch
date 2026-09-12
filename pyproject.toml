@@ -13,16 +13,3 @@ Repository = "https://github.com/ssain3d-lgtm/Comfyui-Image-Stitch"
 PublisherId = "ssain3d-lgtm"
 DisplayName = "Multi Stitch Images"
 Icon = ""
-
-# Lint settings for `ruff check .`, which CI runs. The line length is generous
-# on purpose: this code keeps a tensor expression or a widget spec on one line
-# rather than wrapping it, and E501 is not in the selected set anyway.
-[tool.ruff]
-target-version = "py310"
-line-length = 140
-
-[tool.ruff.lint]
-# F: pyflakes (unused imports and names, f-string mistakes).
-# E9: syntax and IO errors. B: bugbear (mutable defaults, except-pass, ...).
-# UP: pyupgrade, held to the 3.10 floor by target-version above.
-select = ["F", "E9", "B", "UP"]
