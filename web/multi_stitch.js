@@ -241,7 +241,11 @@ function drawSizePanel(ctx, node, rect) {
     if (!readout) {
         ctx.fillStyle = "#7fb08f";
         ctx.fillText(
-            node._msImages?.length ? "Loading…" : "Add an image: its size becomes the width / height outputs",
+            node._msImages?.length ? "Loading…" : fitText(ctx, [
+                "Add an image: its size becomes the width / height outputs",
+                "Add an image for the width / height outputs",
+                "Add an image",
+            ], box.w - 16),
             rect.x + rect.w / 2, box.y + box.h / 2 + 4,
         );
         ctx.fillText("width / height outputs", rect.x + rect.w / 2, rect.y + rect.h - 12);
@@ -309,6 +313,18 @@ function thumbLayout(node, index) {
         h: THUMB_HEIGHT,
         visible: true,
     };
+}
+
+// With nothing in the list, one dashed box spans the list width so its hint
+// has room; it is the "add" target as well.
+function emptyBoxRect(node) {
+    return { x: 8, y: listTop(node), w: nodeWidth(node) - 16, h: THUMB_HEIGHT, visible: true };
+}
+
+// The longest of `candidates` (longest first) that fits `room` pixels, else
+// the last one, so a caption never runs past its box.
+function fitText(ctx, candidates, room) {
+    return candidates.find((text) => (ctx.measureText?.(text)?.width ?? 0) <= room) ?? candidates[candidates.length - 1];
 }
 
 // Toolbar pills, left to right. Widths are fixed so the whole row fits a
@@ -767,21 +783,33 @@ function drawThumbs(node, ctx) {
             : node._msUnreadable
                 ? "Image list unreadable — kept as-is. Add or Clear to replace."
                 : "Select this node, then Ctrl+V images"];
-    const room = nodeWidth(node) - 18;
-    const status = candidates.find((text) => (ctx.measureText?.(text)?.width ?? 0) <= room) ?? candidates[candidates.length - 1];
-    ctx.fillText(status, 9, top + 12);
+    ctx.fillText(fitText(ctx, candidates, nodeWidth(node) - 18), 9, top + 12);
     drawToolbar(ctx, node);
 
     if (!count && !videos) {
-        const r = thumbLayout(node, 0);
+        const r = emptyBoxRect(node);
         ctx.strokeStyle = "#666";
         ctx.setLineDash([5, 5]);
         ctx.strokeRect(r.x, r.y, r.w, r.h);
         ctx.setLineDash([]);
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(r.x, r.y, r.w, r.h);
+        ctx.clip();
         ctx.fillStyle = "#8f8f8f";
         ctx.textAlign = "center";
-        ctx.fillText("Paste / Drop / Add images or a video", r.x + r.w / 2, r.y + r.h / 2 - 4);
-        ctx.fillText("click an image to edit · drag ≡ to reorder", r.x + r.w / 2, r.y + r.h / 2 + 12);
+        const room = r.w - 16;
+        ctx.fillText(fitText(ctx, [
+            "Paste / Drop / Add images or a video",
+            "Paste / Drop / Add images",
+            "Add images",
+        ], room), r.x + r.w / 2, r.y + r.h / 2 - 4);
+        ctx.fillText(fitText(ctx, [
+            "click an image to edit · drag ≡ to reorder",
+            "click to edit · drag ≡ to reorder",
+            "click to edit",
+        ], room), r.x + r.w / 2, r.y + r.h / 2 + 12);
+        ctx.restore();
         const panel = sizePanelRect(node);
         if (panel) drawSizePanel(ctx, node, panel);
         ctx.restore();
@@ -1956,7 +1984,7 @@ app.registerExtension({
                     return true;
                 }
                 // With no images yet, the dashed box is the "add" target too.
-                if (!listCount(this) && inRect(x, y, thumbLayout(this, 0))) {
+                if (!listCount(this) && inRect(x, y, emptyBoxRect(this))) {
                     chooseFiles(this);
                     stopEvent(event, graphCanvas);
                     return true;

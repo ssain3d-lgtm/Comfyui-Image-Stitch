@@ -225,14 +225,14 @@ export const videoFile = (name = "clip.mp4", type = "video/mp4") => ({ name, typ
 // painted: every string, how many images were drawn and from which sources.
 // `pixelScale` is the canvas transform's device pixels per graph unit (zoom
 // times the HiDPI factor), as ctx.getTransform() would report it.
-export function paintedCalls(nodeType, node, { pixelScale = 1 } = {}) {
+export function paintedCalls(nodeType, node, { pixelScale = 1, measure = () => 8 } = {}) {
     const text = [];
     const sources = [];
     let drawImage = 0;
     const ctx = new Proxy({}, {
         get: (target, key) => (key === "fillText" ? (value) => text.push(String(value))
             : key === "drawImage" ? (source) => { drawImage += 1; sources.push(source); }
-                : key === "measureText" ? () => ({ width: 8 })
+                : key === "measureText" ? (value) => ({ width: measure(String(value)) })
                     : key === "createLinearGradient" ? () => ({ addColorStop() {} })
                         : key === "getTransform" ? () => ({ a: pixelScale, b: 0, c: 0, d: pixelScale, e: 0, f: 0 })
                             : () => {}),

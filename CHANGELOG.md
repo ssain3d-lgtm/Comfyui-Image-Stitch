@@ -23,6 +23,7 @@ All notable changes to **Multi Stitch Images**. The version is the one in `pypro
 - A fresh node shows five widgets (`direction`, `match_image_size`, `spacing_width`, `spacing_color`, `layout_mode`) instead of ten rows.
 - The status line uses the full node width; the controls moved to the toolbar.
 - The thumbnail list no longer scrolls: the node grows downward so every row is visible (the fixed-height list from 1.0 is gone; only the width is resizable).
+- The empty dashed box spans the list width instead of one grid cell, so its hint fits inside it; a caption that would still be wider than its box (the empty box, the size panel's hint, the status line) is replaced by a shorter one rather than drawn past the edge.
 
 ### Tests
 - The logic suite follows the new geometry and adds a toolbar/folded-options suite; the browser suite's card coordinate follows.

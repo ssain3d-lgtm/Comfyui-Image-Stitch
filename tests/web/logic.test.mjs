@@ -391,6 +391,40 @@ describe("toolbar and folded options", () => {
     });
 });
 
+describe("empty box", () => {
+    it("spans the list width and keeps its hint inside", () => {
+        const node = plainNode(nodeType);
+        dom.inputs.length = 0;
+        // The right end of the list, past the first grid cell: still the add target.
+        assert.equal(click(node, [420 - 8 - 10, LIST_TOP + 40]), true);
+        assert.equal(dom.inputs.length, 1, "the dashed box is as wide as the list");
+        assert.equal(click(node, [420 - 8 + 4, LIST_TOP + 40]), false, "but stops at the list's edge");
+        assert.equal(dom.inputs.length, 1);
+        for (const input of dom.inputs) input.remove();
+
+        // 7px per character: the full hint fits a 404px box.
+        const wide = paintedCalls(nodeType, node, { measure: (t) => t.length * 7 }).text;
+        assert.ok(wide.includes("Paste / Drop / Add images or a video"));
+        assert.ok(wide.includes("click an image to edit · drag ≡ to reorder"));
+
+        // 11px per character: the full hint would run past the box, so a shorter one is drawn.
+        const narrow = paintedCalls(nodeType, node, { measure: (t) => t.length * 11 }).text;
+        assert.ok(narrow.includes("Paste / Drop / Add images"));
+        assert.ok(!narrow.includes("Paste / Drop / Add images or a video"));
+        assert.ok(narrow.includes("click to edit · drag ≡ to reorder"));
+        assert.ok(!narrow.includes("click an image to edit · drag ≡ to reorder"));
+    });
+
+    it("shortens the size panel's hint the same way", () => {
+        const node = plainNode(nodeType);
+        node.properties.multi_stitch_size_panel = true;
+        // 8.5px per character: the long hint (57 chars) is wider than the 372px box, the middle one fits.
+        const narrow = paintedCalls(nodeType, node, { measure: (t) => t.length * 8.5 }).text;
+        assert.ok(narrow.includes("Add an image for the width / height outputs"));
+        assert.ok(!narrow.some((t) => /its size becomes/.test(t)));
+    });
+});
+
 describe("preview", () => {
     it("draws every image into the band and reports the final size after the output cap", async () => {
         const node = makeNode(nodeType);
