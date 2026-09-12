@@ -187,7 +187,6 @@ class FrontendParityTests(unittest.TestCase):
             with self.subTest(limit=(w, h, mode, px)):
                 self.assertEqual((js["w"], js["h"]), ms._limited_size(w, h, mode, px))
 
-    @unittest.skipUnless(hasattr(ms, "_reference_size"), "backend size outputs not merged yet")
     def test_reference_size_matches_python(self):
         """The width/height outputs: reference choice, megapixel rescale, half-even snapping."""
         rng = random.Random(777)
