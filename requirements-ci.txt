@@ -21,4 +21,4 @@ av>=12,<20
 # rather than in the next unrelated push.
 coverage>=7.6,<8
 ruff>=0.15.8,<0.16
-pyyaml>=6,<7
+pyyaml>=6.0.3,<7
