@@ -1,6 +1,8 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { openCropEditor } from "./crop_editor.js";
+import { openGallery } from "./gallery.js";
+import { installDomView, refreshDomView, removeDomView, vueNodesEnabled } from "./dom_view.js";
 import { canvasToPngFile, captureFileName, formatTime, openFramePicker } from "./frame_picker.js";
 import {
     commitImages,
@@ -168,16 +170,22 @@ function toggleSizePanel(node) {
 
 // The toggle in the title bar, left of the frontend's help badge at the
 // right end (the title runs from -titleHeight() to 0 in node space).
+// The title bar's own buttons, right to left from the 34px ComfyUI keeps for
+// its `?`: the gallery first, as an icon, then the size panel.
+function galleryButtonRect(node) {
+    const title = titleHeight();
+    const h = 20;
+    return { x: nodeWidth(node) - 34 - 26, y: -title + Math.round((title - h) / 2), w: 26, h };
+}
+
 function sizeButtonRect(node) {
     const title = titleHeight();
     const w = 64;
     const h = 20;
-    return { x: nodeWidth(node) - 34 - w, y: -title + Math.round((title - h) / 2), w, h };
+    return { x: galleryButtonRect(node).x - 4 - w, y: -title + Math.round((title - h) / 2), w, h };
 }
 
-function drawSizeButton(ctx, node) {
-    const r = sizeButtonRect(node);
-    const on = sizePanelEnabled(node);
+function drawTitleButton(ctx, r, label, on, font = "11px sans-serif") {
     ctx.save();
     ctx.fillStyle = on ? "rgba(74,222,128,.22)" : "rgba(255,255,255,.10)";
     ctx.fillRect(r.x, r.y, r.w, r.h);
@@ -185,10 +193,19 @@ function drawSizeButton(ctx, node) {
     ctx.lineWidth = 1;
     ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
     ctx.fillStyle = on ? "#c9f7d9" : "#dcdcdc";
-    ctx.font = "11px sans-serif";
+    ctx.font = font;
     ctx.textAlign = "center";
-    ctx.fillText(on ? "📐 Size ✓" : "📐 Size", r.x + r.w / 2, r.y + 14);
+    ctx.fillText(label, r.x + r.w / 2, r.y + 14, r.w - 4);
     ctx.restore();
+}
+
+function drawGalleryButton(ctx, node) {
+    drawTitleButton(ctx, galleryButtonRect(node), "🖼", false, "12px sans-serif");
+}
+
+function drawSizeButton(ctx, node) {
+    const on = sizePanelEnabled(node);
+    drawTitleButton(ctx, sizeButtonRect(node), on ? "📐 Size ✓" : "📐 Size", on);
 }
 
 function gcd(a, b) {
@@ -422,6 +439,12 @@ function thumbActionRects(r) {
 // widgets above them and the preview band need. Only the width is kept.
 function updateNodeSize(node) {
     if (!node) return;
+    // In Vue node mode the DOM widget reports the height it needs and the
+    // frontend lays the node out; imposing the canvas geometry would fight it.
+    if (node._msDomView) {
+        refreshDomView(node);
+        return;
+    }
     const width = nodeWidth(node);
     const height = heightForRows(node, rowsOf(node));
     node.size ||= [width, 0];
@@ -819,6 +842,140 @@ function drawVideoCard(ctx, entry, r) {
     ctx.restore();
 }
 
+// What the node says about itself above the toolbar. `measure` and `room`
+// pick the longest phrasing that fits; the DOM view leaves them out and lets
+// CSS do the eliding.
+// The files every open node still uses, so the gallery's clean-up never
+// deletes something a workflow on screen points at.
+function filesInUse() {
+    const names = new Set();
+    for (const node of app.graph?._nodes || []) {
+        if (node.type !== NODE_TYPE) continue;
+        for (const item of node._msImages || []) {
+            if ((item.subfolder || "multi_stitch") === "multi_stitch") names.add(item.filename);
+        }
+    }
+    return [...names];
+}
+
+// The composition a node is holding right now, in the shape the gallery saves.
+function currentComposition(node) {
+    const predicted = predictedSize(node);
+    const settings = {};
+    for (const widget of node.widgets || []) {
+        if (widget.name !== "images_json" && widget.type !== "button") settings[widget.name] = widget.value;
+    }
+    return {
+        images: (node._msImages || []).map((item) => ({ ...item })),
+        settings,
+        size: predicted ? [predicted.w, predicted.h] : undefined,
+    };
+}
+
+// Everything the DOM view for Vue nodes needs. It holds no state of its own:
+// every reader and every action here is what the canvas UI uses, so the two
+// renderings cannot drift apart.
+// Built on first use rather than at module load: some of the functions below
+// are declared further down the file.
+let domViewActions = null;
+const DOM_VIEW_ACTIONS = () => (domViewActions ||= {
+    items: (node) => node._msImages || [],
+    videos: (node) => node._msVideos || [],
+    status: (node) => statusText(node),
+    canUndo, canRedo,
+    previewOn: previewEnabled,
+    optionsOn: advancedOpen,
+    optionsCount: (node) => advancedState(node).active.length,
+    sizePanelOn: sizePanelEnabled,
+    thumb: (node, item) => loadTransformedThumb(node, item),
+    drawThumb: drawContained,
+    drawPreview: (ctx, node, rect) => drawPreview(ctx, node, rect),
+    drawSizePanel: (ctx, node, rect) => drawSizePanel(ctx, node, rect),
+    add: (node) => { if (!cancelUpload(node)) chooseFiles(node); },
+    addFiles,
+    clear: clearAllImages,
+    copy: copyStitchedResult,
+    undo, redo,
+    togglePreview: (node) => { if (node._msImages?.length) togglePreview(node); },
+    toggleOptions: toggleAdvanced,
+    toggleSizePanel,
+    openGallery: (node) => openGalleryFor(node),
+    edit: openEditor,
+    remove: removeImageAt,
+    move: moveItem,
+    openVideo: openVideoPicker,
+    removeVideo,
+    resized: (node) => node.graph?.setDirtyCanvas(true, true),
+});
+
+// The canvas draws nothing in ComfyUI's Vue node mode, so the same list is
+// rendered as DOM there instead. Installed once per node, and only in that
+// mode: the classic canvas keeps its own drawing.
+function setupDomView(node) {
+    if (!vueNodesEnabled(app)) return;
+    installDomView(node, DOM_VIEW_ACTIONS());
+}
+
+function openGalleryFor(node) {
+    if (node._msGallery) return;
+    try {
+        const handles = openGallery(node, {
+            load: (entry) => loadComposition(node, entry, false),
+            append: (entry) => loadComposition(node, entry, true),
+            current: () => currentComposition(node),
+            keep: filesInUse,
+            onClose: () => {
+                if (node._msGallery === handles) node._msGallery = null;
+                node.graph?.setDirtyCanvas(true, true);
+            },
+        });
+        node._msGallery = handles;
+    } catch (error) {
+        node._msGallery = null;
+        notify("Gallery unavailable", error?.message || String(error), "error");
+    }
+}
+
+// A gallery entry back into the node: its images replace or extend the list,
+// and on a replace its settings come with them, since a composition is the
+// images and the settings together.
+function loadComposition(node, entry, append) {
+    const items = normalizeItems(entry?.images || []);
+    if (!items.length) throw new Error("this entry has no images left");
+    const next = append ? [...(node._msImages || []), ...items] : items;
+    if (next.length > MAX_IMAGES) throw new Error(`that would be ${next.length} images; the limit is ${MAX_IMAGES}`);
+    if (!append) {
+        for (const [name, value] of Object.entries(entry?.settings || {})) {
+            const widget = getWidget(node, name);
+            if (widget && widget.type !== "button" && name !== "images_json") widget.value = value;
+        }
+        updateCustomColorButton(node);
+    }
+    applyImages(node, next);
+    notify("Gallery", append ? `Added ${items.length} image${items.length === 1 ? "" : "s"}.` : `Loaded ${items.length} image${items.length === 1 ? "" : "s"} and their settings.`);
+}
+
+function statusText(node, measure = null, room = 0) {
+    const count = node._msImages?.length || 0;
+    const predicted = predictedSize(node);
+    const noun = `${count} image${count === 1 ? "" : "s"}`;
+    const estimate = predicted
+        ? `  •  ~${predicted.w}×${predicted.h}${predicted.skipped ? ` (${predicted.skipped} not loaded)` : ""}`
+        : "";
+    const inputNote = imageInputConnected(node) ? "  + IMAGE input" : "";
+    const videos = node._msVideos?.length || 0;
+    const videoNote = videos ? `  •  ${videos} video${videos === 1 ? "" : "s"} to capture from` : "";
+    const candidates = count
+        ? [`${noun}${estimate}${inputNote}${videoNote}`, `${noun}${estimate}${videoNote}`, `${noun}${estimate}`, noun]
+        : [videos
+            ? `${videos} video${videos === 1 ? "" : "s"} — click the card to capture frames`
+            : node._msUnreadable
+                ? "Image list unreadable — kept as-is. Add or Clear to replace."
+                : "Select this node, then Ctrl+V images"];
+    if (!measure) return candidates[0];
+    return candidates.find((text) => measure(text) <= room) ?? candidates[candidates.length - 1];
+}
+
 function drawThumbs(node, ctx) {
     if (node.flags?.collapsed) return;
 
@@ -829,26 +986,10 @@ function drawThumbs(node, ctx) {
     ctx.save();
     ctx.font = "12px sans-serif";
     ctx.fillStyle = "#b8b8b8";
-    const predicted = predictedSize(node);
-    const noun = `${count} image${count === 1 ? "" : "s"}`;
-    const estimate = predicted
-        ? `  •  ~${predicted.w}×${predicted.h}${predicted.skipped ? ` (${predicted.skipped} not loaded)` : ""}`
-        : "";
-    const inputNote = imageInputConnected(node) ? "  + IMAGE input" : "";
-    const videos = node._msVideos?.length || 0;
-    const videoNote = videos ? `  •  ${videos} video${videos === 1 ? "" : "s"} to capture from` : "";
-    // Longest status that still fits the node.
-    const candidates = count
-        ? [`${noun}${estimate}${inputNote}${videoNote}`, `${noun}${estimate}${videoNote}`, `${noun}${estimate}`, noun]
-        : [videos
-            ? `${videos} video${videos === 1 ? "" : "s"} — click the card to capture frames`
-            : node._msUnreadable
-                ? "Image list unreadable — kept as-is. Add or Clear to replace."
-                : "Select this node, then Ctrl+V images"];
     const room = nodeWidth(node) - 18;
-    const status = candidates.find((text) => (ctx.measureText?.(text)?.width ?? 0) <= room) ?? candidates[candidates.length - 1];
+    const videos = node._msVideos?.length || 0;
     ctx.textAlign = "left";
-    ctx.fillText(status, 9, top + 12, room);
+    ctx.fillText(statusText(node, (text) => ctx.measureText?.(text)?.width ?? 0, room), 9, top + 12, room);
     drawToolbar(ctx, node);
 
     if (!count && !videos) {
@@ -1385,6 +1526,7 @@ function stopEvent(event) {
 function changed(node) {
     // A real edit replaces whatever unreadable text was preserved on load.
     node._msUnreadable = null;
+    refreshDomView(node);
     // The composition changed, so the PNG kept for a repeated Copy is stale.
     node._msCopyRender = null;
     commitImages(node);
@@ -2232,6 +2374,7 @@ app.registerExtension({
         nodeType.prototype.onNodeCreated = function () {
             const r = created?.apply(this, arguments);
             setupNode(this);
+            setupDomView(this);
             return r;
         };
 
@@ -2298,7 +2441,10 @@ app.registerExtension({
             syncConditionalWidgets(this);
             updateNodeSize(this);
             drawThumbs(this, ctx);
-            if (!this.flags?.collapsed) drawSizeButton(ctx, this);
+            if (!this.flags?.collapsed) {
+                drawSizeButton(ctx, this);
+                drawGalleryButton(ctx, this);
+            }
         };
 
         const widgetChanged = nodeType.prototype.onWidgetChanged;
@@ -2318,6 +2464,11 @@ app.registerExtension({
             const primary = event?.button === undefined || event.button === 0;
             if (primary && !this.flags?.collapsed) {
                 const [x, y] = localPos(this, event, pos, graphCanvas);
+                if (inRect(x, y, galleryButtonRect(this))) {
+                    openGalleryFor(this);
+                    stopEvent(event);
+                    return true;
+                }
                 if (inRect(x, y, sizeButtonRect(this))) {
                     toggleSizePanel(this);
                     stopEvent(event);
@@ -2417,6 +2568,9 @@ app.registerExtension({
             extra.push({
                 content: sizePanelEnabled(this) ? "Hide size panel" : "Show size panel (width / height outputs)",
                 callback: () => toggleSizePanel(this),
+            }, {
+                content: "Gallery — compositions this node stitched…",
+                callback: () => openGalleryFor(this),
             });
             if (extra.length && Array.isArray(options)) options.unshift(...extra, null);
             return r;
@@ -2492,6 +2646,8 @@ app.registerExtension({
             nodesWithVideos.delete(this);
             this._msPicker?.close(false);
             this._msEditor?.close?.();
+            this._msGallery?.close?.();
+            removeDomView(this);
             for (const state of this._msThumbCache?.values() || []) state.cancel?.();
             this._msThumbCache?.clear(); this._msTransformedCache?.clear();
             clearTimeout(this._msPreviewRender?.timer);

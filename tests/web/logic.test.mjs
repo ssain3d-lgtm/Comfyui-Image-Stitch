@@ -754,7 +754,7 @@ describe("copy original image", () => {
         // Off a card only the node-wide entry is offered, not the per-image ones.
         const off = [];
         nodeType.prototype.getExtraMenuOptions.call(node, { graph_mouse: [card(node, 0).x + 65, card(node, 0).y - 30] }, off);
-        assert.deepEqual(off.map((o) => o?.content ?? null), ["Copy stitched result", "Show size panel (width / height outputs)", null]);
+        assert.deepEqual(off.map((o) => o?.content ?? null), ["Copy stitched result", "Show size panel (width / height outputs)", "Gallery — compositions this node stitched…", null]);
 
         const options = [];
         nodeType.prototype.getExtraMenuOptions.call(node, { graph_mouse: [card(node, 0).x + 65, card(node, 0).y + 46] }, options);
@@ -852,7 +852,7 @@ describe("copy the stitched result", () => {
         assert.equal(options[0].content, "Copy stitched result");
         const empty = [];
         nodeType.prototype.getExtraMenuOptions.call(plainNode(nodeType), { graph_mouse: [200, 40] }, empty);
-        assert.deepEqual(empty.map((o) => o?.content ?? null), ["Show size panel (width / height outputs)", null], "nothing to copy on an empty node");
+        assert.deepEqual(empty.map((o) => o?.content ?? null), ["Show size panel (width / height outputs)", "Gallery — compositions this node stitched…", null], "nothing to copy on an empty node");
     });
 });
 

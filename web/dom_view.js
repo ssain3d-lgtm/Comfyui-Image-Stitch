@@ -9,7 +9,10 @@
 import { isCropped, isTransformed, normalizeTransform } from "./shared.js";
 import { formatTime } from "./frame_picker.js";
 
-export const DOM_VIEW_WIDGET = "multi_stitch_view";
+// The "$$" prefix marks a widget the frontend must treat as a pseudo widget:
+// it belongs to the view, not to the node's inputs, and must never reach
+// widgets_values, where it would shift every saved value after it.
+export const DOM_VIEW_WIDGET = "$$multi_stitch_view";
 const PREVIEW_H = 150;
 const CARD_H = 92;
 const PANEL_H = 176;
@@ -29,6 +32,9 @@ function installStyles() {
     stylesInstalled = true;
     const style = document.createElement("style");
     style.textContent = `
+/* The rules below set display on elements the view hides with .hidden, and
+   they outrank the browser's [hidden] rule, so say it here. */
+.ms-dom-view [hidden]{display:none!important}
 .ms-dom-view{box-sizing:border-box;width:100%;font:12px/1.3 sans-serif;color:#d0d0d0;display:flex;flex-direction:column;gap:6px;padding:4px 2px;user-select:none}
 .ms-dom-view .status{color:#b8b8b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ms-dom-view .toolbar{display:flex;gap:4px;flex-wrap:wrap}
@@ -57,6 +63,14 @@ function installStyles() {
 .ms-dom-view canvas.panel{width:100%;height:${PANEL_H}px;display:block}
 `;
     document.head.appendChild(style);
+}
+
+// Paint after layout where the browser offers it, and straight away where it
+// does not: an undeclared requestAnimationFrame is a ReferenceError, not
+// undefined, so it cannot simply be called optionally.
+function paintSoon(paint) {
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(paint);
+    else paint();
 }
 
 function button(label, title, onClick) {
@@ -172,7 +186,7 @@ export function installDomView(node, actions) {
             canvas.title = "Click to crop, rotate or flip";
             canvas.addEventListener("click", () => actions.edit(node, index));
             el.appendChild(canvas);
-            requestAnimationFrame?.(() => paintThumb(canvas, (ctx, rect) => actions.drawThumb(ctx, state.image, item.crop, rect)));
+            paintSoon(() => paintThumb(canvas, (ctx, rect) => actions.drawThumb(ctx, state.image, item.crop, rect)));
         } else {
             const text = document.createElement("div");
             text.className = `text${state.failed ? " failed" : ""}`;
@@ -215,7 +229,7 @@ export function installDomView(node, actions) {
             canvas.className = "thumb";
             canvas.addEventListener("click", () => actions.openVideo(node, entry));
             el.appendChild(canvas);
-            requestAnimationFrame?.(() => paintThumb(canvas, (ctx, rect) => actions.drawThumb(ctx, entry.poster, null, rect)));
+            paintSoon(() => paintThumb(canvas, (ctx, rect) => actions.drawThumb(ctx, entry.poster, null, rect)));
         } else {
             const text = document.createElement("div");
             text.className = `text${entry.failed ? " failed" : ""}`;
@@ -257,7 +271,7 @@ export function installDomView(node, actions) {
 
         preview.hidden = !previewOn;
         if (previewOn) {
-            requestAnimationFrame?.(() => paintThumb(preview, (ctx, rect) => actions.drawPreview(ctx, node, rect)));
+            paintSoon(() => paintThumb(preview, (ctx, rect) => actions.drawPreview(ctx, node, rect)));
         }
         if (typeof cards.replaceChildren === "function") cards.replaceChildren();
         else cards.innerHTML = "";
@@ -266,7 +280,7 @@ export function installDomView(node, actions) {
         cards.hidden = !items.length && !videos.length;
         empty.hidden = items.length > 0 || videos.length > 0;
         panel.hidden = !sizeOn;
-        if (sizeOn) requestAnimationFrame?.(() => paintThumb(panel, (ctx, rect) => actions.drawSizePanel(ctx, node, rect)));
+        if (sizeOn) paintSoon(() => paintThumb(panel, (ctx, rect) => actions.drawSizePanel(ctx, node, rect)));
 
         const height = viewHeight(node, actions);
         if (height !== view.height) {
@@ -298,6 +312,8 @@ export function installDomView(node, actions) {
         setValue: () => {},
     });
     if (view.widget) {
+        // The frontend reads this flag on the widget itself, not in options.
+        view.widget.serialize = false;
         view.widget.computeLayoutSize = () => {
             const height = view.height || viewHeight(node, actions);
             return { minHeight: height, maxHeight: height, minWidth: 420 };
