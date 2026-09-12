@@ -3,7 +3,7 @@
 // is a session-only helper (see multi_stitch.js); every capture is handed to
 // `hooks.onCapture(canvas, time)`, which uploads it as an ordinary image.
 import { api } from "../../scripts/api.js";
-import { imageUrl } from "./shared.js";
+import { imageUrl, isModalKey, isTextEntry, swallowKey } from "./shared.js";
 
 const DEFAULT_FRAME_DURATION = 1 / 30;
 // Server mode: frames come from PyAV on the ComfyUI server instead of the
@@ -103,6 +103,9 @@ export function openFramePicker(node, entry, hooks = {}) {
 
     const overlay = document.createElement("div");
     overlay.className = "ms-video-overlay";
+    // Focusable, and focused below, so the keyboard belongs to the modal
+    // instead of the canvas that was clicked to open it.
+    overlay.tabIndex = -1;
     overlay.innerHTML = `
       <div class="ms-video-panel" role="dialog" aria-modal="true">
         <div class="ms-video-head">
@@ -285,27 +288,31 @@ export function openFramePicker(node, entry, hooks = {}) {
     serverFrame.addEventListener("error", () => {
         if (server.active) flash("The server could not render this frame.", true);
     });
-    serverToggle.addEventListener("change", async () => {
-        if (server.active) return;
+    // The checkbox's work, as a function anything can await: a change event's
+    // listener returns at its first await, so dispatching the event and reading
+    // server.capture straight afterwards would read the value from before.
+    const applyServerToggle = async () => {
+        if (server.active) return server.capture;
         if (!serverToggle.checked) {
             server.capture = false;
             flash("");
-            return;
+            return server.capture;
         }
         const meta = await fetchServerInfo();
         if (!meta) {
             serverToggle.checked = false;
             server.capture = false;
             flash(`Server capture unavailable: ${server.error || "PyAV is not installed on the server"}.`, true);
-            return;
+            return server.capture;
         }
         server.capture = true;
         flash("Captures are decoded on the server at the frame shown (exact to the frame).");
-    });
+        return server.capture;
+    };
+    serverToggle.addEventListener("change", () => { applyServerToggle(); });
     const setServerCapture = async (on) => {
         serverToggle.checked = !!on;
-        await serverToggle.handlers?.change?.[0]?.() ?? serverToggle.dispatchEvent?.(new Event("change"));
-        return server.capture;
+        return applyServerToggle();
     };
 
     const onFrame = (_now, metadata) => {
@@ -448,11 +455,17 @@ export function openFramePicker(node, entry, hooks = {}) {
         if (state.closed) return;
         state.closed = true;
         clearTimeout(server.timer);
-        if (keyHandler) document.removeEventListener("keydown", keyHandler);
+        if (keyHandler) document.removeEventListener("keydown", keyHandler, true);
         try {
             video.pause?.();
             video.removeAttribute?.("src");
             video.load?.();
+        } catch (_) { /* the element is going away anyway */ }
+        // A server render may still be on its way: dropping the src abandons
+        // it instead of leaving the server decoding for a closed picker.
+        try {
+            serverFrame.src = "";
+            serverFrame.removeAttribute?.("src");
         } catch (_) { /* the element is going away anyway */ }
         overlay.remove();
         if (removeVideo) hooks.onDone?.();
@@ -521,14 +534,30 @@ export function openFramePicker(node, entry, hooks = {}) {
     });
 
     keyHandler = (event) => {
-        if (event.target === fpsInput) return;
-        if (event.key === "Escape") close(false);
+        if (state.closed) return;
+        // Swallowed first, acted on second: even a key this picker ignores must
+        // not reach the graph underneath.
+        if (isModalKey(event)) swallowKey(event);
+        if (isTextEntry(event.target)) {
+            // Typing in the fps field: Escape leaves the field, the rest is the
+            // field's own business.
+            if (event.key === "Escape") {
+                event.target.blur?.();
+                event.preventDefault();
+            }
+            return;
+        }
+        if (event.key === "Escape") { close(false); event.preventDefault(); }
         else if (event.key === "ArrowLeft") { step(event.shiftKey ? -10 : -1); event.preventDefault(); }
         else if (event.key === "ArrowRight") { step(event.shiftKey ? 10 : 1); event.preventDefault(); }
         else if (event.key === "Enter") { capture(); event.preventDefault(); }
-        else if (event.key === " ") { togglePlay(); event.preventDefault(); }
+        else if (event.key === " " || event.key === "Spacebar") { togglePlay(); event.preventDefault(); }
+        else if (isModalKey(event)) event.preventDefault();
     };
-    document.addEventListener("keydown", keyHandler);
+    // Capture phase: ComfyUI's own handlers sit on the document and the window,
+    // so stopping propagation here is what keeps them from firing.
+    document.addEventListener("keydown", keyHandler, true);
+    overlay.focus?.();
 
     if (entry.serverOnly) {
         // The poster load already showed the browser cannot decode this file.
@@ -541,6 +570,9 @@ export function openFramePicker(node, entry, hooks = {}) {
     return {
         overlay, video, state, seekTo, step, capture, close, currentTime, frameDuration,
         serverFrame, enterServerMode, setServerCapture,
+        // The keyboard handler, so a caller (and a test) can drive it without
+        // a real document.
+        onKey: (event) => keyHandler?.(event),
     };
 }
 

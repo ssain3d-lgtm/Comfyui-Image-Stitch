@@ -45,6 +45,9 @@ export function installDom() {
         set: () => true,
     });
 
+    // The crop editor sizes itself from the bare globals, as a page does.
+    define("innerWidth", 1600);
+    define("innerHeight", 900);
     define("window", {
         innerWidth: 1600,
         innerHeight: 900,
@@ -59,9 +62,24 @@ export function installDom() {
     const overlays = [];
     const videos = [];
     const createElement = (tag) => {
+        const classes = new Set();
         const element = {
             tag,
             style: {},
+            // Enough of classList for the overlays, which toggle a class to show
+            // a state (a pressed flip button, a drop target).
+            classes,
+            classList: {
+                add: (...names) => names.forEach((name) => classes.add(name)),
+                remove: (...names) => names.forEach((name) => classes.delete(name)),
+                contains: (name) => classes.has(name),
+                toggle(name, on) {
+                    const next = on === undefined ? !classes.has(name) : !!on;
+                    if (next) classes.add(name);
+                    else classes.delete(name);
+                    return next;
+                },
+            },
             width: 0,
             height: 0,
             attached: false,
@@ -71,6 +89,15 @@ export function installDom() {
                 (element.handlers[type] ||= []).push(handler);
             },
             removeEventListener: noop,
+            // A real-ish dispatch: the listeners registered for the event's
+            // type, in order, so a test can drive code that uses events
+            // instead of calling handlers by hand.
+            dispatchEvent(event) {
+                for (const handler of element.handlers[event?.type] || []) handler(event);
+                return true;
+            },
+            focus() { element.focused = true; },
+            blur() { element.focused = false; },
             click: noop,
             remove() {
                 element.attached = false;
@@ -128,9 +155,38 @@ export function installDom() {
         append(key, value, name) { this.fields.push([key, value, name]); }
         entries() { return this.fields[Symbol.iterator](); }
     });
-    define("confirm", () => true);
+    define("Event", class { constructor(type) { this.type = type; } });
+    // What confirm() answers, and every question it was asked: a test can make
+    // the user say no.
+    const confirms = { answer: true, asked: [] };
+    define("confirm", (message) => {
+        confirms.asked.push(String(message ?? ""));
+        return confirms.answer;
+    });
     define("alert", noop);
-    define("createImageBitmap", async () => ({ width: 4, height: 4, close: noop }));
+    // Every createImageBitmap call, so a test can check that an original was
+    // decoded at the size the destination needed instead of at full size.
+    const bitmaps = [];
+    define("createImageBitmap", async (blob, options = {}) => {
+        bitmaps.push({ blob, options });
+        return {
+            width: options.resizeWidth || blob?.width || 4,
+            height: options.resizeHeight || blob?.height || 4,
+            close: noop,
+        };
+    });
+    // /view answers with a "blob" carrying the fixture's size, so the bitmap
+    // path has something to decode; an unknown file is a 404, which sends the
+    // caller down its <img> fallback.
+    const installFetch = () => define("fetch", async (url) => {
+        const size = [...imageSizes].find(([name]) => String(url).includes(name))?.[1];
+        if (!size) return { ok: false, status: 404, statusText: "Not Found", blob: async () => null };
+        return {
+            ok: true, status: 200, statusText: "OK",
+            blob: async () => ({ type: "image/png", size: 1, width: size[0], height: size[1] }),
+        };
+    });
+    installFetch();
 
     return {
         listeners,
@@ -139,6 +195,10 @@ export function installDom() {
         overlays,
         videos,
         imageSizes,
+        bitmaps,
+        confirms,
+        // Tests that install their own fetch call this to put the default back.
+        installFetch,
         fire(type, event) {
             for (const handler of [...(listeners.get(type) || [])]) handler(event);
         },
@@ -153,10 +213,13 @@ export async function loadExtension(root) {
     const api = await import(pathToFileURL(join(root, "scripts", "api.js")).href);
     const shared = await import(pathToFileURL(join(root, "pkg", "web", "shared.js")).href);
     const picker = await import(pathToFileURL(join(root, "pkg", "web", "frame_picker.js")).href);
-    await import(pathToFileURL(join(root, "pkg", "web", "multi_stitch.js")).href);
+    // The node module's own exports: the tests drive the same functions the
+    // canvas UI calls, and take their geometry from the same helpers, instead
+    // of repeating coordinates that the real frontend does not even agree with.
+    const ms = await import(pathToFileURL(join(root, "pkg", "web", "multi_stitch.js")).href);
     const nodeType = { prototype: {} };
     await app.extension.beforeRegisterNodeDef(nodeType, { name: "MultiStitchImages" });
-    return { app, api, shared, picker, nodeType };
+    return { app, api, shared, picker, ms, nodeType };
 }
 
 // The widgets INPUT_TYPES declares, in order, with their defaults.
@@ -198,10 +261,26 @@ export function makeNode(nodeType, overrides = {}) {
     return node;
 }
 
-// A node with the preview band off, so card geometry starts right under the
-// widgets (row 0 at y = 118) as the geometry helpers in the tests assume.
+// A node with the preview band off, so the cards start right under the
+// toolbar. Where that is comes from listTop()/thumbLayout(): the harness node
+// has no output socket rows, so the real frontend puts the whole block roughly
+// 118px lower — which is why a test must never hard-code these coordinates.
 export function plainNode(nodeType, overrides = {}) {
     return makeNode(nodeType, { properties: { multi_stitch_preview: false }, ...overrides });
+}
+
+// A LiteGraph canvas as the node sees it. `convertEventToCanvasOffset` is the
+// only path a real window pointermove takes: those events carry clientX/clientY
+// and no canvasX/canvasY, so a drag driven through here exercises the branch
+// the browser actually uses.
+export function graphCanvasStub({ origin = [0, 0], mouse = [0, 0] } = {}) {
+    return {
+        graph_mouse: mouse,
+        convertEventToCanvasOffset: (event) => [
+            Number(event?.clientX ?? 0) - origin[0],
+            Number(event?.clientY ?? 0) - origin[1],
+        ],
+    };
 }
 
 // Assigns a list directly (bypassing upload) at the harness's node size; the
