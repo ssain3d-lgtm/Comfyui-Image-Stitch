@@ -224,6 +224,22 @@ function sizeReadout(node) {
     }
 }
 
+// Wrap explanatory text at measured word boundaries, preserving font size.
+function drawWrappedText(ctx, text, x, centerY, maxWidth, lineHeight = 16) {
+    const lines = [];
+    let line = "";
+    for (const word of text.split(/\s+/)) {
+        const next = line ? `${line} ${word}` : word;
+        if (line && ctx.measureText(next).width > maxWidth) {
+            lines.push(line);
+            line = word;
+        } else line = next;
+    }
+    if (line) lines.push(line);
+    const startY = centerY - (lines.length - 1) * lineHeight / 2;
+    lines.forEach((value, index) => ctx.fillText(value, x, startY + index * lineHeight, maxWidth));
+}
+
 function drawSizePanel(ctx, node, rect) {
     ctx.save();
     ctx.fillStyle = "#0c110d";
@@ -240,9 +256,9 @@ function drawSizePanel(ctx, node, rect) {
     const readout = sizeReadout(node);
     if (!readout) {
         ctx.fillStyle = "#7fb08f";
-        ctx.fillText(
+        drawWrappedText(ctx,
             node._msImages?.length ? "Loading…" : "Add an image: its size becomes the width / height outputs",
-            rect.x + rect.w / 2, box.y + box.h / 2 + 4,
+            rect.x + rect.w / 2, box.y + box.h / 2 + 4, box.w - 20,
         );
         ctx.fillText("width / height outputs", rect.x + rect.w / 2, rect.y + rect.h - 12);
         ctx.restore();
@@ -273,12 +289,12 @@ function drawSizePanel(ctx, node, rect) {
     ctx.font = "13px sans-serif";
     ctx.fillText(
         `${readout.w} x ${readout.h}  |  ${readout.ratio}  |  ${readout.megapixels.toFixed(2)} MP  |  divisible by ${readout.step}`,
-        rect.x + rect.w / 2, rect.y + rect.h - 12,
+        rect.x + rect.w / 2, rect.y + rect.h - 12, rect.w - 16,
     );
     ctx.textAlign = "left";
     ctx.font = "11px sans-serif";
     ctx.fillStyle = "#7fb08f";
-    ctx.fillText(`from image ${readout.index + 1} (${readout.ref.w}×${readout.ref.h})${readout.note}`, box.x + 6, box.y + 14);
+    ctx.fillText(`from image ${readout.index + 1} (${readout.ref.w}×${readout.ref.h})${readout.note}`, box.x + 6, box.y + 14, box.w - 12);
     ctx.restore();
 }
 
@@ -613,7 +629,7 @@ function drawPreview(ctx, node, rect) {
         (imageInputConnected(node) ? "  + IMAGE input at run time" : "");
     ctx.fillRect(rect.x + 1, rect.y + rect.h - 17, rect.w - 2, 16);
     ctx.fillStyle = "#d0d0d0";
-    ctx.fillText(caption, rect.x + 8, rect.y + rect.h - 5);
+    ctx.fillText(caption, rect.x + 8, rect.y + rect.h - 5, rect.w - 16);
 }
 
 function drawCard(ctx, node, item, index, r) {
@@ -769,7 +785,8 @@ function drawThumbs(node, ctx) {
                 : "Select this node, then Ctrl+V images"];
     const room = nodeWidth(node) - 18;
     const status = candidates.find((text) => (ctx.measureText?.(text)?.width ?? 0) <= room) ?? candidates[candidates.length - 1];
-    ctx.fillText(status, 9, top + 12);
+    ctx.textAlign = "left";
+    ctx.fillText(status, 9, top + 12, room);
     drawToolbar(ctx, node);
 
     if (!count && !videos) {
@@ -780,8 +797,13 @@ function drawThumbs(node, ctx) {
         ctx.setLineDash([]);
         ctx.fillStyle = "#8f8f8f";
         ctx.textAlign = "center";
-        ctx.fillText("Paste / Drop / Add images or a video", r.x + r.w / 2, r.y + r.h / 2 - 4);
-        ctx.fillText("click an image to edit · drag ≡ to reorder", r.x + r.w / 2, r.y + r.h / 2 + 12);
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(r.x + 4, r.y + 4, r.w - 8, r.h - 8);
+        ctx.clip();
+        drawWrappedText(ctx, "Paste / Drop / Add images or a video", r.x + r.w / 2, r.y + 30, r.w - 16);
+        drawWrappedText(ctx, "Click to edit · Drag ≡ to reorder", r.x + r.w / 2, r.y + 66, r.w - 16);
+        ctx.restore();
         const panel = sizePanelRect(node);
         if (panel) drawSizePanel(ctx, node, panel);
         ctx.restore();
