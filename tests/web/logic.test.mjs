@@ -1039,6 +1039,40 @@ describe("video frames", () => {
 });
 
 describe("size panel", () => {
+    it("keeps empty-state text inside its card with width-aware measurement", () => {
+        for (const width of [420, 600, 900]) {
+            const node = plainNode(nodeType);
+            node.size[0] = width;
+            node.properties.multi_stitch_size_panel = true;
+            const calls = [];
+            const state = { textAlign: "left" };
+            const stack = [];
+            const ctx = new Proxy(state, {
+                get(target, key) {
+                    if (key === "measureText") return (text) => ({ width: text.length * 7 });
+                    if (key === "fillText") return (text, x, y, maxWidth) => calls.push({ text, x, y, maxWidth, align: target.textAlign });
+                    if (key === "save") return () => stack.push({ ...target });
+                    if (key === "restore") return () => Object.assign(target, stack.pop());
+                    return key in target ? target[key] : () => {};
+                },
+            });
+            nodeType.prototype.onDrawForeground.call(node, ctx);
+            const cardWidth = (width - 30) / 3;
+            const hints = calls.filter((c) => c.y >= LIST_TOP && c.y <= LIST_TOP + 92);
+            assert.ok(hints.length >= 2);
+            assert.match(hints.map((c) => c.text).join(" "), /Paste \/ Drop \/ Add images or a video/);
+            for (const c of hints) {
+                const measured = c.text.length * 7;
+                assert.ok(measured <= cardWidth - 16, `readable line fits at node width ${width}: ${c.text}`);
+                assert.equal(c.align, "center");
+                assert.ok(c.x - measured / 2 >= 8);
+                assert.ok(c.x + measured / 2 <= 8 + cardWidth);
+                assert.ok(c.y - 12 >= LIST_TOP && c.y + 3 <= LIST_TOP + 92);
+            }
+            assert.equal(stack.length, 0, "canvas state is restored");
+        }
+    });
+
     const SIZE_NAMES = ["size_reference", "size_megapixels", "size_divisible_by"];
     // Centre of the title-bar pill: x = 420 − 34 − 64 + 32, y in the 30px title above the body.
     const TITLE_BUTTON = [354, -15];
