@@ -61,6 +61,36 @@ def _entry_paths(entry_id: str) -> tuple[Path, Path]:
     return folder / f"{entry_id}.json", folder / f"{entry_id}.jpg"
 
 
+def _settings_path() -> Path:
+    return _gallery_dir() / "settings.json"
+
+
+def settings() -> dict:
+    """The gallery's own settings. Kept beside the entries rather than in a
+    widget, so adding one never shifts a saved workflow's widget values."""
+    try:
+        with open(_settings_path(), encoding="utf-8") as handle:
+            stored = json.load(handle)
+    except (OSError, ValueError):
+        stored = {}
+    return {"autosave": bool(stored.get("autosave", True)) if isinstance(stored, dict) else True}
+
+
+def set_settings(payload: object) -> tuple[int, dict]:
+    if not isinstance(payload, dict):
+        return 400, {"error": "Multi Stitch Images: expected a JSON object of gallery settings."}
+    current = settings()
+    if "autosave" in payload:
+        current["autosave"] = bool(payload["autosave"])
+    path = _settings_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(current, handle)
+    os.replace(tmp, path)
+    return 200, {"settings": current}
+
+
 def _valid_id(entry_id: object) -> str:
     if not isinstance(entry_id, str) or not _ID_PATTERN.match(entry_id):
         raise ValueError(f"Multi Stitch Images: not a gallery entry id: {entry_id!r}")
@@ -128,7 +158,7 @@ def list_entries() -> list[dict]:
         return []
     entries = []
     for path in folder.glob("*.json"):
-        if not _ID_PATTERN.match(path.stem):
+        if path.name == "settings.json" or not _ID_PATTERN.match(path.stem):
             continue
         entry = _read_entry(path)
         if entry is not None:
@@ -297,7 +327,7 @@ def storage_summary(entries: list[dict] | None = None) -> dict:
 
 def listing() -> dict:
     entries = list_entries()
-    return {"entries": entries, "storage": storage_summary(entries)}
+    return {"entries": entries, "storage": storage_summary(entries), "settings": settings()}
 
 
 def _keep_set(keep: object) -> set[str]:
@@ -380,6 +410,19 @@ def preview_from_tensor(image) -> object:
         small = F.interpolate(small.to(torch.float32), size=target, mode="area")
     array = (small[0].permute(1, 2, 0).clamp(0, 1) * 255).round().to(torch.uint8).cpu().numpy()
     return Image.fromarray(np.ascontiguousarray(array), "RGB")
+
+
+def record_run(images: object, settings_used: object, image=None, *, input_frames: int = 0) -> dict | None:
+    """Records a composition a run just produced, unless autosave is off.
+    Never raises: a gallery problem must not fail someone's workflow."""
+    try:
+        if not settings()["autosave"]:
+            return None
+        preview = preview_from_tensor(image) if image is not None else None
+        size = (int(image.shape[-2]), int(image.shape[-3])) if image is not None else None
+        return record(images, settings_used, preview, size=size, input_frames=input_frames)
+    except Exception:
+        return None
 
 
 def save_request(payload: object, preview=None) -> tuple[int, dict]:

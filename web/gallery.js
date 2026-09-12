@@ -10,6 +10,7 @@ export const GALLERY_ROUTES = {
     rename: "/multi_stitch/gallery/rename",
     delete: "/multi_stitch/gallery/delete",
     cleanup: "/multi_stitch/gallery/cleanup",
+    settings: "/multi_stitch/gallery/settings",
 };
 const PREVIEW_SUBFOLDER = "multi_stitch/gallery";
 
@@ -123,7 +124,6 @@ function postJson(route, body) {
 //   append(entry)  → add the entry's images after the current ones
 //   current()      → { images, settings, size } to save by hand, or null
 //   keep()         → file names the open workflow uses (never deleted by cleanup)
-//   autosave       → { get(), set(enabled) } for the "save every run" toggle
 //   onClose()      → the overlay is gone
 // Returns handles the caller (and the tests) can drive.
 export function openGallery(node, hooks = {}) {
@@ -154,7 +154,7 @@ export function openGallery(node, hooks = {}) {
     const status = overlay.querySelector(".ms-gallery-status");
     const storageEl = overlay.querySelector(".ms-gallery-head .storage");
     const autosaveBox = overlay.querySelector(".autosave");
-    const state = { entries: [], storage: null, busy: false, closed: false };
+    const state = { entries: [], storage: null, settings: { autosave: true }, busy: false, closed: false };
 
     const say = (text, isError = false) => {
         status.textContent = text || "";
@@ -252,7 +252,7 @@ export function openGallery(node, hooks = {}) {
             for (const entry of state.entries) grid.appendChild(card(entry));
         }
         storageEl.textContent = storageText(state.storage);
-        if (autosaveBox) autosaveBox.checked = hooks.autosave?.get?.() !== false;
+        if (autosaveBox) autosaveBox.checked = state.settings.autosave !== false;
     };
 
     const run = async (task) => {
@@ -272,6 +272,7 @@ export function openGallery(node, hooks = {}) {
         const data = await request(GALLERY_ROUTES.list);
         state.entries = Array.isArray(data?.entries) ? data.entries : [];
         state.storage = storage || data?.storage || null;
+        if (data?.settings) state.settings = data.settings;
         render();
     };
 
@@ -292,7 +293,12 @@ export function openGallery(node, hooks = {}) {
         say(`Saved "${result.entry?.name || "entry"}".`);
         await refresh(result.storage);
     }));
-    autosaveBox?.addEventListener("change", () => hooks.autosave?.set?.(!!autosaveBox.checked));
+    autosaveBox?.addEventListener("change", () => run(async () => {
+        const autosave = !!autosaveBox.checked;
+        const result = await postJson(GALLERY_ROUTES.settings, { autosave });
+        state.settings = result?.settings || { autosave };
+        say(autosave ? "Every distinct composition will be recorded when it is stitched." : "New runs will not be recorded; Save current still works.");
+    }));
     overlay.querySelector(".cleanup")?.addEventListener("click", () => run(async () => {
         const storage = state.storage;
         if (!storage?.unreferenced_files) {

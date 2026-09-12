@@ -8,7 +8,7 @@ import { installDom, loadExtension, stageExtension } from "./harness.mjs";
 
 let api, gallery, dom;
 // What the fake server holds; each test resets it.
-const server = { entries: [], storage: null, posts: [] };
+const server = { entries: [], storage: null, settings: { autosave: true }, posts: [] };
 
 const entry = (id, extra = {}) => ({
     id, name: `Set ${id}`, created: 1789200000, used: 1789200000 + Number(id), uses: 1, preview: true,
@@ -27,7 +27,11 @@ before(async () => {
         const body = options.body ? JSON.parse(options.body) : null;
         if (options.method === "POST") server.posts.push({ path, body });
         const ok = (payload) => ({ ok: true, status: 200, json: async () => payload });
-        if (path === "/multi_stitch/gallery") return ok({ entries: server.entries, storage: server.storage });
+        if (path === "/multi_stitch/gallery") return ok({ entries: server.entries, storage: server.storage, settings: server.settings });
+        if (path === "/multi_stitch/gallery/settings") {
+            server.settings = { ...server.settings, ...body };
+            return ok({ settings: server.settings });
+        }
         if (path === "/multi_stitch/gallery/save") {
             const saved = entry("saved", { name: body.name || "2026-09-12 10:00", images: body.images, settings: body.settings });
             server.entries = [saved, ...server.entries];
@@ -51,6 +55,7 @@ before(async () => {
 beforeEach(() => {
     server.entries = [entry("2"), entry("1")];
     server.storage = { files: 31, bytes: 12 * 1024 * 1024, unreferenced_files: 5, unreferenced_bytes: 3 * 1024 * 1024, entries: 2 };
+    server.settings = { autosave: true };
     server.posts.length = 0;
     dom.overlays.length = 0;
 });
@@ -159,10 +164,9 @@ describe("gallery modal", () => {
     });
 
     it("saves the current composition by hand and toggles the autosave", async () => {
-        let autosave = true;
         const current = { images: [{ filename: "x.png", subfolder: "multi_stitch", type: "input" }], settings: { direction: "down" }, size: [10, 20] };
-        const handles = await open({ current: () => current, autosave: { get: () => autosave, set: (v) => { autosave = v; } } });
-        assert.equal(part(handles.overlay, ".autosave").checked, true);
+        const handles = await open({ current: () => current });
+        assert.equal(part(handles.overlay, ".autosave").checked, true, "the server's setting, not a local default");
         fire(part(handles.overlay, ".save"), "click");
         await settle();
         assert.deepEqual(server.posts.at(-1), { path: "/multi_stitch/gallery/save", body: { ...current } });
@@ -171,8 +175,16 @@ describe("gallery modal", () => {
         const box = part(handles.overlay, ".autosave");
         box.checked = false;
         fire(box, "change");
-        assert.equal(autosave, false);
+        await settle();
+        assert.deepEqual(server.posts.at(-1), { path: "/multi_stitch/gallery/settings", body: { autosave: false } });
+        assert.deepEqual(server.settings, { autosave: false });
+        assert.match(part(handles.overlay, ".ms-gallery-status").textContent, /New runs will not be recorded/);
         handles.close();
+
+        server.settings = { autosave: false };
+        const reopened = await open({ current: () => current });
+        assert.equal(part(reopened.overlay, ".autosave").checked, false, "the setting survives a reopen");
+        reopened.close();
 
         const empty = await open({ current: () => ({ images: [] }) });
         fire(part(empty.overlay, ".save"), "click");

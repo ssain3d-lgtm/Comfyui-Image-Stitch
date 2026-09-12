@@ -144,6 +144,32 @@ class GalleryTests(unittest.TestCase):
         small = gallery.preview_from_tensor(torch.ones(1, 20, 30, 3))
         self.assertEqual(small.size, (30, 20), "a small result is not upscaled")
 
+    def test_settings_default_to_autosave_and_survive_a_write(self):
+        self.assertEqual(gallery.settings(), {"autosave": True})
+        self.assertEqual(gallery.listing()["settings"], {"autosave": True})
+        self.assertEqual(gallery.set_settings({"autosave": False}), (200, {"settings": {"autosave": False}}))
+        self.assertEqual(gallery.settings(), {"autosave": False})
+        self.assertEqual(gallery.set_settings({"unrelated": 1})[1], {"settings": {"autosave": False}}, "only known keys change")
+        self.assertEqual(gallery.set_settings("nope")[0], 400)
+        gallery._settings_path().write_text("{not json")
+        self.assertEqual(gallery.settings(), {"autosave": True}, "an unreadable file falls back to the default")
+        self.assertEqual(gallery.list_entries(), [], "settings.json is not an entry")
+
+    def test_record_run_follows_the_autosave_setting_and_never_raises(self):
+        import torch
+        image = torch.zeros(1, 30, 120, 3)
+        entry = gallery.record_run([_item("a.png")], {"direction": "right", "unknown": 2}, image, input_frames=1)
+        self.assertIsNotNone(entry)
+        self.assertEqual((entry["width"], entry["height"], entry["input_frames"]), (120, 30, 1))
+        self.assertTrue(gallery.entry_paths_exist(entry["id"])[1], "a run records a preview")
+        gallery.set_settings({"autosave": False})
+        self.assertIsNone(gallery.record_run([_item("b.png")], {}, image))
+        self.assertEqual(len(gallery.list_entries()), 1)
+        gallery.set_settings({"autosave": True})
+        self.assertIsNone(gallery.record_run("not a list", {}, image), "a bad list is ignored, not raised")
+        self.assertIsNone(gallery.record_run([_item("b.png")], {}, object()), "a bad image is ignored, not raised")
+        self.assertEqual(len(gallery.list_entries()), 1)
+
     def test_image_file_paths_stay_inside_the_folder(self):
         self.assertIsNone(gallery._image_file("../a.png"))
         self.assertIsNone(gallery._image_file("gallery"))
