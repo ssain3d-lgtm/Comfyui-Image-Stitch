@@ -2,9 +2,12 @@
 
 All notable changes to **Multi Stitch Images**. The version is the one in `pyproject.toml`; each release is tagged `v<version>` on `main`.
 
-## 1.2.0 — 2026-09-11
+## 1.2.0 — 2026-09-12
 
 ### Added
+- **Gallery of compositions** (`🖼` in the title bar, left of the `?`): every composition a run stitches — the image list with its crops, order and settings — is recorded with a preview, and any of them can be loaded back into a node or appended to it. Entries are named, renamable, deduplicated (the same composition twice is one entry with a use count) and capped at 200, the least recently used dropped first. `Save current` records without running, and `save every run` can be turned off; the setting lives with the gallery on the server, not in a node widget, so no saved workflow shifts.
+- **Storage clean-up**: the gallery header says how much `input/multi_stitch` holds and how much of it no entry references, and offers to delete exactly that. Deleting an entry keeps its files unless asked; deleting files never touches one that another entry, or a node open in the browser, still uses. Both steps confirm first and say what cannot be detected (a workflow saved on disk).
+- **Vue "Nodes 2.0" support**: in that mode the node body is a Vue component, so nothing canvas-drawn appeared — the status line, toolbar, preview band, thumbnails and size panel were simply missing. They are now also rendered as a DOM widget, reading the same state and calling the same actions as the canvas, so both modes behave alike.
 - **Toolbar row** under the status line: `+ Add · Clear · ⧉ Copy · ↶ ↷ · Preview · Options`. The `Add images…` and `Clear all` button widgets are gone; `+ Add` reads `Cancel k/N` while an upload runs, and the empty dashed box opens the file picker too.
 - **Folded advanced options**: `output_limit`, `output_limit_px`, `grid_cell_width`, `grid_cell_height`, `output_cells`, `cells_resolution` and `minimum_image_side` appear only after `Options ▸`. A non-default value stays visible while folded and is counted on the pill (`Options ▸ (2)`); the fold state is saved with the workflow.
 - **Copy stitched result** (`⧉ Copy`, or the node's context menu): renders the composite in the browser from the original files at the final size and puts it on the clipboard as PNG. Capped at 64 MP; frames from the IMAGE input are not included; an image that failed to load is left as background, and the notice says so.
