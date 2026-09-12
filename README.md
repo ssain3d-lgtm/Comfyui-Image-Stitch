@@ -282,7 +282,7 @@ grid_columns = 3
 | `images` (입력) | 선택 IMAGE 배치 — 붙여넣은 이미지 뒤에 추가 | — |
 | `width` / `height` (출력) | 기준 이미지 크기 → `size_megapixels` → `size_divisible_by` 배수 | — |
 
-`output_limit`부터 `minimum_image_side`까지는 툴바의 `Options ▸`를 열어야 보이는 고급 옵션입니다(기본값이 아닌 값은 항상 표시). `match_reference`도 같은 고급 옵션이며 `match_image_size`가 켜져 있을 때만 관련이 있습니다. `spacing_width`는 홀수도 동작합니다 — step 2는 위젯의 증감 단위일 뿐입니다. 목록에 없는 값을 API로 직접 넣으면 조용히 기본값으로 바뀌지 않고 **에러가 발생**합니다.
+`output_limit`부터 `minimum_image_side`까지는 툴바의 `Options ▸`를 열어야 보이는 고급 옵션입니다(기본값이 아닌 값은 항상 표시). `match_reference`도 같은 고급 옵션이며 `match_image_size`가 켜져 있을 때만 관련이 있습니다. 목록에 없는 값을 API로 직접 넣으면 조용히 기본값으로 바뀌지 않고 **에러가 발생**합니다.
 
 ## Spacing Color
 
@@ -629,7 +629,7 @@ Hover any widget or output slot for its **tooltip**; the table below is the summ
 | `images` (input) | optional IMAGE batch, appended after the pasted images | — |
 | `width` / `height` (outputs) | reference image size → `size_megapixels` → snapped to `size_divisible_by` | — |
 
-`output_limit` through `minimum_image_side` are advanced options, shown after `Options ▸` in the toolbar (a non-default value is always shown). `match_reference` is one of them and only matters while `match_image_size` is on. Odd `spacing_width` values work — the step of 2 is only the widget's increment. A value outside the listed set, passed directly through the API, **raises an error** rather than being silently replaced with the default.
+`output_limit` through `minimum_image_side` are advanced options, shown after `Options ▸` in the toolbar (a non-default value is always shown). `match_reference` is one of them and only matters while `match_image_size` is on. A value outside the listed set, passed directly through the API, **raises an error** rather than being silently replaced with the default.
 
 ## Spacing Color
 
