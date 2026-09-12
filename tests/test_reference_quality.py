@@ -3,6 +3,7 @@ import struct
 import unittest
 import zlib
 from unittest.mock import patch
+import numpy as np
 from PIL import Image, ImageOps
 import torch
 import test_multi_stitch as support
@@ -106,12 +107,55 @@ class ReferenceQualityTests(unittest.TestCase):
         self.assertEqual(ms._item_output_dimensions(item), (30, 20))
         self.assertEqual(tuple(ms._load_image(item).shape), (1, 20, 30, 3))
 
+    def test_tiff_orientation_is_applied_exactly_once_on_every_pillow(self):
+        """Pillow turns a TIFF itself, but tells the caller at different times.
+
+        Up to Pillow 10.x the size before the load is the stored one and only
+        the load swaps it, so the measured size disagreed with the decoded one
+        and the stitch stopped with "the file changed while stitching". From
+        11.0 the swap is published at open. Either way the pixels must be the
+        stored image turned once, and the measurement must predict them.
+        """
+        base = Image.new('RGB', (20, 30))
+        for x in range(20):
+            for y in range(30):
+                base.putpixel((x, y), (x * 12 % 256, y * 8 % 256, 7))
+        crop = {'x': 0.25, 'y': 0.5, 'w': 0.5, 'h': 0.5}
+        for orientation in range(1, 9):
+            exif = Image.Exif(); exif[274] = orientation
+            name = f'turned{orientation}.tiff'
+            base.save(self.root / name, exif=exif)
+            item = {'filename': name}
+            method = ms._ORIENTATION_TRANSPOSES.get(orientation)
+            expected = base if method is None else base.transpose(method)
+            with self.subTest(orientation=orientation):
+                measured = ms._item_output_dimensions(item)
+                self.assertEqual(measured, expected.size, 'the header pass mis-measured the TIFF')
+                tensor = ms._load_image(item)
+                self.assertEqual((tensor.shape[2], tensor.shape[1]), measured)
+                decoded = (tensor[0].numpy() * 255).round().astype('uint8')
+                self.assertTrue(np.array_equal(decoded, np.asarray(expected)), 'turned twice, or not at all')
+                # A crop is measured in the turned coordinates and must land there.
+                box = ms._crop_box(*expected.size, crop)
+                cropped = (ms._load_image(dict(item, crop=crop))[0].numpy() * 255).round().astype('uint8')
+                self.assertTrue(np.array_equal(cropped, np.asarray(expected.crop(box))))
+
     def test_file_replacement_invalidates_execution_cache(self):
         item = self.write_png('replace.png', (255, 0, 0))
         args = dict(images_json=json.dumps([item]))
         before = ms.MultiStitchImages.IS_CHANGED(**args)
+        # The same untouched file twice: the cached result must be reused, or
+        # every queue re-stitches everything.
+        self.assertEqual(before, ms.MultiStitchImages.IS_CHANGED(**args))
+        self.assertIsInstance(before, str)
         self.write_png('replace.png', (0, 0, 255), (10, 10))
-        self.assertNotEqual(before, ms.MultiStitchImages.IS_CHANGED(**args))
+        after = ms.MultiStitchImages.IS_CHANGED(**args)
+        self.assertNotEqual(before, after)
+        self.assertEqual(after, ms.MultiStitchImages.IS_CHANGED(**args))
+        # A file that is gone can never be cached: nan never equals itself.
+        (self.root / 'replace.png').unlink()
+        missing = ms.MultiStitchImages.IS_CHANGED(**args)
+        self.assertNotEqual(missing, missing)
 
     def test_connected_frames_are_lazy_and_shape_is_validated(self):
         frame = torch.zeros((2, 3, 4), dtype=torch.float16)

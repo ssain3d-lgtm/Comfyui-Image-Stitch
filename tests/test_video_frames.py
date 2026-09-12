@@ -50,7 +50,7 @@ def centre(image):
     return image.convert("RGB").getpixel((image.width // 2, image.height // 2))
 
 
-@unittest.skipUnless(HAVE_AV, "PyAV is not installed")
+@support.requires(HAVE_AV, "PyAV is not installed")
 class VideoFrameTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -177,7 +177,47 @@ class VideoFrameTests(unittest.TestCase):
             self.assertBluish(centre(image))
         self.assertEqual(ms._preview_max_side({"max_side": "100000"}), 2048)
         self.assertEqual(ms._preview_max_side({}), 720)
+        # int(inf) raises OverflowError, which used to leave the route at 500.
+        for bad in ("inf", "-inf", "nan", "abc", "", None):
+            with self.subTest(max_side=bad):
+                with self.assertRaisesRegex(ValueError, '"max_side" must be a number of pixels'):
+                    ms._preview_max_side({"max_side": bad})
+                status, body, content_type = ms._video_preview_response(
+                    {"filename": "clip.mp4", "time": 0, "max_side": bad},
+                )
+                self.assertEqual((status, content_type), (400, "application/json"))
+                self.assertIn("error", body)
         self.assertFalse(list(self.input.rglob("*")), "a preview writes nothing")
+
+    def test_a_preview_is_scaled_while_the_frame_is_decoded(self):
+        """swscale scales the native planes; converting a 4K frame to RGB in
+        full and resizing the picture afterwards costs several times as much for
+        the very same result size."""
+        write_clip(self.folder / "wide.mp4", size=(96, 64), frames=4, split="side")
+        for max_side in (7, 32, 33, 96, 720):
+            with self.subTest(max_side=max_side):
+                scale = min(1.0, max_side / 96)
+                image, _ = ms._video_frame_at("wide.mp4", 0.1, max_side)
+                self.assertEqual(image.size, (max(1, round(96 * scale)), max(1, round(64 * scale))))
+                self.assertEqual(image.mode, "RGB")
+        # Nothing is left for Pillow to resize, and the JPEG is the same size.
+        with patch.object(Image.Image, "resize", side_effect=AssertionError("resized after decoding")):
+            status, body, _ = ms._video_preview_response({"filename": "wide.mp4", "time": 0.1, "max_side": "32"})
+        self.assertEqual(status, 200)
+        with Image.open(io.BytesIO(body)) as image:
+            self.assertEqual(image.size, (32, 21))
+            self.assertReddish(image.convert("RGB").getpixel((7, 10)))
+        # A capture keeps the full frame.
+        image, _ = ms._video_frame_at("wide.mp4", 0.1)
+        self.assertEqual(image.size, (96, 64))
+
+        import av
+        if not (hasattr(av.VideoStream, "set_display_rotation") and hasattr(av.VideoFrame, "rotation")):
+            return
+        # A turned clip is capped on the side the viewer sees as the long one.
+        write_clip(self.folder / "turned.mp4", size=(96, 64), frames=4, rotation=-90, split="side")
+        image, _ = ms._video_frame_at("turned.mp4", 0.1, 32)
+        self.assertEqual(image.size, (21, 32))
 
     def test_bad_requests_get_the_right_status(self):
         for name in ("../clip.mp4", "clip.txt", "sub/clip.mp4", "", None):

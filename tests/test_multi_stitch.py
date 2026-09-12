@@ -2,6 +2,7 @@ import importlib
 import importlib.util
 import inspect
 import json
+import os
 import random
 import re
 import sys
@@ -10,6 +11,7 @@ import types
 import unittest
 import weakref
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import torch
@@ -28,6 +30,51 @@ spec = importlib.util.spec_from_file_location("multi_stitch_under_test", MODULE_
 ms = importlib.util.module_from_spec(spec)
 assert spec and spec.loader
 spec.loader.exec_module(ms)
+
+
+CI = bool(os.environ.get("CI"))
+
+
+def requires(available: bool, reason: str):
+    """Gate a TestCase class on an optional tool: skipped here, failed in CI.
+
+    Node, PyAV and aiohttp are all installed by the workflow, so a skip in CI
+    would quietly hide a broken environment instead of reporting it.
+    """
+    if available:
+        return lambda case: case
+    if not CI:
+        return unittest.skip(reason)
+
+    def replace(case):
+        def test_the_optional_dependency_is_installed(self):
+            self.fail(f"{reason}; CI must install it")
+
+        return type(case.__name__, (unittest.TestCase,), {
+            "test_the_optional_dependency_is_installed": test_the_optional_dependency_is_installed,
+        })
+
+    return replace
+
+
+def load_the_whole_image_first(item, background=(1.0, 1.0, 1.0)):
+    """_load_image as it ran before the crop was moved in front of the
+    transforms: orient, flatten, rotate and flip the whole image, crop last.
+    The new order has to select exactly the same pixels.
+    """
+    path = ms._safe_input_path(item)
+    with ms._open_image(path) as source:
+        image = source
+        for method in ms._orientation_methods(ms._exif_orientation(source)):
+            image = image.transpose(method)
+        image = ms._flatten_alpha(image, background)
+        image = ms._apply_transform(image, item)
+        width, height = image.size
+        box = ms._crop_box(width, height, item.get("crop"))
+        if box != (0, 0, width, height):
+            image = image.crop(box)
+        array = np.asarray(image, dtype=np.float32) / 255.0
+    return torch.from_numpy(array).unsqueeze(0)
 
 
 def solid(rgb, h=2, w=2):
@@ -128,13 +175,62 @@ class MultiStitchTests(unittest.TestCase):
         self.assertEqual((tensor.shape[2], tensor.shape[1]), dims)
 
     def test_unsafe_path_is_rejected(self):
-        outside = self.root.parent / "outside.png"
-        Image.new("RGB", (4, 4)).save(outside)
-        try:
-            with self.assertRaisesRegex(ValueError, "unsafe image path"):
-                ms._safe_input_path({"filename": "../outside.png", "type": "input"})
-        finally:
-            outside.unlink(missing_ok=True)
+        """Traversal, absolute paths, drive letters and NUL bytes are refused.
+
+        In its own temporary folder: the parent of the input folder is the
+        system temp directory, which nothing in a test may write to.
+        """
+        with tempfile.TemporaryDirectory() as elsewhere:
+            outside = Path(elsewhere) / "outside.png"
+            Image.new("RGB", (4, 4)).save(outside)
+            for item in (
+                {"filename": "../outside.png"},
+                {"filename": "outside.png", "subfolder": ".."},
+                {"filename": "sub/../../outside.png"},
+                {"filename": str(outside)},
+                {"filename": "C:/outside.png"},
+                {"filename": "C:\\outside.png"},
+                {"filename": ".."},
+                {"filename": "."},
+            ):
+                with self.subTest(**item):
+                    with self.assertRaisesRegex(ValueError, "unsafe image path rejected"):
+                        ms._safe_input_path(dict(item, type="input"))
+            self.assertTrue(outside.is_file(), "nothing outside the input folder is touched")
+
+    def test_a_nul_byte_is_the_nodes_own_error(self):
+        """Python's own "embedded null byte" from os.stat says nothing useful."""
+        for item in ({"filename": "x\x00.png"}, {"filename": "x.png", "subfolder": "s\x00ub"}):
+            with self.subTest(**item):
+                with self.assertRaisesRegex(ValueError, "Multi Stitch Images: unsafe image path rejected"):
+                    ms._safe_input_path(dict(item, type="input"))
+
+    def test_missing_file_names_the_item_not_the_server_path(self):
+        """The absolute path on the server is nothing the user can act on."""
+        with self.assertRaises(FileNotFoundError) as caught:
+            ms._safe_input_path({"filename": "gone.png", "subfolder": "sub", "type": "input"})
+        self.assertEqual(str(caught.exception), "Multi Stitch Images: image not found: sub/gone.png")
+        self.assertNotIn(str(self.root), str(caught.exception))
+
+    def test_a_symlinked_subfolder_inside_input_is_accepted(self):
+        """ComfyUI's own Load Image follows a link inside input/, so this must.
+
+        The check is lexical, like ComfyUI's: it refuses `..`, an absolute path
+        and a NUL byte, and leaves symlinks alone, so a subfolder that lives on
+        another disk still stitches.
+        """
+        with tempfile.TemporaryDirectory() as elsewhere:
+            target = Path(elsewhere)
+            Image.new("RGB", (6, 4), (0, 128, 255)).save(target / "linked.png")
+            try:
+                (self.root / "shared").symlink_to(target, target_is_directory=True)
+            except OSError as exc:  # pragma: no cover - a filesystem without links
+                self.skipTest(f"this filesystem cannot make symlinks ({exc})")
+            item = {"filename": "linked.png", "subfolder": "shared", "type": "input"}
+            path = ms._safe_input_path(item)
+            self.assertEqual(path, self.root / "shared" / "linked.png")
+            self.assertEqual(ms._item_output_dimensions(item), (6, 4))
+            self.assertRgb(ms._load_image(item)[0, 0, 0], (0.0, 128 / 255, 1.0), atol=1e-4)
 
     def test_output_size_guard(self):
         width, height = ms._estimate_output_dimensions(
@@ -224,7 +320,7 @@ class MultiStitchTests(unittest.TestCase):
         real_load = ImageFile.ImageFile.load
         for name in ("plain.png", "oriented.png", "plain.jpg", "oriented.jpg"):
             loads = []
-            ImageFile.ImageFile.load = lambda image: (loads.append(1), real_load(image))[1]
+            ImageFile.ImageFile.load = lambda image, seen=loads: (seen.append(1), real_load(image))[1]
             try:
                 source, output = ms._inspect_item({"filename": name, "type": "input"})
             finally:
@@ -373,6 +469,8 @@ class MultiStitchTests(unittest.TestCase):
             self.assertEqual(parameters[name].default, required[name][1]["default"], name)
         for name in ("size_reference", "size_megapixels", "size_divisible_by"):
             self.assertEqual(parameters[name].default, optional[name][1]["default"], name)
+        # Odd gaps work, so the arrows must offer them: step 1, not 2.
+        self.assertEqual(required["spacing_width"][1]["step"], 1)
         self.assertEqual(required["output_limit"][0], list(ms._OUTPUT_LIMITS))
         self.assertEqual(required["spacing_color"][0][-1], "custom")
         self.assertEqual(required["direction"][0], list(ms._DIRECTIONS))
@@ -489,6 +587,56 @@ class MultiStitchTests(unittest.TestCase):
                         for r in (0, 1) for c in (0, 1)}
                 self.assertEqual(seen, {red, green, blue, yellow})
 
+    def test_cropping_first_selects_the_same_pixels(self):
+        """Cropping in source coordinates must be pixel-identical to cropping the
+        transformed image, for every orientation, rotation, flip and crop."""
+        rng = random.Random(4711)
+        for trial in range(120):
+            width, height = rng.randint(1, 13), rng.randint(1, 13)
+            pixels = rng.randbytes(width * height * 3)
+            base = Image.frombytes("RGB", (width, height), pixels)
+            orientation = rng.randint(1, 8)
+            exif = Image.Exif()
+            exif[ms._EXIF_ORIENTATION] = orientation
+            base.save(self.root / "case.png", exif=exif.tobytes())
+            x, y = rng.random(), rng.random()
+            item = {
+                "filename": "case.png", "type": "input",
+                "rotation": rng.choice([0, 90, 180, 270]),
+                "flip_h": rng.choice([True, False]),
+                "flip_v": rng.choice([True, False]),
+                "crop": {"x": x, "y": y, "w": rng.random() * (1 - x), "h": rng.random() * (1 - y)},
+            }
+            with self.subTest(trial=trial, size=(width, height), orientation=orientation, item=item):
+                new = ms._load_image(item)
+                old = load_the_whole_image_first(item)
+                self.assertEqual(tuple(new.shape), tuple(old.shape))
+                self.assertTrue(torch.equal(new, old), "the crop mapping picked other pixels")
+                self.assertEqual((new.shape[2], new.shape[1]), ms._item_output_dimensions(item))
+
+    def test_the_transforms_only_ever_see_the_crop(self):
+        """A small crop of a big original must not rotate the whole thing first."""
+        self.write_png("big.png", (1, 2, 3), size=(80, 40))
+        item = {"filename": "big.png", "type": "input", "rotation": 90, "flip_v": True,
+                "crop": {"x": 0.5, "y": 0.5, "w": 0.25, "h": 0.25}}
+        sizes, crops = [], []
+        real_transpose, real_crop = Image.Image.transpose, Image.Image.crop
+
+        def spy_transpose(image, method):
+            sizes.append(image.size)
+            return real_transpose(image, method)
+
+        def spy_crop(image, box=None):
+            crops.append(box)
+            return real_crop(image, box)
+
+        with patch.object(Image.Image, "transpose", spy_transpose), \
+                patch.object(Image.Image, "crop", spy_crop):
+            tensor = ms._load_image(item)
+        self.assertEqual(tuple(tensor.shape), (1, 20, 10, 3))
+        self.assertEqual(crops, [(20, 10, 40, 20)], "the crop box is mapped back into the source")
+        self.assertEqual(sizes, [(20, 10), (10, 20)], "a full-size copy was transformed")
+
     def test_spacing_color_fills_bars_and_letterbox_in_both_layouts(self):
         """strip and grid used to disagree for red/green/blue."""
         tall = solid((0.0, 0.0, 0.0), 4, 2)
@@ -518,6 +666,87 @@ class MultiStitchTests(unittest.TestCase):
         blended = ms._load_image({"filename": "half.png", "type": "input"}, (1.0, 1.0, 1.0))
         # alpha_composite over white: 255 - 128 = 127 on the zeroed channels.
         self.assertRgb(blended[0, 0, 0], (1.0, 127 / 255, 127 / 255), atol=1e-4)
+
+    def test_high_bit_depth_greys_keep_their_value(self):
+        """convert("RGB") keeps the low 8 bits, so mid-grey came out white."""
+        Image.fromarray(np.full((4, 6), 32768, dtype=np.uint16)).save(self.root / "mid16.png")
+        with Image.open(self.root / "mid16.png") as check:
+            # Pillow 11 and later read a 16-bit PNG as I;16, older ones as I.
+            # Both hold 0..65535, and both used to clip to solid white.
+            self.assertIn(check.mode, {"I;16", "I"}, "a 16-bit PNG must stay 16-bit")
+        item = {"filename": "mid16.png", "type": "input"}
+        tensor = ms._load_image(item)
+        self.assertEqual(tuple(tensor.shape), (1, 4, 6, 3))
+        self.assertEqual(ms._item_output_dimensions(item), (6, 4))
+        self.assertRgb(tensor[0, 0, 0], (0.5, 0.5, 0.5), atol=2e-5)
+
+        # The whole range maps to 0..1, in order, and each sample fills all three
+        # channels — a 16-bit file is grey, not a red channel on its own.
+        ramp = np.array([[0, 21845], [43690, 65535]], dtype=np.uint16)
+        Image.fromarray(ramp).save(self.root / "ramp16.png")
+        tensor = ms._load_image({"filename": "ramp16.png", "type": "input"})
+        self.assertEqual(
+            [round(v, 4) for v in tensor[0, :, :, 0].flatten().tolist()],
+            [0.0, 0.3333, 0.6667, 1.0],
+        )
+        for channel in (1, 2):
+            self.assertTrue(torch.equal(tensor[0, :, :, channel], tensor[0, :, :, 0]))
+
+        # A 16-bit TIFF lands in the same modes, and a crop of one still lines up.
+        Image.fromarray(ramp).save(self.root / "ramp16.tiff")
+        cropped = {"filename": "ramp16.tiff", "type": "input", "rotation": 90,
+                   "crop": {"x": 0, "y": 0, "w": 0.5, "h": 1}}
+        tensor = ms._load_image(cropped)
+        self.assertEqual(tuple(tensor.shape), (1, 2, 1, 3))
+        # A quarter turn clockwise puts the ramp's bottom row in the left column,
+        # which is the half this crop keeps.
+        self.assertEqual([round(v, 4) for v in tensor[0, :, 0, 0].tolist()], [0.6667, 1.0])
+
+    def test_integer_and_float_greys_scale_by_their_range(self):
+        """"I" holds a 16-bit PNG's range, "F" holds 0..1; above that, normalise."""
+        Image.new("I", (3, 2), 30000).save(self.root / "i32.tiff")
+        self.assertRgb(
+            ms._load_image({"filename": "i32.tiff", "type": "input"})[0, 0, 0],
+            (30000 / 65535,) * 3, atol=1e-5,
+        )
+        Image.new("I", (3, 2), 200000).save(self.root / "i32big.tiff")
+        self.assertRgb(ms._load_image({"filename": "i32big.tiff", "type": "input"})[0, 0, 0], (1.0, 1.0, 1.0))
+        Image.new("F", (3, 2), 0.25).save(self.root / "f32.tiff")
+        self.assertRgb(ms._load_image({"filename": "f32.tiff", "type": "input"})[0, 0, 0], (0.25, 0.25, 0.25))
+        Image.new("F", (3, 2), 4.0).save(self.root / "f32big.tiff")
+        self.assertRgb(ms._load_image({"filename": "f32big.tiff", "type": "input"})[0, 0, 0], (1.0, 1.0, 1.0))
+        # A negative float sample cannot darken past black.
+        Image.new("F", (3, 2), -2.0).save(self.root / "f32neg.tiff")
+        self.assertRgb(ms._load_image({"filename": "f32neg.tiff", "type": "input"})[0, 0, 0], (0.0, 0.0, 0.0))
+
+    def test_cmyk_greyscale_and_palette_sources_still_convert(self):
+        """The modes a phone, a scanner or a screenshot actually produces."""
+        Image.new("CMYK", (4, 6), (255, 0, 0, 0)).save(self.root / "cyan.jpg", quality=95)
+        with Image.open(self.root / "cyan.jpg") as check:
+            self.assertEqual(check.mode, "CMYK")
+        item = {"filename": "cyan.jpg", "type": "input"}
+        tensor = ms._load_image(item)
+        self.assertEqual(tuple(tensor.shape), (1, 6, 4, 3))
+        self.assertRgb(tensor[0, 0, 0], (0.0, 1.0, 1.0), atol=1e-2)
+
+        # Greyscale with alpha: the transparent part shows the node background.
+        Image.new("LA", (2, 3), (255, 0)).save(self.root / "clear.png")
+        self.assertRgb(ms._load_image({"filename": "clear.png", "type": "input"}, (0.0, 0.0, 0.0))[0, 0, 0],
+                       (0.0, 0.0, 0.0))
+        Image.new("LA", (2, 3), (128, 255)).save(self.root / "grey.png")
+        self.assertRgb(ms._load_image({"filename": "grey.png", "type": "input"}, (0.0, 0.0, 0.0))[0, 0, 0],
+                       (128 / 255,) * 3, atol=1e-4)
+
+        # A palette image with a transparent index: the same, per index.
+        palette = Image.new("P", (2, 2), 1)
+        palette.putpalette([255, 0, 0, 0, 255, 0])
+        palette.putpixel((0, 0), 0)
+        palette.save(self.root / "flag.png", transparency=0)
+        tensor = ms._load_image({"filename": "flag.png", "type": "input"}, (0.0, 0.0, 1.0))
+        self.assertRgb(tensor[0, 0, 0], (0.0, 0.0, 1.0), atol=1e-4)
+        self.assertRgb(tensor[0, 1, 1], (0.0, 1.0, 0.0), atol=1e-4)
+        palette.save(self.root / "opaque.png")
+        self.assertRgb(ms._load_image({"filename": "opaque.png", "type": "input"})[0, 0, 0], (1.0, 0.0, 0.0), atol=1e-4)
 
     def test_invalid_choices_are_rejected(self):
         image = solid((1.0, 1.0, 1.0))
@@ -684,6 +913,60 @@ class MultiStitchTests(unittest.TestCase):
         self.assertRgb(cells[1, 3, 3], (1.0, 1.0, 1.0))
         with self.assertRaisesRegex(ValueError, "cells output would be"):
             ms._validate_cells_output(300, 10000, 10000)
+
+    def test_placed_cells_follow_the_output_limit(self):
+        """placed means "the size the image has in the stitched result", which
+        the output limit shrinks; the cells used to keep the pre-limit size."""
+        red = solid((1.0, 0.0, 0.0), 40, 40)
+        blue = solid((0.0, 0.0, 1.0), 20, 60)
+        image, cells = ms._compose_from(
+            [lambda: red, lambda: blue], [(40, 40), (60, 20)], "strip", "right", False, 3, 0,
+            "white", "#808080", output_limit="max_long_side", output_limit_px=50, output_cells=True,
+        )
+        # 100×40 capped to a 50 px long side: everything at half size.
+        self.assertEqual(tuple(image.shape), (1, 20, 50, 3))
+        self.assertEqual(tuple(cells.shape), (2, 20, 30, 3))
+        self.assertRgb(cells[0, 10, 15], (1.0, 0.0, 0.0), atol=1e-3)   # 20×20, centred
+        self.assertRgb(cells[0, 10, 1], (1.0, 1.0, 1.0))               # background beside it
+        self.assertRgb(cells[1, 10, 15], (0.0, 0.0, 1.0), atol=1e-3)   # 30×10, centred
+        self.assertRgb(cells[1, 1, 15], (1.0, 1.0, 1.0))
+
+        # Without a limit the cells keep the placed size, as before.
+        _, cells = ms._compose_from(
+            [lambda: red, lambda: blue], [(40, 40), (60, 20)], "strip", "right", False, 3, 0,
+            "white", "#808080", output_cells=True,
+        )
+        self.assertEqual(tuple(cells.shape), (2, 40, 60, 3))
+        # And a cell never disappears, however hard the canvas is squeezed.
+        _, cells = ms._compose_from(
+            [lambda: solid((1.0, 0.0, 0.0), 2, 2)], [(2, 2)], "strip", "right", False, 3, 0,
+            "white", "#808080", output_limit="max_long_side", output_limit_px=1, output_cells=True,
+        )
+        self.assertEqual(tuple(cells.shape), (1, 1, 1, 3))
+        self.assertEqual(ms._scaled_side(3, 0.5), 2, "half to even, like _limited_size")
+        self.assertEqual(ms._scaled_side(1, 0.5), 1, "never below one pixel")
+
+    def test_validate_inputs_reports_a_bad_list_at_queue_time(self):
+        """ComfyUI asks before the prompt runs; the answer must be cheap."""
+        item = self.write_png("ok.png", (1, 2, 3))
+        node = ms.MultiStitchImages
+        self.assertEqual(
+            list(inspect.signature(node.VALIDATE_INPUTS).parameters), ["images_json"],
+            "naming more inputs would take ComfyUI's own range checks over",
+        )
+        self.assertIs(node.VALIDATE_INPUTS(json.dumps([item])), True)
+        self.assertIs(node.VALIDATE_INPUTS("[]"), True)
+        self.assertIs(node.VALIDATE_INPUTS(), True)
+        self.assertIs(node.VALIDATE_INPUTS(json.dumps(["junk", 7])), True, "the frontend owns the entries")
+        self.assertIn("corrupted image list", node.VALIDATE_INPUTS("[{oops}"))
+        self.assertIn("must be an array", node.VALIDATE_INPUTS('{"filename": "ok.png"}'))
+        self.assertEqual(
+            node.VALIDATE_INPUTS(json.dumps([{"filename": "gone.png"}])),
+            "Multi Stitch Images: image not found: gone.png",
+        )
+        self.assertIn("unsafe image path", node.VALIDATE_INPUTS(json.dumps([{"filename": "../ok.png"}])))
+        with patch.object(Image, "open", side_effect=AssertionError("decoded")):
+            self.assertIs(node.VALIDATE_INPUTS(json.dumps([item])), True)
 
     def test_image_input_frames_are_appended_after_the_pasted_images(self):
         green = self.write_png("green.png", (0, 255, 0), size=(4, 2))
