@@ -112,6 +112,83 @@ describe("crop editor", () => {
         await page.close();
     });
 
+    it("resizes by an edge bar and applies only that side", async () => {
+        const { page, errors } = await openPage();
+        await page.evaluate(() => {
+            window.__node = window.__makeNode("editor.png");
+            window.__openCropEditor(window.__node, 0);
+        });
+        const canvas = page.locator(".ms-crop-canvas");
+        await canvas.waitFor();
+        const box = await canvas.boundingBox();
+
+        // The right edge bar, pulled in to 60% of the width: nothing else moves.
+        await page.mouse.move(box.x + box.width - 3, box.y + box.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(box.x + box.width * 0.8, box.y + box.height / 2, { steps: 4 });
+        await page.mouse.move(box.x + box.width * 0.6, box.y + box.height / 2, { steps: 4 });
+        await page.mouse.up();
+        await page.click(".apply");
+
+        const item = await page.evaluate(() => window.__node._msImages[0]);
+        const near = (a, b) => Math.abs(a - b) < 0.03;
+        assert.ok(near(item.crop.x, 0) && near(item.crop.y, 0) && near(item.crop.w, 0.6) && near(item.crop.h, 1),
+            JSON.stringify(item.crop));
+        assert.deepEqual(errors, []);
+        await page.close();
+    });
+
+    it("closes on Escape without applying", async () => {
+        const { page, errors } = await openPage();
+        await page.evaluate(() => {
+            window.__node = window.__makeNode("editor.png");
+            window.__openCropEditor(window.__node, 0);
+        });
+        await page.locator(".ms-crop-canvas").waitFor();
+        await page.click(".flip-h");
+        await page.keyboard.press("Escape");
+        await page.waitForFunction(() => document.querySelectorAll(".ms-crop-overlay").length === 0);
+        const item = await page.evaluate(() => window.__node._msImages[0]);
+        assert.equal(item.flip_h, false, "Escape discards, like Cancel");
+        assert.deepEqual(errors, []);
+        await page.close();
+    });
+
+    it("asks before a click beside the panel throws an edit away", async () => {
+        const { page, errors } = await openPage();
+        const open = async () => {
+            await page.evaluate(() => {
+                window.__node ||= window.__makeNode("editor.png");
+                window.__openCropEditor(window.__node, 0);
+            });
+            await page.locator(".ms-crop-canvas").waitFor();
+        };
+        await open();
+        // Nothing edited yet: the backdrop closes it without a word.
+        await page.mouse.click(4, 4);
+        await page.waitForFunction(() => document.querySelectorAll(".ms-crop-overlay").length === 0);
+
+        await open();
+        const asked = [];
+        page.on("dialog", async (dialog) => {
+            asked.push(dialog.message());
+            if (asked.length === 1) await dialog.dismiss();
+            else await dialog.accept();
+        });
+        await page.click(".rotate-right");
+        await page.mouse.click(4, 4);
+        assert.equal(asked.length, 1, "it asked");
+        assert.match(asked[0], /Discard/);
+        assert.equal(await page.locator(".ms-crop-overlay").count(), 1, "answered no, so the edit is still open");
+
+        await page.mouse.click(4, 4);
+        await page.waitForFunction(() => document.querySelectorAll(".ms-crop-overlay").length === 0);
+        const item = await page.evaluate(() => window.__node._msImages[0]);
+        assert.equal(item.rotation, 0, "answered yes, so the rotation went");
+        assert.deepEqual(errors, []);
+        await page.close();
+    });
+
     it("Cancel discards the edit", async () => {
         const { page } = await openPage();
         await page.evaluate(() => {
@@ -219,6 +296,9 @@ describe("frame picker", () => {
         const supported = await page.evaluate(() => typeof MediaRecorder !== "undefined"
             && MediaRecorder.isTypeSupported("video/webm;codecs=vp8"));
         if (!supported) {
+            // A skip on CI would quietly remove the frame picker's only
+            // end-to-end check, so there it is a failure instead.
+            assert.ok(!process.env.CI, "this Chromium cannot record WebM: the frame picker went untested");
             t.skip("this Chromium cannot record WebM");
             return;
         }

@@ -1,10 +1,14 @@
 import {
+    CROPPED_EPSILON,
     cropSourceToView,
     cropViewToSource,
     imageUrl,
+    isModalKey,
+    isTextEntry,
     normalizeCrop,
     normalizeTransform,
     renderTransformedImage,
+    swallowKey,
     commitImages,
 } from "./shared.js";
 
@@ -91,6 +95,9 @@ export async function openCropEditor(node, index) {
 
     const overlay = document.createElement("div");
     overlay.className = "ms-crop-overlay";
+    // Focusable, and focused at the end, so the keys go to the editor instead
+    // of the canvas that was clicked to open it.
+    overlay.tabIndex = -1;
     overlay.innerHTML = `
       <div class="ms-crop-panel" role="dialog" aria-modal="true">
         <div class="ms-crop-head">
@@ -416,11 +423,35 @@ export async function openCropEditor(node, index) {
     flipHButton.onclick = () => applyTransform({ ...transform, flip_h: !transform.flip_h });
     flipVButton.onclick = () => applyTransform({ ...transform, flip_v: !transform.flip_v });
 
-    let keyHandler = null;
-    const close = () => {
-        if (keyHandler) document.removeEventListener("keydown", keyHandler);
-        overlay.remove();
+    // Whether Apply would change anything: what a backdrop click is about to
+    // throw away.
+    const changed = () => {
+        const saved = normalizeTransform(item);
+        if (saved.rotation !== transform.rotation || saved.flip_h !== transform.flip_h || saved.flip_v !== transform.flip_v) {
+            return true;
+        }
+        const crop = normalizeCrop(item.crop);
+        const now = {
+            x: rect.x / working.width, y: rect.y / working.height,
+            w: rect.w / working.width, h: rect.h / working.height,
+        };
+        return ["x", "y", "w", "h"].some((k) => Math.abs(crop[k] - now[k]) > CROPPED_EPSILON);
     };
+
+    let keyHandler = null;
+    let closed = false;
+    // The handle the node keeps, so a removed node (or a second edit) can close
+    // the editor, and the tests can drive it.
+    const handle = { overlay, canvas, changed, close: () => {}, onKey: (event) => keyHandler?.(event) };
+    const close = () => {
+        if (closed) return;
+        closed = true;
+        if (keyHandler) document.removeEventListener("keydown", keyHandler, true);
+        overlay.remove();
+        if (node._msEditor === handle) node._msEditor = null;
+    };
+    handle.close = close;
+    node._msEditor = handle;
 
     overlay.querySelector(".cancel").onclick = close;
     overlay.querySelector(".reset-crop").onclick = () => {
@@ -447,13 +478,38 @@ export async function openCropEditor(node, index) {
     };
 
     overlay.addEventListener("mousedown", (event) => {
-        if (event.target === overlay) close();
+        if (event.target !== overlay) return;
+        // A click beside the panel used to throw the edit away without a word;
+        // ask first, but only when there is something to lose.
+        if (changed() && !confirm("Discard the crop and rotation changes to this image?")) return;
+        close();
     });
 
     keyHandler = (event) => {
-        if (event.key === "Escape") close();
+        if (closed) return;
+        // Swallowed whether the editor uses the key or not: the canvas
+        // underneath must not delete the node or reload the graph while a modal
+        // is open.
+        if (isModalKey(event)) swallowKey(event);
+        if (isTextEntry(event.target)) {
+            if (event.key === "Escape") {
+                event.target.blur?.();
+                event.preventDefault();
+            }
+            return;
+        }
+        if (event.key === "Escape") {
+            close();
+            event.preventDefault();
+        } else if (isModalKey(event)) {
+            event.preventDefault();
+        }
     };
-    document.addEventListener("keydown", keyHandler);
+    // Capture phase: ComfyUI's handlers are on the document and the window, so
+    // this is where propagation has to stop.
+    document.addEventListener("keydown", keyHandler, true);
+    overlay.focus?.();
 
     render();
+    return handle;
 }

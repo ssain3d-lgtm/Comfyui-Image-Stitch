@@ -307,6 +307,35 @@ export function safeJsonParse(value) {
     }
 }
 
+// Keys a modal over the graph must not let through. The canvas keeps focus
+// after the click that opened the overlay, and ComfyUI listens on the
+// document: Delete would delete the node under the modal, Space arms
+// LiteGraph's pan and Ctrl+Z reloads the whole graph (which recreates every
+// node). Every one of these is swallowed while an overlay is open, whether
+// that overlay acts on it or not.
+export const MODAL_KEYS = new Set([
+    "Escape", "Enter", " ", "Spacebar", "Delete", "Backspace",
+    "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown",
+]);
+
+export function isModalKey(event) {
+    if (!event) return false;
+    if ((event.ctrlKey || event.metaKey) && /^[zy]$/i.test(String(event.key))) return true;
+    return MODAL_KEYS.has(event.key);
+}
+
+// A field the user may be typing in: it keeps the key, but the canvas
+// underneath still must not see it.
+export function isTextEntry(target) {
+    const tag = String(target?.tagName || "").toLowerCase();
+    return tag === "input" || tag === "textarea" || tag === "select" || target?.isContentEditable === true;
+}
+
+export function swallowKey(event) {
+    event?.stopPropagation?.();
+    event?.stopImmediatePropagation?.();
+}
+
 export function getWidget(node, name) {
     return node.widgets?.find((widget) => widget.name === name);
 }
@@ -422,8 +451,36 @@ export function imageUrl(item) {
     return api.apiURL(`/view?${params.toString()}`);
 }
 
-function thumbKey(item) {
-    return `${item.type || "input"}:${item.subfolder || ""}/${item.filename}`;
+// The cache key of one entry: the file it points at, so two entries on the
+// same file share one decode and removing one leaves the other's pixels alone.
+export function thumbCacheKey(item) {
+    return `${item?.type || "input"}:${item?.subfolder || ""}/${item?.filename}`;
+}
+
+const thumbKey = thumbCacheKey;
+
+// Drops the cached pixels of one entry — used when it is removed or relinked,
+// so the rest of the list is not re-downloaded and re-decoded. `remaining` is
+// the list as it will be: another entry on the same file keeps the cache.
+export function forgetThumb(node, item, remaining = node?._msImages || []) {
+    const key = thumbCacheKey(item);
+    if (remaining.some((other) => other !== item && thumbCacheKey(other) === key)) return false;
+    node._msThumbCache?.get(key)?.cancel?.();
+    node._msThumbCache?.delete(key);
+    node._msTransformedCache?.delete(key);
+    return true;
+}
+
+// Loads one entry again from scratch. A load that timed out gets exactly one
+// retry; after that the card offers relinking instead.
+export function retryThumb(node, item) {
+    const key = thumbCacheKey(item);
+    const previous = node._msThumbCache?.get(key);
+    node._msThumbCache?.delete(key);
+    node._msTransformedCache?.delete(key);
+    const state = loadThumb(node, item);
+    state.retried = !!previous;
+    return state;
 }
 
 function smoothContext(canvas) {
@@ -479,6 +536,29 @@ function pumpThumbnails() {
     }
 }
 
+// Formats Pillow reads but no browser decodes. The upload succeeded and the
+// backend will stitch the file; only the preview cannot exist here, so the
+// card must not claim the image is broken.
+const SERVER_ONLY_FORMATS = /\.(tiff?|psd|psb|heic|heif|jp2|jpf|jpx|exr|hdr|dng|cr2|cr3|nef|arw|raf|orf|rw2|srw|pef|tga|pcx|ppm|pgm|pbm|pnm|sgi|dds|xcf|jfif2)$/i;
+
+// 30 s is the budget for one load; a test shortens it.
+export const THUMB_LOAD_TIMEOUT_MS = 30000;
+let thumbLoadTimeoutMs = THUMB_LOAD_TIMEOUT_MS;
+export function setThumbLoadTimeout(ms) {
+    thumbLoadTimeoutMs = Math.max(1, Number(ms) || THUMB_LOAD_TIMEOUT_MS);
+}
+
+// Why a thumbnail has no pixels, in the words the card and the DOM view show.
+// A timeout is worth retrying; a format the browser cannot decode is not a
+// broken file; anything else is most likely a file that moved away.
+export function thumbFailureMessage(state) {
+    if (state?.reason === "timeout") {
+        return state.retried ? "Timed out twice · click to relink" : "Timed out · click to retry";
+    }
+    if (state?.reason === "format") return "Cannot preview here · stitches on the server · click to relink";
+    return "Load failed · click to relink";
+}
+
 // Loads a source once and keeps only a bounded copy of it. `width`/`height`
 // are the true source size; `image` is the thumbnail-sized canvas. The full
 // decode is released as soon as the copy exists, so a node full of large
@@ -488,14 +568,14 @@ export function loadThumb(node, item) {
     const key = thumbKey(item);
     if (node._msThumbCache.has(key)) return node._msThumbCache.get(key);
 
-    const state = { image: null, width: 0, height: 0, ready: false, failed: false };
+    const state = { image: null, width: 0, height: 0, ready: false, failed: false, reason: null, message: null, retried: false };
     node._msThumbCache.set(key, state);
     thumbnailQueue.push((release) => {
         if (node._msDisposed || node._msThumbCache.get(key) !== state) { release(); return; }
         try {
             startThumbLoad(node, key, state, item, release);
         } catch (_) {
-            state.failed = true;
+            failThumb(state, "error");
             release();
         }
     });
@@ -503,24 +583,30 @@ export function loadThumb(node, item) {
     return state;
 }
 
+function failThumb(state, reason) {
+    state.failed = true;
+    state.reason = reason;
+    state.message = thumbFailureMessage(state);
+}
+
 function startThumbLoad(node, key, state, item, release) {
     {
         const image = new Image();
         let done = false;
         let timeout;
-        const finish = (failed = false) => {
+        const finish = (reason = null) => {
             if (done) return;
             done = true;
             clearTimeout(timeout);
             image.onload = image.onerror = null;
             state.cancel = null;
-            if (failed) state.failed = true;
+            if (reason) failThumb(state, reason);
             // Drop the original decode; the cache keeps only scaled pixels.
             image.src = "";
             node.graph?.setDirtyCanvas(true, false);
             release();
         };
-        state.cancel = () => finish(true);
+        state.cancel = () => finish("cancelled");
         image.onload = () => {
             try {
                 if (node._msDisposed || node._msThumbCache.get(key) !== state) return;
@@ -528,11 +614,13 @@ function startThumbLoad(node, key, state, item, release) {
                 state.height = image.naturalHeight || image.height || 1;
                 state.image = scaledCanvas(image, state.width, state.height, THUMB_MAX_SIDE);
                 state.ready = true;
-            } catch (_) { state.failed = true; }
+            } catch (_) { failThumb(state, "error"); }
             finally { finish(); }
         };
-        image.onerror = () => finish(true);
-        timeout = setTimeout(() => finish(true), 30000);
+        // The browser refuses a format it cannot decode exactly as it reports a
+        // missing file, so the file name decides which of the two it is.
+        image.onerror = () => finish(SERVER_ONLY_FORMATS.test(item?.filename || "") ? "format" : "error");
+        timeout = setTimeout(() => finish("timeout"), thumbLoadTimeoutMs);
         image.src = imageUrl(item);
     }
 }
@@ -596,10 +684,16 @@ export function loadTransformedThumb(node, item) {
     return state;
 }
 
-function uniqueUploadName(file) {
-    const rawExt = (file.name || "image.png").split(".").pop().toLowerCase();
+// The uploaded file keeps the name it came with, plus a unique tail: a frame
+// captured as clip_12s345.png is recognisable in the input folder instead of
+// being one more multi_stitch_<timestamp> among hundreds.
+export function uniqueUploadName(file) {
+    const raw = String(file?.name || "image.png");
+    const rawExt = raw.split(".").pop().toLowerCase();
     const ext = /^[a-z0-9]{2,5}$/.test(rawExt) ? rawExt : "png";
-    return `multi_stitch_${Date.now()}_${Math.random().toString(36).slice(2, 9)}.${ext}`;
+    const stem = raw.replace(/\.[^.]+$/, "").replace(/[^\w.-]+/g, "_").replace(/^[._]+/, "").slice(0, 40);
+    const unique = `multi_stitch_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+    return `${stem ? `${stem}_` : ""}${unique}.${ext}`;
 }
 
 // Uploads through ComfyUI's own endpoint. `target` picks the folder: images

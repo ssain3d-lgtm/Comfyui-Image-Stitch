@@ -6,6 +6,7 @@ import {
     commitImages,
     cropPixelBox,
     drawImageScaled,
+    forgetThumb,
     getWidget,
     hideWidget,
     historyOf,
@@ -13,7 +14,9 @@ import {
     isCropped,
     isTransformed,
     layoutPlacements,
+    LEGACY_SIZE_REFERENCES,
     limitedSize,
+    loadThumb,
     loadTransformedThumb,
     MAX_IMAGES,
     normalizeCrop,
@@ -21,6 +24,7 @@ import {
     redoImages,
     referenceSize,
     renderTransformedImage,
+    retryThumb,
     sizeReferenceIndex,
     resetHistory,
     safeJsonParse,
@@ -53,6 +57,10 @@ const PREVIEW_RENDER_MAX_SIDE = 2048;
 const PREVIEW_RENDER_MAX_PIXELS = 4 * 1024 * 1024;
 const PREVIEW_RENDER_STEP = 256;
 const PREVIEW_RENDER_DELAY_MS = 150;
+// Mirrors _MAX_SOURCE_PIXELS in multi_stitch.py: the most one original may
+// hold. A file above it is left to the backend — the sharp preview is skipped
+// and the thumbnails stay — because decoding it here would stall the tab.
+const SOURCE_MAX_PIXELS = 128 * 1024 * 1024;
 // A video is a session-only helper for picking frames: uploaded to ComfyUI's
 // temp folder (emptied on restart), never saved with the workflow, never part
 // of the stitch, and deleted from the server as soon as its captures are done
@@ -209,6 +217,7 @@ function sizeReadout(node) {
     if (known.some((d) => d === null)) return null;
     const fallback = known.find((d) => d && d !== "failed") || { w: 256, h: 256 };
     const dims = known.map((d) => (d === "failed" ? fallback : d));
+    resolvePendingSizeReference(node, dims);
     const settings = readSettings(node);
     try {
         const size = referenceSize(dims, settings.sizeReference, settings.sizeMegapixels, settings.sizeDivisibleBy);
@@ -520,6 +529,7 @@ function plannedLayout(node) {
     if (known.some((d) => d === null)) return null;
     const fallback = known.find((d) => d && d !== "failed") || { w: 256, h: 256 };
     const dims = known.map((d) => (d === "failed" ? fallback : d));
+    resolvePendingSizeReference(node, dims);
     let layout;
     try {
         layout = layoutPlacements(
@@ -550,12 +560,21 @@ function imageInputConnected(node) {
     return (node.inputs || []).some((input) => input?.name === "images" && input.link != null);
 }
 
+// The first candidate that fits `maxWidth`, or the shortest one when none
+// does: a label is shortened rather than squeezed or spilled.
+function fittingLabel(ctx, candidates, maxWidth) {
+    const fits = candidates.find((text) => (ctx.measureText?.(text)?.width ?? 0) <= maxWidth);
+    return fits ?? candidates[candidates.length - 1];
+}
+
 function drawPill(ctx, rect, label, active = true) {
     ctx.fillStyle = active ? "rgba(255,255,255,.12)" : "rgba(255,255,255,.05)";
     ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
     ctx.fillStyle = active ? "#e8e8e8" : "#6f6f6f";
     ctx.textAlign = "center";
-    ctx.fillText(label, rect.x + rect.w / 2, rect.y + 13);
+    // maxWidth keeps a long label (a cancel count, a translation) inside the
+    // pill instead of spilling over its neighbours.
+    ctx.fillText(label, rect.x + rect.w / 2, rect.y + 13, rect.w - 6);
     ctx.textAlign = "left";
 }
 
@@ -565,7 +584,12 @@ function drawToolbar(ctx, node) {
     const controls = toolbarControls(node);
     const run = node._msUpload;
     const advanced = advancedState(node);
-    drawPill(ctx, controls.add, run ? `Cancel ${run.done}/${run.total}` : "+ Add");
+    // "Cancel 100/256" is wider than the 64px pill: drop the word, then the
+    // total, before letting the count be squeezed.
+    const addLabel = run
+        ? fittingLabel(ctx, [`Cancel ${run.done}/${run.total}`, `✕ ${run.done}/${run.total}`, `${run.done}/${run.total}`], controls.add.w - 6)
+        : "+ Add";
+    drawPill(ctx, controls.add, addLabel);
     drawPill(ctx, controls.clear, "Clear", count > 0 || !!run);
     drawPill(ctx, controls.copy, node._msCopying ? "…" : "⧉ Copy", count > 0 && !node._msCopying);
     drawPill(ctx, controls.undo, "↶", history.past.length > 0);
@@ -676,8 +700,15 @@ function drawCard(ctx, node, item, index, r) {
         ctx.fillStyle = state.failed ? "#f08a8a" : "#8d8d8d";
         ctx.textAlign = "center";
         if (state.failed) {
-            ctx.fillText("Load failed", r.x + r.w / 2, r.y + r.h / 2 - 4);
-            ctx.fillText("click to relink", r.x + r.w / 2, r.y + r.h / 2 + 12);
+            // Why it has no pixels, and what a click will do about it: a
+            // timeout is retried, a format only the server reads is not broken.
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(imageRect.x, imageRect.y, imageRect.w, imageRect.h);
+            ctx.clip();
+            drawWrappedText(ctx, state.message || "Load failed · click to relink",
+                r.x + r.w / 2, r.y + r.h / 2 + 4, r.w - 10, 14);
+            ctx.restore();
         } else {
             ctx.fillText("Loading…", r.x + r.w / 2, r.y + r.h / 2 + 4);
         }
@@ -748,20 +779,37 @@ function drawVideoCard(ctx, entry, r) {
     ctx.textAlign = "center";
     ctx.fillStyle = entry.failed ? "#f08a8a" : "#cfe0ff";
     if (!entry.poster) {
-        ctx.fillText(entry.failed ? "Cannot play video" : "🎞 loading…", r.x + r.w / 2, r.y + r.h / 2 - 4);
+        ctx.fillText(entry.failed ? "Cannot play video" : "🎞 loading…", r.x + r.w / 2, r.y + r.h / 2 - 4, r.w - 10);
     }
+    // Both bars are as wide as the card: the name and the footer are clipped
+    // to them and measured down to what fits, whatever the card's width.
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(r.x + 3, r.y + 3, r.w - 6, r.h - 6);
+    ctx.clip();
+    const barWidth = r.w - 10;
+    // The name shares its bar with the × button, so it gets the room left of it.
+    const nameWidth = Math.max(20, barWidth - 26);
     ctx.fillStyle = "rgba(0,0,0,.72)";
     ctx.fillRect(r.x + 3, r.y + 3, r.w - 6, 19);
     ctx.fillStyle = "#9ad0ff";
-    const label = `🎞 ${entry.name || entry.filename}`;
-    ctx.fillText(label.length > 22 ? `${label.slice(0, 21)}…` : label, r.x + r.w / 2 - 10, r.y + 17);
+    const name = String(entry.name || entry.filename || "video");
+    ctx.fillText(fittingLabel(ctx, [`🎞 ${name}`, `🎞 ${name.slice(0, 18)}…`, `🎞 ${name.slice(0, 10)}…`, "🎞"], nameWidth),
+        r.x + 3 + nameWidth / 2, r.y + 17, nameWidth);
     ctx.fillStyle = "rgba(0,0,0,.76)";
     ctx.fillRect(r.x + 3, r.y + r.h - 22, r.w - 6, 19);
     ctx.fillStyle = "#e8e8e8";
+    const time = entry.duration ? formatTime(entry.duration) : "";
     ctx.fillText(
-        `${entry.duration ? formatTime(entry.duration) + "  ·  " : ""}click to capture frames`,
-        r.x + r.w / 2, r.y + r.h - 8,
+        fittingLabel(ctx, [
+            `${time ? `${time}  ·  ` : ""}click to capture frames`,
+            `${time ? `${time}  ·  ` : ""}capture frames`,
+            time ? `${time}  ·  capture` : "capture frames",
+            time || "capture",
+        ], barWidth),
+        r.x + r.w / 2, r.y + r.h - 8, barWidth,
     );
+    ctx.restore();
     const remove = thumbActionRects(r).remove;
     ctx.fillStyle = "rgba(0,0,0,.76)";
     ctx.fillRect(remove.x, remove.y, remove.w, remove.h);
@@ -818,7 +866,9 @@ function drawThumbs(node, ctx) {
         // Both hints as one block, centred on the box: one line each at the
         // usual width, wrapped and stacked if the node were ever narrower.
         const room = r.w - 16;
-        drawWrappedText(ctx, "Paste / Drop / Add images or a video\nClick to edit · Drag ≡ to reorder", r.x + r.w / 2, r.y + r.h / 2 + 4, room);
+        // ComfyUI hands only image items to pasteFiles, so a paste is images
+        // only; a video arrives by drop or through Add.
+        drawWrappedText(ctx, "Paste images · Drop or Add images or a video\nClick to edit · Drag ≡ to reorder", r.x + r.w / 2, r.y + r.h / 2 + 4, room);
         ctx.restore();
         const panel = sizePanelRect(node);
         if (panel) drawSizePanel(ctx, node, panel);
@@ -860,6 +910,30 @@ function localPos(node, event, pos, graphCanvas) {
         }
     } catch (_) {}
     return Array.isArray(pos) ? pos : [0, 0];
+}
+
+// Progress shows in the node's title. Two operations can run at once (an
+// upload and a copy), so neither may snapshot the title and put it back: they
+// share one base title and every suffix is derived from it. A rename made
+// while an operation runs wins — the title then no longer matches what was
+// last written, and the new name becomes the base.
+const TITLE_SUFFIX = /\s+•\s+(?:uploading|rendering copy)\s.*…$/;
+
+function baseTitle(node) {
+    if (node._msTitleShown != null && node.title !== node._msTitleShown) {
+        node._msBaseTitle = String(node.title ?? "").replace(TITLE_SUFFIX, "");
+        node._msTitleShown = null;
+    }
+    if (node._msBaseTitle == null) node._msBaseTitle = String(node.title ?? "").replace(TITLE_SUFFIX, "");
+    return node._msBaseTitle || "Multi Stitch Images";
+}
+
+// Shows `suffix` after the base title; null puts the plain base back.
+function showProgress(node, suffix) {
+    const base = baseTitle(node);
+    node.title = suffix ? `${base} • ${suffix}` : base;
+    node._msTitleShown = suffix ? node.title : null;
+    node.graph?.setDirtyCanvas(true, false);
 }
 
 function notify(summary, detail, severity) {
@@ -940,6 +1014,81 @@ function releaseImage(image) {
     image.src = "";
 }
 
+// Only one composite renders at a time across every node: each one decodes
+// originals, and several at once is what makes the tab stall. A Copy jumps
+// ahead of a preview render, since a click is waiting on it.
+const renderQueue = [];
+let renderRunning = false;
+function pumpRenders() {
+    if (renderRunning || !renderQueue.length) return;
+    renderRunning = true;
+    const { task, resolve, reject } = renderQueue.shift();
+    Promise.resolve().then(task).then(resolve, reject).finally(() => {
+        renderRunning = false;
+        pumpRenders();
+    });
+}
+function runRender(task, { first = false } = {}) {
+    return new Promise((resolve, reject) => {
+        const entry = { task, resolve, reject };
+        if (first) renderQueue.unshift(entry);
+        else renderQueue.push(entry);
+        pumpRenders();
+    });
+}
+
+// A canvas the browser will not allocate comes back with a zero size or no
+// context instead of throwing; a blank image on the clipboard would be worse
+// than a message, so every allocation is checked.
+function allocateCanvas(width, height) {
+    const w = Math.max(1, Math.round(width));
+    const h = Math.max(1, Math.round(height));
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.width === w && canvas.height === h ? canvas.getContext("2d") : null;
+    if (!ctx) {
+        throw new Error(`the browser could not allocate a ${w}×${h} canvas (${(w * h / 1_000_000).toFixed(1)} MP)`);
+    }
+    return { canvas, ctx };
+}
+
+// The source pixels one item needs to fill `dest`: the crop is only a part of
+// the image, so the whole image has to be that much bigger. Null while the
+// thumbnail has not reported the true size yet.
+function neededSourceSize(node, item, dest) {
+    const raw = loadThumb(node, item);
+    if (!raw.ready || !raw.width || !raw.height) return null;
+    const c = normalizeCrop(item.crop);
+    let needW = dest.w / Math.max(c.w, 1e-6);
+    let needH = dest.h / Math.max(c.h, 1e-6);
+    const { rotation } = normalizeTransform(item);
+    if (rotation === 90 || rotation === 270) [needW, needH] = [needH, needW];
+    // Never above 1: an original is never upscaled before it is drawn.
+    const scale = Math.min(1, Math.max(needW / raw.width, needH / raw.height));
+    return { width: Math.max(1, Math.round(raw.width * scale)), height: Math.max(1, Math.round(raw.height * scale)) };
+}
+
+// One original, decoded to at most the size the destination needs:
+// createImageBitmap scales while decoding, so a 24 MP file never becomes a
+// 24 MP bitmap for a 300px band. Falls back to <img> where it is unavailable
+// (or where the fetch fails), which decodes at full size as before.
+async function loadBoundedSource(item, bound) {
+    if (bound && typeof createImageBitmap === "function" && typeof fetch === "function") {
+        try {
+            const response = await fetch(imageUrl(item));
+            if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+            const blob = await response.blob();
+            const bitmap = await createImageBitmap(blob, {
+                resizeWidth: bound.width, resizeHeight: bound.height, resizeQuality: "high",
+            });
+            return { source: bitmap, release: () => bitmap.close?.() };
+        } catch (_) { /* no bitmap decode here: the <img> path still works */ }
+    }
+    const image = await loadFullImage(imageUrl(item));
+    return { source: image, release: () => releaseImage(image) };
+}
+
 // Draws the composite from the original files, one image at a time, into a
 // canvas of the given size: the same placements the backend will use. Frames
 // from a connected IMAGE input exist only at run time and are not included;
@@ -948,10 +1097,7 @@ function releaseImage(image) {
 // the browser's (stepwise, high quality), so a downscaled image can differ
 // very slightly from the backend's bicubic result.
 async function renderComposite(node, planned, { width, height, onProgress, alive }) {
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.max(1, Math.round(width));
-    canvas.height = Math.max(1, Math.round(height));
-    const ctx = canvas.getContext("2d");
+    const { canvas, ctx } = allocateCanvas(width, height);
     ctx.fillStyle = backgroundColor(planned.settings);
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     const scaleX = canvas.width / planned.width;
@@ -960,6 +1106,7 @@ async function renderComposite(node, planned, { width, height, onProgress, alive
     const items = node._msImages;
     let skipped = 0;
     for (let index = 0; index < items.length; index++) {
+        if (alive && !alive()) return null;
         onProgress?.(index + 1, items.length);
         if (planned.failed[index]) {
             skipped += 1;
@@ -967,19 +1114,16 @@ async function renderComposite(node, planned, { width, height, onProgress, alive
         }
         const item = items[index];
         const place = planned.placements[index];
-        const image = await loadFullImage(imageUrl(item));
+        const dest = { x: place.x * scaleX, y: place.y * scaleY, w: place.w * scaleX, h: place.h * scaleY };
+        const { source, release } = await loadBoundedSource(item, neededSourceSize(node, item, dest));
         try {
             if (alive && !alive()) return null;
-            const view = isTransformed(item) ? renderTransformedImage(image, item, 0) : image;
+            const view = isTransformed(item) ? renderTransformedImage(source, item, 0) : source;
             const size = mediaSize(view);
             const box = cropPixelBox(size.w, size.h, item.crop);
-            drawImageScaled(
-                ctx, view,
-                box.x, box.y, box.w, box.h,
-                place.x * scaleX, place.y * scaleY, place.w * scaleX, place.h * scaleY,
-            );
+            drawImageScaled(ctx, view, box.x, box.y, box.w, box.h, dest.x, dest.y, dest.w, dest.h);
         } finally {
-            releaseImage(image);
+            release();
         }
     }
     return { canvas, skipped };
@@ -993,10 +1137,23 @@ function devicePixelScale(ctx) {
     return Math.max(0.01, Math.hypot(t.a, t.b));
 }
 
+// An original above the backend's per-image limit is not decoded here at all:
+// the band keeps its thumbnails rather than freezing the tab for a file the
+// backend will have to refuse anyway.
+function sourceAboveLimit(node, planned) {
+    const items = node._msImages;
+    return items.some((item, index) => {
+        if (planned.failed[index]) return false;
+        const raw = loadThumb(node, item);
+        return raw.ready && raw.width * raw.height > SOURCE_MAX_PIXELS;
+    });
+}
+
 // True when some image would be drawn larger on screen than its thumbnail
 // holds, while the original has more pixels to give.
 function needsSharpPreview(node, planned, drawScale) {
     const items = node._msImages;
+    if (sourceAboveLimit(node, planned)) return false;
     return planned.placements.some((p, index) => {
         if (planned.failed[index]) return false;
         const state = loadTransformedThumb(node, items[index]);
@@ -1058,7 +1215,7 @@ function sharpPreview(node, planned, contentKey, deviceWidth, deviceHeight) {
     const alive = () => !node._msDisposed && node._msPreviewRender === render;
     render.timer = setTimeout(() => {
         render.timer = null;
-        renderComposite(node, planned, { width, height, alive })
+        runRender(() => (alive() ? renderComposite(node, planned, { width, height, alive }) : null))
             .then((out) => {
                 if (!alive()) return;
                 if (out) {
@@ -1068,9 +1225,19 @@ function sharpPreview(node, planned, contentKey, deviceWidth, deviceHeight) {
                 }
                 node.graph?.setDirtyCanvas(true, false);
             })
-            .catch(() => {
+            .catch((error) => {
                 if (!alive()) return;
                 render.failed = true;
+                // A band that silently stays soft is puzzling, and a canvas the
+                // browser refused is worth saying out loud — once per content.
+                if (node._msPreviewNotice !== contentKey) {
+                    node._msPreviewNotice = contentKey;
+                    notify(
+                        "Sharp preview not rendered",
+                        `${String(error?.message || error)} — the thumbnails are shown instead.`,
+                        "warn",
+                    );
+                }
                 node.graph?.setDirtyCanvas(true, false);
             });
     }, PREVIEW_RENDER_DELAY_MS);
@@ -1089,11 +1256,15 @@ async function renderStitched(node, onProgress) {
         );
     }
 
-    const { canvas, skipped } = await renderComposite(node, planned, {
-        width: planned.finalWidth,
-        height: planned.finalHeight,
-        onProgress,
-    });
+    const { canvas, skipped } = await runRender(
+        () => renderComposite(node, planned, {
+            width: planned.finalWidth,
+            height: planned.finalHeight,
+            onProgress,
+        }),
+        // A click is waiting: a Copy goes before any pending preview render.
+        { first: true },
+    );
 
     const blob = await new Promise((resolve, reject) => {
         canvas.toBlob(
@@ -1101,15 +1272,34 @@ async function renderStitched(node, onProgress) {
             "image/png",
         );
     });
-    return { blob, width: canvas.width, height: canvas.height, skipped };
+    return { blob, width: canvas.width, height: canvas.height, skipped, key: copyCacheKey(node, planned) };
+}
+
+// Everything the copied PNG depends on: the same pixels give the same key, so
+// a second click can write the rendering the first one produced.
+function copyCacheKey(node, planned = plannedLayout(node)) {
+    return planned ? `${previewContentKey(node, planned)}|${planned.finalWidth}x${planned.finalHeight}` : null;
+}
+
+// Why the clipboard cannot be written: no API at all, or an API the browser
+// only offers in a secure context. The two need different answers.
+function clipboardUnavailable() {
+    const haveApi = typeof navigator !== "undefined" && !!navigator.clipboard?.write && typeof ClipboardItem !== "undefined";
+    if (haveApi) return null;
+    if (typeof globalThis.isSecureContext === "boolean" && !globalThis.isSecureContext) {
+        return "Writing images to the clipboard needs a secure context: open ComfyUI over https:// or on localhost.";
+    }
+    return "This browser has no clipboard image API (navigator.clipboard.write with ClipboardItem). " +
+        "Right-click the node and copy an original, or queue the workflow and save the result.";
 }
 
 // "⧉ Copy": the composite as it will be stitched, on the clipboard now,
 // without queueing the workflow.
 async function copyStitchedResult(node) {
     if (!(node._msImages?.length)) return;
-    if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
-        notify("Copy failed", "The clipboard API needs a secure context (https:// or localhost).", "error");
+    const unavailable = clipboardUnavailable();
+    if (unavailable) {
+        notify("Copy failed", unavailable, "error");
         return;
     }
     if (node._msCopying) {
@@ -1118,15 +1308,20 @@ async function copyStitchedResult(node) {
     }
 
     node._msCopying = true;
-    const title = node.title;
-    let result = null;
-    const rendering = renderStitched(node, (done, total) => {
-        node.title = `${title || "Multi Stitch Images"} • rendering copy ${done}/${total}…`;
-        node.graph?.setDirtyCanvas(true, false);
-    }).then((out) => {
-        result = out;
-        return out.blob;
-    });
+    // A rendering already made for these exact pixels is written straight
+    // away: Firefox only accepts a write while the click is still fresh, so a
+    // second click on the same composition must not wait for a render.
+    const cached = node._msCopyRender;
+    const key = copyCacheKey(node);
+    let result = cached && key && cached.key === key ? cached : null;
+    const rendering = result
+        ? Promise.resolve(result.blob)
+        : renderStitched(node, (done, total) => showProgress(node, `rendering copy ${done}/${total}…`))
+            .then((out) => {
+                result = out;
+                node._msCopyRender = out;
+                return out.blob;
+            });
     rendering.catch(() => {});  // observed below; keep a render failure from surfacing twice
 
     try {
@@ -1149,10 +1344,13 @@ async function copyStitchedResult(node) {
             `${notes.length ? ` (${notes.join("; ")})` : ""}.`,
         );
     } catch (error) {
-        notify("Copy failed", String(error?.message || error), "error");
+        // The rendering is kept either way, so the retry this suggests is
+        // instant.
+        const again = result ? " The rendering is ready — click Copy again and it is written immediately." : "";
+        notify("Copy failed", `${String(error?.message || error)}.${again}`, "error");
     } finally {
         node._msCopying = false;
-        node.title = title;
+        showProgress(node, null);
         node.graph?.setDirtyCanvas(true, true);
     }
 }
@@ -1177,8 +1375,7 @@ function clientPos(event) {
 
 const inRect = (x, y, r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
 
-function stopEvent(event, graphCanvas) {
-    if (graphCanvas) graphCanvas._mouse_down_widget = true;
+function stopEvent(event) {
     try {
         event?.preventDefault?.();
         event?.stopPropagation?.();
@@ -1188,6 +1385,8 @@ function stopEvent(event, graphCanvas) {
 function changed(node) {
     // A real edit replaces whatever unreadable text was preserved on load.
     node._msUnreadable = null;
+    // The composition changed, so the PNG kept for a repeated Copy is stale.
+    node._msCopyRender = null;
     commitImages(node);
     syncConditionalWidgets(node);
     updateNodeSize(node);
@@ -1197,10 +1396,43 @@ function changed(node) {
 function restoreHistory(node, step) {
     if (!step(node)) return false;
     node._msUnreadable = null;
+    node._msCopyRender = null;
     node._msTransformedCache?.clear();
     syncConditionalWidgets(node);
     updateNodeSize(node);
     scheduleNodeLayout(node);
+    return true;
+}
+
+const undo = (node) => restoreHistory(node, undoImages);
+const redo = (node) => restoreHistory(node, redoImages);
+const canUndo = (node) => historyOf(node).past.length > 0;
+const canRedo = (node) => historyOf(node).future.length > 0;
+
+// Replaces the whole list the way the × and undo paths do: one history entry,
+// the widget and the property in step, the thumbnails of the new files on their
+// way and the node's height brought up to date. `pushHistory: false` writes the
+// list without making the change undoable (loading a workflow, adopting a
+// stash).
+function applyImages(node, items, { pushHistory = true } = {}) {
+    const next = normalizeItems(items);
+    // Only the entries that are gone lose their cached pixels; a file still in
+    // the list keeps its decode.
+    for (const item of node._msImages || []) forgetThumb(node, item, next);
+    node._msImages = next;
+    if (!pushHistory) node._msCommitted = JSON.stringify(next);
+    changed(node);
+    for (const item of next) loadTransformedThumb(node, item);
+    node.graph?.setDirtyCanvas(true, true);
+    return next;
+}
+
+function removeImageAt(node, index) {
+    const list = node._msImages || [];
+    if (!(index >= 0 && index < list.length)) return false;
+    const [removed] = list.splice(index, 1);
+    forgetThumb(node, removed, list);
+    changed(node);
     return true;
 }
 
@@ -1239,9 +1471,13 @@ function replaceImage(node, index) {
             const uploaded = await uploadFile(file);
             const current = node._msImages?.indexOf(item);
             if (current === undefined || current < 0) return;
-            node._msThumbCache?.clear();
-            node._msTransformedCache?.clear();
+            // Only this entry's pixels are dropped; the rest of the list keeps
+            // its decodes instead of being downloaded again.
+            forgetThumb(node, item, (node._msImages || []).filter((other) => other !== item));
             Object.assign(item, { filename: uploaded.filename, subfolder: uploaded.subfolder, type: uploaded.type });
+            // The new file is not the captured frame the old one was, so the
+            // 🎞 badge and its timestamp no longer describe it.
+            delete item.source;
             changed(node);
             notify("Image replaced", `Image #${current + 1} now points at ${uploaded.filename}; its crop and order were kept.`);
         } catch (error) {
@@ -1255,10 +1491,11 @@ function replaceImage(node, index) {
 
 function moveItem(node, index, delta) {
     const target = index + delta;
-    if (target < 0 || target >= node._msImages.length) return;
+    if (target < 0 || target >= node._msImages.length) return false;
     const [item] = node._msImages.splice(index, 1);
     node._msImages.splice(target, 0, item);
     changed(node);
+    return true;
 }
 
 function reorderItem(node, from, to) {
@@ -1311,9 +1548,9 @@ function normalizeItems(list) {
     return usable.map(normalizeItem);
 }
 
-function syncUploadUi(node, baseTitle) {
+function syncUploadUi(node) {
     const run = node._msUpload;
-    if (run) node.title = `${baseTitle || "Multi Stitch Images"} • uploading ${run.done}/${run.total}…`;
+    if (run) showProgress(node, `uploading ${run.done}/${run.total}…`);
     node.graph?.setDirtyCanvas(true, false);
 }
 
@@ -1382,8 +1619,7 @@ async function addFiles(node, files) {
         done: 0,
     };
     node._msUpload = run;
-    const originalTitle = node.title;
-    syncUploadUi(node, originalTitle);
+    syncUploadUi(node);
 
     try {
         for (const file of queue) {
@@ -1404,7 +1640,7 @@ async function addFiles(node, files) {
                 loadVideoPoster(node, entry);
                 run.done += 1;
                 updateNodeSize(node);
-                syncUploadUi(node, originalTitle);
+                syncUploadUi(node);
                 continue;
             }
             const item = await uploadFile(file, run.abort.signal);
@@ -1414,7 +1650,7 @@ async function addFiles(node, files) {
             node._msImages.push(item);
             run.done += 1;
             changed(node);
-            syncUploadUi(node, originalTitle);
+            syncUploadUi(node);
         }
         // One video added: go straight to picking frames from it.
         if (addedVideos.length === 1 && !node._msDisposed) openVideoPicker(node, addedVideos[0]);
@@ -1425,8 +1661,9 @@ async function addFiles(node, files) {
         }
     } finally {
         if (node._msUpload === run) node._msUpload = null;
-        node.title = originalTitle || "Multi Stitch Images";
-        syncUploadUi(node, originalTitle);
+        // The base title comes back; another operation's suffix, if one is
+        // still running, is written again by its own progress.
+        showProgress(node, null);
         node.graph?.setDirtyCanvas(true, true);
     }
 }
@@ -1561,6 +1798,59 @@ function removeAllVideos(node) {
     deleteTempVideos(entries);
 }
 
+// ComfyUI's own Ctrl+Z (changeTracker.undo → app.loadGraphData) throws every
+// node away and builds new ones: onRemoved runs, then onConfigure on a fresh
+// instance with the same id. Deleting the pending videos and forgetting the
+// edit history there would make one Ctrl+Z destroy a video the user is still
+// capturing from, so a removal parks that session state for a moment and a
+// node configured with the same id adopts it. Nothing adopts it within the
+// window: the videos are deleted as before.
+const SESSION_STASH_MS = 2000;
+const stashedSessions = new Map();
+
+function stashSession(node) {
+    const videos = [...(node._msVideos || [])];
+    const history = historyOf(node);
+    const past = [...history.past];
+    const future = [...history.future];
+    if (!videos.length && !past.length && !future.length) return;
+    const id = node.id;
+    if (id === undefined || id === null) {
+        // No id to match a new instance by: the temp videos still have to go.
+        deleteTempVideos(videos);
+        return;
+    }
+    dropStash(id, { deleteVideos: true });
+    const stash = { videos, past, future, timer: null };
+    stash.timer = setTimeout(() => dropStash(id, { deleteVideos: true }), SESSION_STASH_MS);
+    stashedSessions.set(id, stash);
+}
+
+function dropStash(id, { deleteVideos = false } = {}) {
+    const stash = stashedSessions.get(id);
+    if (!stash) return null;
+    clearTimeout(stash.timer);
+    stashedSessions.delete(id);
+    if (deleteVideos && stash.videos.length) deleteTempVideos(stash.videos);
+    return stash;
+}
+
+// Takes over a stash left by the same node id moments ago: the videos are
+// still on the server, and undo still reaches back past the reload.
+function adoptSession(node) {
+    const stash = dropStash(node.id);
+    if (!stash) return false;
+    if (stash.videos.length) {
+        node._msVideos = stash.videos;
+        nodesWithVideos.add(node);
+        installUnloadCleanup();
+    }
+    const history = historyOf(node);
+    history.past = stash.past;
+    history.future = stash.future;
+    return true;
+}
+
 // Leaving the page (reload, close) is the one exit the node cannot see:
 // a beacon asks the server to drop every video still waiting for capture.
 let unloadCleanupInstalled = false;
@@ -1568,7 +1858,11 @@ function installUnloadCleanup() {
     if (unloadCleanupInstalled || typeof window === "undefined") return;
     unloadCleanupInstalled = true;
     window.addEventListener("pagehide", () => {
-        const filenames = [...nodesWithVideos].flatMap((node) => (node._msVideos || []).map((entry) => entry.filename));
+        const filenames = [
+            ...[...nodesWithVideos].flatMap((node) => (node._msVideos || []).map((entry) => entry.filename)),
+            // A stash nobody adopted before the page went away counts too.
+            ...[...stashedSessions.values()].flatMap((stash) => stash.videos.map((entry) => entry.filename)),
+        ];
         if (!filenames.length || typeof navigator === "undefined" || typeof navigator.sendBeacon !== "function") return;
         try {
             navigator.sendBeacon(api.apiURL(VIDEO_DELETE_ROUTE), new Blob([JSON.stringify({ filenames })], { type: "application/json" }));
@@ -1606,8 +1900,14 @@ function addServerFrame(node, entry, data, time) {
     return item;
 }
 
+// Two pickers would fight over the keyboard and over which video the next
+// capture belongs to, so only one is open at a time, on any node.
+let openPicker = null;
+
 function openVideoPicker(node, entry) {
     if (node._msPicker) return;
+    // Whatever was open keeps its video ("keep & close"): only the overlay goes.
+    if (openPicker) openPicker.close(false);
     try {
         const picker = openFramePicker(node, entry, {
             onCapture: (canvas, time) => addCapturedFrame(node, entry, canvas, time),
@@ -1615,11 +1915,13 @@ function openVideoPicker(node, entry) {
             onDone: () => removeVideo(node, entry),
             onClose: () => {
                 if (node._msPicker === picker) node._msPicker = null;
+                if (openPicker === picker) openPicker = null;
                 node.graph?.setDirtyCanvas(true, true);
             },
         });
         picker.entry = entry;
         node._msPicker = picker;
+        openPicker = picker;
     } catch (error) {
         node._msPicker = null;
         console.warn("[Multi Stitch Images] frame picker", error);
@@ -1717,16 +2019,26 @@ function openEditor(node, index) {
     if (!node || node._msEditorOpening) return;
     const item = node._msImages?.[index];
     if (!item) return;
-    // A file that cannot be loaded cannot be edited; offer to relink instead.
-    if (loadTransformedThumb(node, item).failed) {
+    const state = loadTransformedThumb(node, item);
+    if (state.failed) {
+        // A load that ran out of time may simply have been a slow server: try
+        // once more before offering to relink. Anything else cannot be edited.
+        if (state.reason === "timeout" && !state.retried) {
+            retryThumb(node, item);
+            notify("Loading again", `Image #${index + 1} timed out; trying once more.`, "info");
+            node.graph?.setDirtyCanvas(true, false);
+            return;
+        }
         replaceImage(node, index);
         return;
     }
     node._msEditorOpening = true;
+    // The editor puts its handle on node._msEditor itself, so a removed node
+    // can close it.
     Promise.resolve(openCropEditor(node, index))
         .catch((error) => {
             console.error("[Multi Stitch Images] crop editor", error);
-            alert(error?.message || error);
+            notify("Cannot edit this image", String(error?.message || error), "error");
         })
         .finally(() => {
             node._msEditorOpening = false;
@@ -1765,7 +2077,7 @@ function updateThumbnailDrag(node, x, y, event) {
     return true;
 }
 
-function finishThumbnailDrag(node, graphCanvas) {
+function finishThumbnailDrag(node) {
     const press = node?._msThumbPress;
     if (!press || press.finished) return false;
 
@@ -1776,7 +2088,6 @@ function finishThumbnailDrag(node, graphCanvas) {
     if (press.dragging) reorderItem(node, press.index, press.target);
 
     node.graph?.setDirtyCanvas(true, false);
-    if (graphCanvas) graphCanvas._mouse_down_widget = false;
     return true;
 }
 
@@ -1800,7 +2111,7 @@ function startThumbnailDrag(node, index, localX, localY, event, graphCanvas) {
     // Node-level mouseup can be swallowed by canvas capture/selection. Keep a
     // capture-phase fallback so drag state is always released cleanly.
     press.windowPointerUp = () => {
-        setTimeout(() => finishThumbnailDrag(node, graphCanvas), 0);
+        setTimeout(() => finishThumbnailDrag(node), 0);
     };
     window.addEventListener("pointerup", press.windowPointerUp, true);
     window.addEventListener("mouseup", press.windowPointerUp, true);
@@ -1844,10 +2155,38 @@ function restoreInvalidWidgetValues(node) {
             || (Array.isArray(choices) && choices.length > 0 && !choices.includes(value))
             || (widget.type === "number" && !Number.isFinite(Number(value)));
         if (!invalid) continue;
+        // size_reference was briefly a name. The names still resolve (in
+        // sizeReferenceIndex and in the backend), so resetting one to 1 would
+        // quietly change the width/height outputs of a saved workflow: keep 1
+        // for now and resolve the name once the sizes are known.
+        const legacyName = widget.name === "size_reference"
+            && LEGACY_SIZE_REFERENCES.includes(String(value).trim().toLowerCase())
+            ? String(value).trim().toLowerCase() : null;
+        if (legacyName) node._msPendingSizeReference = legacyName;
         widget.value = widget.name in LEGACY_VALUES ? LEGACY_VALUES[widget.name] : defaults.get(widget.name);
-        restored.push(widget.name);
+        restored.push(legacyName ? `${widget.name} (resolving "${legacyName}")` : widget.name);
     }
     return restored;
+}
+
+// Turns a remembered legacy size_reference name into the image number it
+// names, now that the thumbnails have reported the sizes. Called wherever the
+// dimensions become available, so it happens with the panel open or closed.
+function resolvePendingSizeReference(node, dims) {
+    const pending = node._msPendingSizeReference;
+    if (!pending || !dims?.length) return;
+    let index;
+    try {
+        index = sizeReferenceIndex(dims, pending);
+    } catch (_) {
+        return;
+    }
+    node._msPendingSizeReference = null;
+    const widget = getWidget(node, "size_reference");
+    if (!widget || widget.value === index + 1) return;
+    widget.value = index + 1;
+    console.warn(`[Multi Stitch Images] size_reference "${pending}" resolved to image ${index + 1} of ${dims.length}`);
+    node.graph?.setDirtyCanvas(true, false);
 }
 
 function setupNode(node) {
@@ -1920,6 +2259,12 @@ app.registerExtension({
             this._msThumbCache ||= new Map();
             this._msTransformedCache ||= new Map();
             resetHistory(this);
+            // Configured moments after a removal with the same id: this is the
+            // same node coming back from a graph reload, so its videos and its
+            // undo history come with it.
+            if (adoptSession(this)) {
+                console.debug("[Multi Stitch Images] kept this node's videos and edit history across a graph reload");
+            }
             updateCustomColorButton(this);
             syncConditionalWidgets(this);
             if (this._msUnreadable) {
@@ -1975,7 +2320,7 @@ app.registerExtension({
                 const [x, y] = localPos(this, event, pos, graphCanvas);
                 if (inRect(x, y, sizeButtonRect(this))) {
                     toggleSizePanel(this);
-                    stopEvent(event, graphCanvas);
+                    stopEvent(event);
                     return true;
                 }
                 const hit = Object.entries(toolbarControls(this)).find(([, rect]) => inRect(x, y, rect))?.[0];
@@ -1990,13 +2335,13 @@ app.registerExtension({
                     else if (hit === "preview") {
                         if (this._msImages?.length) togglePreview(this);
                     } else if (hit === "options") toggleAdvanced(this);
-                    stopEvent(event, graphCanvas);
+                    stopEvent(event);
                     return true;
                 }
                 // With no images yet, the dashed box is the "add" target too.
                 if (!listCount(this) && inRect(x, y, emptyBoxRect(this))) {
                     chooseFiles(this);
-                    stopEvent(event, graphCanvas);
+                    stopEvent(event);
                     return true;
                 }
             }
@@ -2008,7 +2353,7 @@ app.registerExtension({
                     if (!r.visible || !inRect(x, y, r)) continue;
                     if (inRect(x, y, thumbActionRects(r).remove)) removeVideo(this, entry);
                     else openVideoPicker(this, entry);
-                    stopEvent(event, graphCanvas);
+                    stopEvent(event);
                     return true;
                 }
 
@@ -2018,10 +2363,7 @@ app.registerExtension({
 
                     const actions = thumbActionRects(r);
                     if (inRect(x, y, actions.remove)) {
-                        this._msImages.splice(i, 1);
-                        this._msThumbCache?.clear();
-                        this._msTransformedCache?.clear();
-                        changed(this);
+                        removeImageAt(this, i);
                     } else if (inRect(x, y, actions.prev)) {
                         moveItem(this, i, -1);
                     } else if (inRect(x, y, actions.next)) {
@@ -2034,7 +2376,7 @@ app.registerExtension({
                         openEditor(this, i);
                     }
 
-                    stopEvent(event, graphCanvas);
+                    stopEvent(event);
                     return true;
                 }
             }
@@ -2094,7 +2436,7 @@ app.registerExtension({
             if (this._msThumbPress) {
                 const [x, y] = localPos(this, event, pos, graphCanvas);
                 updateThumbnailDrag(this, x, y, event);
-                stopEvent(event, graphCanvas);
+                stopEvent(event);
                 return true;
             }
             return mouseMove?.apply(this, arguments) ?? false;
@@ -2103,8 +2445,8 @@ app.registerExtension({
         const mouseUp = nodeType.prototype.onMouseUp;
         nodeType.prototype.onMouseUp = function (event, pos, graphCanvas) {
             if (this._msThumbPress) {
-                finishThumbnailDrag(this, graphCanvas);
-                stopEvent(event, graphCanvas);
+                finishThumbnailDrag(this);
+                stopEvent(event);
                 return true;
             }
             return mouseUp?.apply(this, arguments) ?? false;
@@ -2112,9 +2454,16 @@ app.registerExtension({
 
         const dragOver = nodeType.prototype.onDragOver;
         nodeType.prototype.onDragOver = function (event) {
-            if (Array.from(event?.dataTransfer?.items || []).some((item) => item.type?.startsWith("image/") || item.type?.startsWith("video/"))) {
-                return true;
-            }
+            // ComfyUI forwards the drop only when this returns true, and a
+            // .mkv or .ts often arrives with an empty MIME type: a dragged
+            // file with no type at all still has to be accepted here, or
+            // onDragDrop — which takes videos by extension — never runs.
+            const accepted = Array.from(event?.dataTransfer?.items || []).some((item) => {
+                const type = String(item?.type || "");
+                if (type.startsWith("image/") || type.startsWith("video/")) return true;
+                return item?.kind === "file" && !type;
+            });
+            if (accepted) return true;
             return dragOver?.apply(this, arguments) ?? false;
         };
 
@@ -2133,13 +2482,70 @@ app.registerExtension({
         nodeType.prototype.onRemoved = function () {
             this._msDisposed = true;
             cancelUpload(this);
-            removeAllVideos(this);
+            // A removal may be a graph reload in disguise (ComfyUI's Ctrl+Z),
+            // so the videos and the edit history are parked for a moment
+            // instead of being thrown away. An explicit removal — the card's
+            // ×, the picker's Done, Clear, leaving the page — still deletes
+            // right away, through its own path.
+            stashSession(this);
+            this._msVideos = [];
+            nodesWithVideos.delete(this);
+            this._msPicker?.close(false);
+            this._msEditor?.close?.();
             for (const state of this._msThumbCache?.values() || []) state.cancel?.();
             this._msThumbCache?.clear(); this._msTransformedCache?.clear();
             clearTimeout(this._msPreviewRender?.timer);
             this._msPreviewRender = null;
+            this._msCopyRender = null;
             detachPressFallback(this._msThumbPress);
             return removed?.apply(this, arguments);
         };
     },
 });
+
+// The node's own API. Nothing here is for ComfyUI, which only ever imports
+// this file for its side effect; it is what the gallery modal, the DOM view for
+// Vue nodes and the tests drive, so both renderings act through exactly the
+// functions the canvas UI uses — geometry helpers included, since the DOM view
+// and the tests must agree with the canvas about where a card is.
+export {
+    addFiles,
+    advancedOpen,
+    advancedState,
+    applyImages,
+    canRedo,
+    canUndo,
+    chooseFiles,
+    clearAllImages,
+    copyStitchedResult,
+    drawContained,
+    drawPreview,
+    drawSizePanel,
+    emptyBoxRect,
+    listCount,
+    listTop,
+    moveItem as moveImage,
+    nodeWidth,
+    notify,
+    openEditor,
+    openVideoPicker,
+    plannedLayout,
+    predictedSize,
+    previewEnabled,
+    previewRect,
+    readSettings,
+    redo,
+    removeImageAt,
+    removeVideo,
+    sizeButtonRect,
+    sizePanelEnabled,
+    sizeReadout,
+    thumbActionRects,
+    thumbLayout,
+    titleHeight,
+    toggleAdvanced,
+    togglePreview,
+    toggleSizePanel,
+    toolbarControls,
+    undo,
+};
