@@ -1,8 +1,13 @@
+import asyncio
 import functools
 import hashlib
+import io
 import json
 import math
 import re
+import secrets
+import sys
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable
@@ -56,6 +61,9 @@ _MATCH_REFERENCES = ("first", "largest", "smallest")
 # the behaviour it had then, which is why stitch() defaults differently.
 _DEFAULT_MATCH_REFERENCE = "smallest"
 _LEGACY_MATCH_REFERENCE = "first"
+# Which image the width/height outputs describe. The superlatives go by area,
+# unlike match_reference, which goes by the side a strip shares.
+_SIZE_REFERENCES = ("first", "largest", "smallest")
 _OUTPUT_LIMITS = ("none", "max_width", "max_height", "max_long_side")
 
 
@@ -315,6 +323,42 @@ def _reference_index(
         keys = [w for w, _ in dimensions]
     target = max(keys) if match_reference == "largest" else min(keys)
     return keys.index(target)
+
+
+def _reference_size(
+    dimensions: list[tuple[int, int]],
+    size_reference: str,
+    megapixels: float,
+    divisible_by: int,
+) -> tuple[int, int]:
+    """Width and height derived from one image of the list: the reference's own
+    size, optionally rescaled to a megapixel target, snapped to a multiple.
+
+    "first" is the list order; "largest" and "smallest" go by area, an earlier
+    image winning a tie. A megapixel target above zero scales both sides by one
+    factor, so the aspect ratio survives; each side is then rounded to the
+    nearest multiple of divisible_by with Python's round (half to even, which
+    the JavaScript mirror reproduces) and never drops below one multiple.
+    """
+    size_reference = _require_choice("size_reference", size_reference, _SIZE_REFERENCES)
+    if not dimensions:
+        raise ValueError("Multi Stitch Images: paste or add at least one image first.")
+    if size_reference == "first":
+        index = 0
+    else:
+        areas = [w * h for w, h in dimensions]
+        target = max(areas) if size_reference == "largest" else min(areas)
+        index = areas.index(target)  # an earlier image wins a tie
+    width, height = float(dimensions[index][0]), float(dimensions[index][1])
+    megapixels = float(megapixels or 0)
+    if megapixels > 0:
+        scale = math.sqrt(megapixels * 1_000_000 / (width * height))
+        width, height = width * scale, height * scale
+    step = max(1, int(divisible_by or 1))
+    return (
+        max(step, int(round(width / step)) * step),
+        max(step, int(round(height / step)) * step),
+    )
 
 
 def _prepared_strip_dims(
@@ -829,11 +873,31 @@ class MultiStitchImages:
                                "smallest by area in a grid. The reference keeps its own size, so smallest "
                                "never enlarges anything.",
                 }),
+                # Added after 1.2 for the width/height outputs: last again, so
+                # every earlier widget keeps its slot in saved workflows.
+                "size_reference": (list(_SIZE_REFERENCES), {
+                    "default": "first",
+                    "tooltip": "Which image the width and height outputs describe: first: the first in the "
+                               "list. largest / smallest: the largest or smallest by area. Its size after "
+                               "crop and rotation, rescaled to size_megapixels when that is above 0, with "
+                               "each side snapped to a multiple of size_divisible_by.",
+                }),
+                "size_megapixels": ("FLOAT", {
+                    "default": 0.0, "min": 0.0, "max": 64.0, "step": 0.05, "round": 0.01,
+                    "tooltip": "Rescale the width and height outputs to cover this many megapixels, keeping "
+                               "the reference image's aspect ratio. 0 keeps its own pixel count.",
+                }),
+                "size_divisible_by": ("INT", {
+                    "default": 32, "min": 1, "max": 512, "step": 1,
+                    "tooltip": "Snap the width and height outputs to the nearest multiple of this many "
+                               "pixels, never below one multiple. Latents need a multiple of 8; 32 or 64 "
+                               "suits most models.",
+                }),
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "IMAGE")
-    RETURN_NAMES = ("image", "cells")
+    RETURN_TYPES = ("IMAGE", "IMAGE", "INT", "INT")
+    RETURN_NAMES = ("image", "cells", "width", "height")
     FUNCTION = "stitch"
     CATEGORY = "image/transform"
     DESCRIPTION = (
@@ -844,6 +908,10 @@ class MultiStitchImages:
         "The stitched strip or grid.",
         "One frame per image, centred in a uniform cell, when output_cells is on; "
         "otherwise the stitched image again.",
+        "Width of the reference image (size_reference), rescaled to size_megapixels and snapped to "
+        "size_divisible_by — for an Empty Latent or a resize node downstream.",
+        "Height of the reference image (size_reference), rescaled to size_megapixels and snapped to "
+        "size_divisible_by — for an Empty Latent or a resize node downstream.",
     )
 
     def stitch(
@@ -865,6 +933,9 @@ class MultiStitchImages:
         cells_resolution="placed",
         minimum_image_side=0,
         match_reference=_LEGACY_MATCH_REFERENCE,
+        size_reference="first",
+        size_megapixels=0.0,
+        size_divisible_by=32,
     ):
         try:
             items = json.loads(images_json or "[]")
@@ -898,9 +969,14 @@ class MultiStitchImages:
             loaders.append(loader)
             dimensions.append(size)
 
+        # The size outputs come from the same measurements the canvas is laid
+        # out from, so they describe an image as it lands there. They cost
+        # nothing, so a bad choice is rejected before anything is decoded.
+        width, height = _reference_size(dimensions, size_reference, size_megapixels, size_divisible_by)
+
         # Decode pass: _compose_from validates the canvas first, then pulls
         # each source through its loader one at a time.
-        return _compose_from(
+        image, cells = _compose_from(
             loaders,
             dimensions,
             layout_mode,
@@ -919,6 +995,7 @@ class MultiStitchImages:
             minimum_image_side=minimum_image_side,
             match_reference=match_reference,
         )
+        return image, cells, width, height
 
     @classmethod
     def IS_CHANGED(cls, images_json="[]", **kwargs):
@@ -938,11 +1015,14 @@ class MultiStitchImages:
 
 # --- Temporary videos for frame capture ---------------------------------------
 # The frontend uploads a video to ComfyUI's temp folder (type "temp", the
-# subfolder below) only to pick frames from it in the browser; every capture
-# becomes an ordinary PNG in the input folder. The video is never part of the
-# stitch, so the node ignores it. This route lets the frontend delete the file
-# as soon as the captures are done; ComfyUI empties the temp folder on
-# start-up for anything a closed browser left behind.
+# subfolder below) only to pick frames from it; every capture becomes an
+# ordinary PNG in the input folder. The video is never part of the stitch, so
+# the node ignores it. The delete route lets the frontend remove the file as
+# soon as the captures are done; ComfyUI empties the temp folder on start-up
+# for anything a closed browser left behind. The info, frame and capture
+# routes decode frames on the server with PyAV — for formats a browser cannot
+# play, and for a capture at exactly the time asked for. PyAV is optional:
+# those routes answer 501 without it, and the stitch itself never needs it.
 _VIDEO_SUBFOLDER = "multi_stitch_video"
 _VIDEO_EXTENSIONS = {
     ".mp4", ".m4v", ".webm", ".mov", ".mkv", ".ogv", ".ogg", ".avi", ".mpg", ".mpeg", ".3gp", ".ts", ".wmv",
@@ -994,6 +1074,267 @@ def _video_delete_response(payload: object) -> tuple[int, dict]:
     return status, {"removed": removed, "missing": missing, "rejected": rejected}
 
 
+_CAPTURE_SUBFOLDER = "multi_stitch"
+_PREVIEW_MAX_SIDE = 720
+_PREVIEW_SIDE_CAP = 2048
+_PREVIEW_JPEG_QUALITY = 88
+# A frame is on screen from its own timestamp on. The slack keeps a time the
+# browser rounded to milliseconds on the frame it meant, not the one before.
+_FRAME_TIME_SLACK = 1e-4
+
+
+class _UnreadableVideo(Exception):
+    """The file opened, but holds nothing FFmpeg can decode as video."""
+
+
+def _av():
+    """PyAV, imported only when a video route runs: the node stitches without it."""
+    try:
+        import av
+    except ImportError as exc:
+        raise ImportError("PyAV is not installed; run: pip install av") from exc
+    return av
+
+
+def _open_video(filename: object):
+    """Open one uploaded video with PyAV; FileNotFoundError once it is deleted."""
+    path = _temp_video_path(filename)
+    av = _av()
+    if not path.is_file():
+        raise FileNotFoundError(f"Multi Stitch Images: video not found: {path.name}")
+    return av.open(str(path))
+
+
+def _video_stream(container):
+    """The first video stream, decoding on every core the codec can use."""
+    if not container.streams.video:
+        raise _UnreadableVideo("Multi Stitch Images: the file has no video stream.")
+    stream = container.streams.video[0]
+    stream.thread_type = "AUTO"
+    return stream
+
+
+def _stream_seconds(stream, timestamp) -> float:
+    """A stream timestamp as seconds; 0 when the header does not say."""
+    if timestamp is None or stream.time_base is None:
+        return 0.0
+    return float(timestamp * stream.time_base)
+
+
+def _video_duration(container, stream) -> float:
+    """Seconds of video: the stream's own length, else the container's."""
+    if stream.duration is not None:
+        return max(0.0, _stream_seconds(stream, stream.duration))
+    if container.duration is not None:
+        return max(0.0, container.duration / _av().time_base)
+    return 0.0
+
+
+def _display_rotation(stream, frame=None) -> int:
+    """Clockwise degrees (0, 90, 180 or 270) a player turns the picture by.
+
+    Older demuxers export a "rotate" tag, already clockwise; current FFmpeg
+    keeps only the display matrix, which PyAV reads off a decoded frame as a
+    counter-clockwise angle — hence the sign flip.
+    """
+    try:
+        degrees = float(stream.metadata.get("rotate", ""))
+    except (TypeError, ValueError):
+        counter_clockwise = getattr(frame, "rotation", None)
+        degrees = -float(counter_clockwise) if counter_clockwise is not None else 0.0
+    if not math.isfinite(degrees):
+        degrees = 0.0
+    return int(round(degrees / 90.0)) * 90 % 360
+
+
+def _decode_from_keyframe(container, stream, target: int, limit: float):
+    """The first frame out after seeking to `target` (stream time-base units)
+    and the frames that follow it.
+
+    Formats with an index (MP4, Matroska, AVI) seek straight to the keyframe
+    before the target. MPEG-TS has none: its seek lands on whatever packet is
+    there, and a P-frame decoded without its reference is grey mush, so retry
+    further back, doubling the distance, until the first frame out is a
+    keyframe that starts in time — or the start of the stream is reached.
+    """
+    back = 0
+    while True:
+        container.seek(max(0, target - back), backward=True, any_frame=False, stream=stream)
+        frames = container.decode(stream)
+        first = next(frames, None)
+        settled = first is None or (first.key_frame and (first.time is None or first.time <= limit))
+        if settled or target - back <= 0:
+            return first, frames
+        back = back * 2 if back else int(1 / stream.time_base)
+
+
+def _decode_frame_at(container, stream, seconds: float):
+    """The frame on screen at `seconds` into the stream.
+
+    Decode forward from the keyframe before it to the last frame that starts
+    at or before it. A time before the first frame gets that frame and a time
+    past the last gets the last, so a request never comes back empty. A stream
+    that starts late (MPEG-TS) counts from its first frame, as a browser's
+    currentTime does.
+    """
+    origin = stream.start_time or 0
+    limit = _stream_seconds(stream, origin) + seconds + _FRAME_TIME_SLACK
+    chosen, frames = _decode_from_keyframe(container, stream, int(origin + seconds / stream.time_base), limit)
+    for frame in frames:
+        if frame.time is None or frame.time > limit:
+            break
+        chosen = frame
+    if chosen is None:
+        raise _UnreadableVideo("Multi Stitch Images: the video has no frame to decode.")
+    return chosen
+
+
+def _video_frame_at(filename: object, seconds: float) -> tuple[Image.Image, float]:
+    """The frame displayed at `seconds` (clamped to the video) as an RGB image
+    turned the way a player shows it, with the time actually used."""
+    seconds = float(seconds)
+    with _open_video(filename) as container:
+        stream = _video_stream(container)
+        duration = _video_duration(container, stream)
+        # An unknown length reads as 0; it must not pin every request to the start.
+        seconds = max(0.0, min(seconds, duration) if duration > 0 else seconds)
+        frame = _decode_frame_at(container, stream, seconds)
+        image = _apply_transform(frame.to_image(), {"rotation": _display_rotation(stream, frame)})
+    return image, seconds
+
+
+def _video_frame(filename: object, seconds: float) -> Image.Image:
+    """The frame displayed at `seconds`, as a browser would show it."""
+    return _video_frame_at(filename, seconds)[0]
+
+
+def _video_info(filename: object) -> dict:
+    """What the picker needs to scrub and step: seconds, frame rate, the size
+    as displayed, the frame count when the header has one, and the rotation."""
+    with _open_video(filename) as container:
+        stream = _video_stream(container)
+        # The display matrix rides on decoded frames, so read it off the first.
+        rotation = _display_rotation(stream, next(container.decode(stream), None))
+        width, height = int(stream.width), int(stream.height)
+        if rotation in {90, 270}:
+            width, height = height, width
+        rate = stream.average_rate or stream.guessed_rate
+        return {
+            "duration": _video_duration(container, stream),
+            "fps": float(rate) if rate else 0.0,
+            "width": width,
+            "height": height,
+            "frames": int(stream.frames or 0),
+            "rotation": rotation,
+        }
+
+
+def _is_unreadable_video(exc: BaseException) -> bool:
+    """PyAV's own errors count too, found without importing PyAV where it is absent."""
+    ffmpeg_error = getattr(sys.modules.get("av"), "FFmpegError", ())
+    return isinstance(exc, (_UnreadableVideo, ffmpeg_error))
+
+
+def _video_failure(exc: Exception) -> tuple[int, dict]:
+    """(status, body) for a failure inside the video helpers.
+
+    Checked in this order because PyAV's errors double as built-ins: its
+    FileNotFoundError is one, and its InvalidDataError is a ValueError.
+    Anything else is a bug and is raised again, for aiohttp's 500.
+    """
+    if isinstance(exc, ImportError):
+        return 501, {"error": "PyAV is not installed; run: pip install av"}
+    if isinstance(exc, FileNotFoundError):
+        return 404, {"error": "video not found; add it to the node again"}
+    if _is_unreadable_video(exc):
+        return 415, {"error": f"PyAV could not decode the video ({exc})"}
+    if isinstance(exc, ValueError):
+        return 400, {"error": str(exc)}
+    raise exc
+
+
+def _video_request(query: object) -> dict:
+    if not isinstance(query, dict):
+        raise ValueError('expected "filename" (and "time") in the request')
+    return query
+
+
+def _query_seconds(query: dict) -> float:
+    try:
+        seconds = float(query.get("time"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError('"time" must be a number of seconds') from exc
+    if not math.isfinite(seconds):
+        raise ValueError('"time" must be a number of seconds')
+    return seconds
+
+
+def _preview_max_side(query: dict) -> int:
+    try:
+        side = int(float(query.get("max_side", _PREVIEW_MAX_SIDE)))
+    except (TypeError, ValueError) as exc:
+        raise ValueError('"max_side" must be a number of pixels') from exc
+    return max(1, min(_PREVIEW_SIDE_CAP, side))
+
+
+def _jpeg_preview(image: Image.Image, max_side: int) -> bytes:
+    """The frame as a JPEG whose long side is at most max_side."""
+    scale = max_side / max(image.size)
+    if scale < 1:
+        size = (max(1, round(image.width * scale)), max(1, round(image.height * scale)))
+        image = image.resize(size, Image.Resampling.LANCZOS)
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=_PREVIEW_JPEG_QUALITY)
+    return buffer.getvalue()
+
+
+def _video_info_response(query: object) -> tuple[int, dict]:
+    """(status, body) for the info route; pure so it is testable without aiohttp."""
+    try:
+        return 200, _video_info(_video_request(query).get("filename"))
+    except Exception as exc:
+        return _video_failure(exc)
+
+
+def _video_preview_response(query: object) -> tuple[int, object, str]:
+    """(status, body, content type) for the frame route: JPEG bytes, or a JSON error."""
+    try:
+        query = _video_request(query)
+        max_side = _preview_max_side(query)
+        image, _ = _video_frame_at(query.get("filename"), _query_seconds(query))
+        return 200, _jpeg_preview(image, max_side), "image/jpeg"
+    except Exception as exc:
+        return (*_video_failure(exc), "application/json")
+
+
+def _capture_path() -> Path:
+    """A fresh PNG path under input/multi_stitch: time-ordered, never colliding."""
+    folder = Path(folder_paths.get_input_directory()) / _CAPTURE_SUBFOLDER
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder / f"multi_stitch_{int(time.time() * 1000)}_{secrets.token_hex(4)}.png"
+
+
+def _video_capture_response(payload: object) -> tuple[int, dict]:
+    """(status, body) for the capture route: the frame saved full size as a PNG
+    in the input folder, described the way /upload/image describes an upload
+    (name, subfolder, type) plus its size and the time it was taken at."""
+    try:
+        payload = _video_request(payload)
+        image, seconds = _video_frame_at(payload.get("filename"), _query_seconds(payload))
+    except Exception as exc:
+        return _video_failure(exc)
+    path = _capture_path()
+    image.save(path, format="PNG")
+    return 200, {
+        "name": path.name,
+        "subfolder": _CAPTURE_SUBFOLDER,
+        "type": "input",
+        "width": image.width,
+        "height": image.height,
+        "time": seconds,
+    }
+
+
 try:
     from aiohttp import web as _web
     from server import PromptServer as _PromptServer
@@ -1002,6 +1343,11 @@ except Exception:  # not inside ComfyUI: tests and tooling import this module to
     _PromptServer = None
 
 if _web is not None and getattr(_PromptServer, "instance", None) is not None:
+    async def _off_loop(function, *args):
+        """Decode in a worker thread: a seek and decode of a big video takes
+        long enough to stall every other request if it ran on the event loop."""
+        return await asyncio.get_running_loop().run_in_executor(None, function, *args)
+
     @_PromptServer.instance.routes.post("/multi_stitch/video/delete")
     async def _delete_temp_video_route(request):
         try:
@@ -1009,6 +1355,27 @@ if _web is not None and getattr(_PromptServer, "instance", None) is not None:
         except Exception:
             payload = None
         status, body = _video_delete_response(payload)
+        return _web.json_response(body, status=status)
+
+    @_PromptServer.instance.routes.get("/multi_stitch/video/info")
+    async def _video_info_route(request):
+        status, body = await _off_loop(_video_info_response, dict(request.query))
+        return _web.json_response(body, status=status)
+
+    @_PromptServer.instance.routes.get("/multi_stitch/video/frame")
+    async def _video_frame_route(request):
+        status, body, content_type = await _off_loop(_video_preview_response, dict(request.query))
+        if content_type != "image/jpeg":
+            return _web.json_response(body, status=status)
+        return _web.Response(body=body, status=status, content_type=content_type)
+
+    @_PromptServer.instance.routes.post("/multi_stitch/video/capture")
+    async def _video_capture_route(request):
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = None
+        status, body = await _off_loop(_video_capture_response, payload)
         return _web.json_response(body, status=status)
 
 
