@@ -17,7 +17,8 @@
 - 전용 **`≡` Drag Handle**로 이미지 순서 변경
 - 썸네일 **우클릭 → 원본 이미지 클립보드 복사**
 - **`⧉ Copy` 버튼 → 합성 결과를 Queue 없이 바로 클립보드 복사**
-- **동영상에서 장면 캡처** — 프레임 단위로 찾아 원본 해상도 PNG로 목록에 추가, 동영상은 저장 공간을 차지하지 않음
+- **동영상에서 장면 캡처** — 프레임 단위로 찾아 원본 해상도 PNG로 목록에 추가, 동영상은 저장 공간을 차지하지 않음. 브라우저가 못 여는 코덱은 서버(PyAV)가 디코딩
+- **기준 이미지 크기 출력** — `width`/`height` 출력 단자와 크기 패널: 기준 이미지 크기를 MP 목표로 조정하고 배수(기본 32)로 맞춤
 - 툴바 한 줄 `+ Add · Clear · ⧉ Copy · ↶ ↷ · Preview · Options` — 고급 옵션은 **접혀 있고** 기본값이 아닌 것만 표시
 - 이미지별 **Crop / 90° Rotate / Flip H / Flip V**
 - Free Crop용 **상/하/좌/우 + 모서리 핸들**
@@ -43,7 +44,9 @@
 - **`⧉ Copy`** — 합성 결과를 Queue 없이 브라우저에서 만들어 클립보드에 넣습니다.
 - **`match_image_size` 기본값이 `true`** — 새 노드는 처음부터 이미지 높이(세로 Strip은 너비)를 맞춰 붙입니다. 저장된 워크플로우는 자기 값을 유지합니다.
 - **`match_reference`** — `match_image_size`의 기준을 첫 번째 / 가장 큰 / 가장 작은 이미지 중에서 고릅니다(`Options ▸` 안). 기본값 `smallest`는 순서를 바꾸지 않아도 확대 없이 높이를 맞춥니다. 이 옵션이 생기기 전에 저장한 워크플로우는 예전 동작인 `first`로 열립니다.
-- **동영상에서 장면 캡처** — 동영상을 넣으면 프레임 선택기가 열리고, 캡처한 프레임은 보통 이미지처럼 편집·합성됩니다. 동영상은 temp 폴더에만 잠시 있다가 캡처가 끝나면 지워집니다.
+- **동영상에서 장면 캡처** — 동영상을 넣으면 프레임 선택기가 열리고, 캡처한 프레임은 보통 이미지처럼 편집·합성됩니다. 동영상은 temp 폴더에만 잠시 있다가 캡처가 끝나면 지워집니다. 브라우저가 못 여는 코덱은 서버의 PyAV가 대신 디코딩하고, 재생되는 동영상도 "server capture"로 프레임 단위 정확한 캡처를 받을 수 있습니다.
+- **`width` / `height` 출력과 크기 패널** — 기준 이미지(기본 첫 번째)의 크기를 `size_megapixels`로 조정하고 `size_divisible_by`(기본 32) 배수로 맞춘 값을 출력합니다. 제목줄의 **`📐 Size`** 버튼을 켜면 노드 아래에 비율 상자와 `672 x 1184 | 9:16 | 0.80 MP | divisible by 32` 같은 읽기가 붙습니다.
+- **목록이 아래로 늘어남** — 스크롤 대신 이미지 수만큼 노드가 아래로 커져 모든 카드가 보입니다.
 - 모든 위젯과 출력에 **툴팁** — 마우스를 올리면 설명이 보입니다.
 - **한국어 UI** — ComfyUI 언어를 한국어로 두면 위젯 이름·선택지·툴팁·노드 설명이 한국어로 표시됩니다.
 - **예제 워크플로우** 2개 — 템플릿 브라우저의 `Comfyui-Image-Stitch` 항목(붙여넣기 → Strip, IMAGE 배치 → Grid + cells).
@@ -217,8 +220,21 @@ grid_columns = 3
 
 동영상은 **저장 공간을 차지하지 않습니다.** ComfyUI의 temp 폴더(`temp/multi_stitch_video/`)에만 올라가고 워크플로우에는 저장되지 않으며, 선택기의 **Done**, 카드의 **×**, `Clear`, 노드 삭제, 페이지를 닫을 때 서버에서 지워집니다(캡처한 PNG는 남습니다). 브라우저가 비정상 종료돼 남은 파일은 ComfyUI가 다음 시작 때 temp 폴더를 비우면서 정리됩니다. 실행 시에는 캡처된 PNG만 합쳐지고 동영상은 무시됩니다.
 
-- 프레임 이동은 `requestVideoFrameCallback`으로 실제 표시된 프레임의 시각을 읽어 처리하며 재생 중에 fps를 감지합니다(Chromium·Safari). 그 밖의 브라우저는 시간 기준으로 이동하고, 감지가 안 되면 선택기의 fps 칸에 직접 입력하면 됩니다.
-- 업로드 크기는 ComfyUI 한도(기본 100 MB, `--max-upload-size`로 조정)를 따릅니다. 브라우저가 디코딩하지 못하는 코덱(HEVC 일부, ProRes 등)은 재생되지 않으므로 MP4(H.264)나 WebM으로 변환해 넣으세요.
+- 프레임 이동은 `requestVideoFrameCallback`으로 실제 표시된 프레임의 시각을 읽어 처리하며, 영상이 준비되면 음소거로 잠깐 재생해 fps를 감지합니다(Chromium·Safari). 그 밖의 브라우저는 시간 기준으로 이동하고, 감지가 안 되면 선택기의 fps 칸에 직접 입력하면 됩니다.
+- 업로드 크기는 ComfyUI 한도(기본 100 MB, `--max-upload-size`로 조정)를 따릅니다.
+
+**서버 디코딩(PyAV)** — 브라우저가 재생하지 못하는 코덱(HEVC 일부, ProRes, MKV 등)이면 선택기가 자동으로 **서버 모드**로 바뀝니다. 미리보기 프레임은 서버의 PyAV(ffmpeg)가 만들어 보내고(`/multi_stitch/video/info`, `/multi_stitch/video/frame`), 스크러버와 프레임 이동은 컨테이너의 실제 fps를 따르며, **Capture**는 서버가 디코딩한 프레임을 그대로 PNG로 저장해(`/multi_stitch/video/capture`) 목록에 넣습니다. 재생되는 동영상에서도 선택기의 **server capture** 체크를 켜면 화면에 보이는 시각의 프레임을 서버가 디코더 그대로 뽑아 줍니다. 최신 ComfyUI에는 PyAV(`av` 패키지)가 포함되어 있고, 없으면 `pip install av` 후 재시작하세요. 둘 다 못 열면 선택기가 그렇게 알려 줍니다.
+
+## 크기 패널 · width / height 출력
+
+노드에는 `image`·`cells` 외에 **`width`**·**`height`**(INT) 출력이 있습니다. 값은 **기준 이미지**의 크기(자르기·회전 적용 후)에서 나옵니다.
+
+- `size_reference` — 기준 이미지: `first`(기본, 목록의 첫 이미지) / `largest` / `smallest`(면적 기준, 같으면 앞선 이미지).
+- `size_megapixels` — `0`(기본)이면 기준 이미지의 픽셀 수 그대로, 값을 주면 비율을 유지한 채 그 메가픽셀로 확대·축소합니다.
+- `size_divisible_by` — 각 변을 이 값의 배수로 반올림합니다(기본 `32`, 최소 이 값). 예: 1440×2560을 0.8 MP·32로 → **672×1184**.
+
+이 출력은 `Empty Latent Image`나 리사이즈 노드에 바로 연결해 쓰는 용도입니다. 제목줄 오른쪽의 **`📐 Size`** 버튼(또는 우클릭 → `Show size panel`)을 켜면 노드 아래에 그 크기의 비율 상자와 `672 x 1184 | 9:16 | 0.80 MP | divisible by 32` 읽기, 그리고 어느 이미지에서 나왔는지가 표시되고 위 세 위젯이 나타납니다. 끄면 위젯도 함께 숨겨지며(기본 위젯은 그대로 5개), 켜짐 여부는 워크플로우에 저장됩니다. 계산은 백엔드와 같은 식(`_reference_size` ↔ `referenceSize`)을 쓰고 CI에서 대조합니다.
+
 
 ## 미리보기 · 목록 · 편집 이력
 
@@ -260,7 +276,11 @@ grid_columns = 3
 | `cells_resolution` | `placed` / `source` (output_cells 사용 시 표시) | `placed` |
 | `minimum_image_side` | `0` = 검사 끄기 / 최대 131072px | `0` |
 | `match_reference` | `first` / `largest` / `smallest` — `match_image_size`가 켜졌을 때 기준 이미지 | `smallest` |
+| `size_reference` | `first` / `largest` / `smallest` — `width`/`height` 출력의 기준 이미지 | `first` |
+| `size_megapixels` | `0` = 기준 이미지 크기 그대로 / 최대 64 MP | `0` |
+| `size_divisible_by` | `1` – `512`, 각 변을 이 배수로 반올림 | `32` |
 | `images` (입력) | 선택 IMAGE 배치 — 붙여넣은 이미지 뒤에 추가 | — |
+| `width` / `height` (출력) | 기준 이미지 크기 → `size_megapixels` → `size_divisible_by` 배수 | — |
 
 `output_limit`부터 `minimum_image_side`까지는 툴바의 `Options ▸`를 열어야 보이는 고급 옵션입니다(기본값이 아닌 값은 항상 표시). `match_reference`도 같은 고급 옵션이며 `match_image_size`가 켜져 있을 때만 관련이 있습니다. `spacing_width`는 홀수도 동작합니다 — step 2는 위젯의 증감 단위일 뿐입니다. 목록에 없는 값을 API로 직접 넣으면 조용히 기본값으로 바뀌지 않고 **에러가 발생**합니다.
 
@@ -346,7 +366,8 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 - Dedicated **`≡` drag handle** for reordering
 - **Right-click a thumbnail to copy the original image** to the clipboard
 - **`⧉ Copy` button → the stitched result on the clipboard without queueing**
-- **Capture frames from a video** — find the moment frame by frame, add it as a native-resolution PNG; the video takes no storage
+- **Capture frames from a video** — find the moment frame by frame, add it as a native-resolution PNG; the video takes no storage, and the server (PyAV) decodes codecs the browser cannot
+- **Reference-image size outputs** — `width`/`height` outputs and a size panel: the reference image's size rescaled to a megapixel target and snapped to a multiple (32 by default)
 - One toolbar row `+ Add · Clear · ⧉ Copy · ↶ ↷ · Preview · Options` — advanced options stay **folded**, only non-default ones show
 - Per-image **Crop / 90° Rotate / Flip H / Flip V**
 - **Top / bottom / left / right + corner handles** for Free Crop
@@ -372,7 +393,9 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 - **`⧉ Copy`** renders the stitched result in the browser and puts it on the clipboard without queueing.
 - **`match_image_size` defaults to `true`** — a new node lines images up by height (width in a vertical strip) from the start. Saved workflows keep their own value.
 - **`match_reference`** — choose the image `match_image_size` matches to: first, largest or smallest (under `Options ▸`). The default, `smallest`, lines images up without upscaling and without reordering; a workflow saved before the option existed opens with `first`, as it behaved then.
-- **Frames from a video** — adding a video opens a frame picker; captured frames are edited and stitched like any image, and the video lives only in the temp folder until the captures are done.
+- **Frames from a video** — adding a video opens a frame picker; captured frames are edited and stitched like any image, and the video lives only in the temp folder until the captures are done. A codec the browser cannot play is decoded by PyAV on the server, and "server capture" gives a decoder-exact frame for playable videos too.
+- **`width` / `height` outputs and a size panel** — the reference image's size (the first by default), rescaled to `size_megapixels` and snapped to a multiple of `size_divisible_by` (32 by default). The **`📐 Size`** button in the title bar adds a panel under the node with a box of that aspect and a readout such as `672 x 1184 | 9:16 | 0.80 MP | divisible by 32`.
+- **The list grows downward** — instead of scrolling, the node gets taller with the images so every card is visible.
 - **Tooltips** on every widget and output.
 - **Korean UI** — with ComfyUI's locale set to Korean, widget names, option labels, tooltips and the node description are shown in Korean.
 - **Two example workflows** in the template browser under `Comfyui-Image-Stitch` (paste → strip, IMAGE batch → grid + cells).
@@ -542,8 +565,21 @@ Add a **video file** (mp4, webm, mov — anything the browser can play) with `+ 
 
 The video **takes no storage**. It is uploaded only to ComfyUI's temp folder (`temp/multi_stitch_video/`), is never saved with the workflow, and is deleted from the server on the picker's **Done**, the card's **×**, `Clear`, removing the node, or leaving the page (the captured PNGs stay). Anything a crashed browser leaves behind goes when ComfyUI empties its temp folder on the next start. At run time only the captured PNGs are stitched; the video is ignored.
 
-- Frame steps use `requestVideoFrameCallback` to read the timestamp of the frame actually shown, and the frame rate is detected while playing (Chromium, Safari). Other browsers step by time; if detection fails, type the fps into the picker's field.
-- Uploads follow ComfyUI's limit (100 MB by default, `--max-upload-size` raises it). A codec the browser cannot decode (some HEVC, ProRes) will not play — convert to MP4 (H.264) or WebM first.
+- Frame steps use `requestVideoFrameCallback` to read the timestamp of the frame actually shown; the frame rate is probed by playing muted for a moment once the video is ready (Chromium, Safari). Other browsers step by time; if detection fails, type the fps into the picker's field.
+- Uploads follow ComfyUI's limit (100 MB by default, `--max-upload-size` raises it).
+
+**Server decoding (PyAV)** — when the browser cannot play the video (some HEVC, ProRes, MKV…), the picker switches to **server mode**: preview frames are rendered by PyAV (ffmpeg) on the ComfyUI server (`/multi_stitch/video/info`, `/multi_stitch/video/frame`), the scrubber and frame steps follow the container's real frame rate, and **Capture** saves the frame the server decoded as a PNG (`/multi_stitch/video/capture`) straight into the list. For a video the browser does play, the picker's **server capture** checkbox asks the server for the frame at the time shown — exact to the decoder. Recent ComfyUI ships PyAV (the `av` package); otherwise `pip install av` and restart. If neither side can decode the file, the picker says so.
+
+## Size panel · width / height outputs
+
+Besides `image` and `cells` the node outputs **`width`** and **`height`** (INT), derived from a **reference image** (its size after crop and rotation):
+
+- `size_reference` — which image: `first` (default, the first in the list), `largest` or `smallest` by area (the earlier image wins a tie).
+- `size_megapixels` — `0` (default) keeps the reference's own pixel count; any other value rescales it to that many megapixels at the same aspect.
+- `size_divisible_by` — each side is rounded to the nearest multiple (default `32`, never below it). Example: 1440×2560 at 0.8 MP and 32 → **672×1184**.
+
+The outputs are meant for an `Empty Latent Image` or a resize node. The **`📐 Size`** button at the right of the title bar (or right-click → `Show size panel`) adds a panel under the node with a box of that aspect, the readout `672 x 1184 | 9:16 | 0.80 MP | divisible by 32` and the image it came from, and reveals the three widgets; turning it off hides them again (a fresh node keeps its five widgets). The state is saved with the workflow. The maths is the backend's (`_reference_size` ↔ `referenceSize`), compared in CI.
+
 
 ## Preview · list · edit history
 
@@ -585,7 +621,11 @@ Hover any widget or output slot for its **tooltip**; the table below is the summ
 | `cells_resolution` | `placed` / `source` (shown when `output_cells` is on) | `placed` |
 | `minimum_image_side` | `0` = off, up to `131072` px | `0` |
 | `match_reference` | `first` / `largest` / `smallest` — the reference image while `match_image_size` is on | `smallest` |
+| `size_reference` | `first` / `largest` / `smallest` — the reference image for the `width`/`height` outputs | `first` |
+| `size_megapixels` | `0` = the reference's own size, up to 64 MP | `0` |
+| `size_divisible_by` | `1` – `512`, each side rounded to this multiple | `32` |
 | `images` (input) | optional IMAGE batch, appended after the pasted images | — |
+| `width` / `height` (outputs) | reference image size → `size_megapixels` → snapped to `size_divisible_by` | — |
 
 `output_limit` through `minimum_image_side` are advanced options, shown after `Options ▸` in the toolbar (a non-default value is always shown). `match_reference` is one of them and only matters while `match_image_size` is on. Odd `spacing_width` values work — the step of 2 is only the widget's increment. A value outside the listed set, passed directly through the API, **raises an error** rather than being silently replaced with the default.
 
@@ -671,6 +711,7 @@ If you move the workflow to another machine, copy the referenced input images as
 - GitHub Actions, frontend job (Node 22): `tests/web/logic.test.mjs` drives the real `web/*.js` against a stub ComfyUI — paste, the 256 cap, cancel and Clear during upload, ≡ reorder through window events, save → reopen round-trip, an unreadable list kept verbatim, bounded thumbnails, a failed thumbnail not hiding the estimate, conditional widgets, and the copy action. `tests/web/browser.test.mjs` runs the crop editor (corner handles, rotate, apply, cancel), the clipboard copy of an original (PNG, JPEG re-encode, missing file) and the stitched-result copy (two originals with a blue separator, read back from the clipboard pixel by pixel) in real Chromium via Playwright. Run locally with `npm ci && npx playwright install chromium && npm test`.
 - The frontend suite also covers the preview band (draw calls and the final-size caption), the toolbar undo/redo controls (adds, a drag reorder, Clear, history reset on load), the list growing with its rows (natural height, every card clickable, a user resize snapping back), the new conditional widgets, relinking a missing file, the stitched-result copy (final size after the cap, both originals drawn, a missing image left blank, the browser size limit, the context-menu entry), and the toolbar with folded options (all advanced widgets hidden by default, a non-default value staying visible and counted on the pill, no button widgets left, the empty-state box opening the picker). The parity test compares `layoutPlacements` / `limitedSize` with `_layout` / `_limited_size` over 700 cases and `cropPixelBox` with `_crop_box` over 500, including sizes that land on exact halves where Python's half-even rounding differs from `Math.round`. Three further logic tests cover the native-size default surviving a reopen, crop-edge and quarter-turn rounding, and the two-at-a-time thumbnail queue releasing everything when a node is removed.
 - `tests/test_video_temp.py` covers the temporary-video helpers behind the frame picker: only a plain video name inside `temp/multi_stitch_video` can ever be deleted, and the delete route's response. The logic suite covers uploading a video to the temp folder as a session-only entry, the picker opening, captures becoming ordinary images with their source time, and deletion on ×, Done, Clear and node removal; the browser suite records a two-colour WebM in Chromium and captures frames from it through the real picker.
+- `tests/test_video_frames.py` (skipped without PyAV) encodes a two-colour clip with PyAV and checks the server-side probe, the frame displayed at a time, the JPEG preview and the PNG capture route; the logic suite covers the picker's server mode (fallback on a decode error, the unavailable case, on-demand server capture, a server-rendered poster). The parity test compares `referenceSize` with `_reference_size`, and the logic suite covers the size panel (title-bar toggle, readout, reference and step choices, context menu).
 - `tests/test_packaging.py` checks what ships around the node: every input and output has a tooltip, the Korean locale covers the node definition exactly (names, tooltips, option labels), the example workflows match `INPUT_TYPES` (widget count and order, value ranges, link consistency), and the version in `pyproject.toml`, the changelog and this README agree.
 - Releases: bump `pyproject.toml`, add the entry to `CHANGELOG.md`, merge to `main` and tag `v<version>`. `.github/workflows/publish_action.yml` then publishes to the Comfy Registry; it needs a `REGISTRY_ACCESS_TOKEN` repository secret (an API key of the publisher named in `pyproject.toml`, created at registry.comfy.org) and skips with a notice until one is set.
 - Not covered by automation: interaction inside a live ComfyUI session, and the Vue-based "Node 2.0" renderer. The extension sets `options.hidden` for that renderer and swaps `draw`/`computeSize` for the legacy canvas; only the legacy path is exercised by the tests.

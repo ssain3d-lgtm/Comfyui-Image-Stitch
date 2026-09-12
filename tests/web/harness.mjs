@@ -57,6 +57,7 @@ export function installDom() {
         },
     });
     const overlays = [];
+    const videos = [];
     const createElement = (tag) => {
         const element = {
             tag,
@@ -91,6 +92,7 @@ export function installDom() {
             },
         };
         if (tag === "canvas") canvases.push(element);
+        if (tag === "video") videos.push(element);
         return element;
     };
     define("document", {
@@ -135,6 +137,7 @@ export function installDom() {
         canvases,
         inputs,
         overlays,
+        videos,
         imageSizes,
         fire(type, event) {
             for (const handler of [...(listeners.get(type) || [])]) handler(event);

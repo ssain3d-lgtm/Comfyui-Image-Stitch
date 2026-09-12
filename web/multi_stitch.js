@@ -59,6 +59,7 @@ const PREVIEW_RENDER_DELAY_MS = 150;
 // (the card's ×, the picker's Done, Clear, removing the node, leaving the page).
 const VIDEO_TARGET = { type: "temp", subfolder: "multi_stitch_video" };
 const VIDEO_DELETE_ROUTE = "/multi_stitch/video/delete";
+const VIDEO_FRAME_ROUTE = "/multi_stitch/video/frame";
 const VIDEO_POSTER_SIDE = 512;
 const VIDEO_EXTENSIONS = /\.(mp4|m4v|webm|mov|mkv|ogv|ogg|avi|mpe?g|3gp|ts|wmv)$/i;
 const nodesWithVideos = new Set();
@@ -1424,9 +1425,9 @@ function loadVideoPoster(node, entry) {
         try { video.removeAttribute?.("src"); video.load?.(); } catch (_) { /* discarded */ }
     };
     video.onerror = () => {
-        entry.failed = true;
+        // The browser cannot decode it: the server (PyAV) may still be able to.
         release();
-        node.graph?.setDirtyCanvas(true, false);
+        loadServerPoster(node, entry);
     };
     video.onloadedmetadata = () => {
         entry.width = video.videoWidth || 0;
@@ -1453,6 +1454,35 @@ function loadVideoPoster(node, entry) {
         node.graph?.setDirtyCanvas(true, false);
     };
     video.src = imageUrl(entry);
+}
+
+// A poster rendered by the server for a video the browser cannot play; when
+// it arrives the picker knows to skip the <video> and decode on the server.
+function loadServerPoster(node, entry) {
+    const image = new Image();
+    image.onload = () => {
+        try {
+            const w = image.naturalWidth || image.width;
+            const h = image.naturalHeight || image.height;
+            if (w && h) {
+                const poster = document.createElement("canvas");
+                poster.width = w;
+                poster.height = h;
+                poster.getContext("2d").drawImage(image, 0, 0, w, h);
+                entry.poster = poster;
+                entry.width = Math.max(entry.width || 0, w);
+                entry.height = Math.max(entry.height || 0, h);
+            }
+        } catch (_) { /* a poster is a nicety */ }
+        entry.serverOnly = true;
+        node.graph?.setDirtyCanvas(true, false);
+    };
+    image.onerror = () => {
+        entry.failed = true;
+        node.graph?.setDirtyCanvas(true, false);
+    };
+    const query = new URLSearchParams({ filename: entry.filename, time: "0.1", max_side: String(VIDEO_POSTER_SIDE) });
+    image.src = api.apiURL(`${VIDEO_FRAME_ROUTE}?${query.toString()}`);
 }
 
 async function deleteTempVideos(entries) {
@@ -1519,11 +1549,29 @@ async function addCapturedFrame(node, entry, canvas, time) {
     return item;
 }
 
+// A frame the server decoded and saved (PyAV): already an input file, so it
+// joins the list exactly like an uploaded capture.
+function addServerFrame(node, entry, data, time) {
+    if ((node._msImages?.length || 0) >= MAX_IMAGES) {
+        throw new Error(`This node holds at most ${MAX_IMAGES} images. Remove some before capturing more.`);
+    }
+    const item = normalizeItem({
+        filename: data.name, subfolder: data.subfolder || "multi_stitch", type: data.type || "input",
+        crop: null, rotation: 0, flip_h: false, flip_v: false,
+    });
+    item.source = { video: entry.name || entry.filename, time: +Number(data.time ?? time).toFixed(3), server: true };
+    if (node._msDisposed) return item;
+    node._msImages.push(item);
+    changed(node);
+    return item;
+}
+
 function openVideoPicker(node, entry) {
     if (node._msPicker) return;
     try {
         const picker = openFramePicker(node, entry, {
             onCapture: (canvas, time) => addCapturedFrame(node, entry, canvas, time),
+            onServerFrame: (data, time) => addServerFrame(node, entry, data, time),
             onDone: () => removeVideo(node, entry),
             onClose: () => {
                 if (node._msPicker === picker) node._msPicker = null;

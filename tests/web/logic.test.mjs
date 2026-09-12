@@ -998,6 +998,35 @@ describe("video frames", () => {
         handle.close(false);
     });
 
+    it("gets the poster from the server for a video the browser cannot play, then captures there", async () => {
+        const node = plainNode(nodeType);
+        await node.pasteFiles([videoFile("odd.mkv", "video/x-matroska")]);
+        const entry = node._msVideos[0];
+        node._msPicker.close(false);
+        dom.imageSizes.set(entry.filename, [640, 360]);
+        // The poster <video> (the one with handlers; the picker's own has none)
+        // fails as the browser's decoder would; the server renders one instead.
+        dom.videos.filter((v) => typeof v.onerror === "function").at(-1).onerror();
+        await tick(5);
+        assert.equal(entry.serverOnly, true);
+        assert.ok(entry.poster, "a poster drawn from the server's frame");
+        assert.deepEqual([entry.width, entry.height], [640, 360]);
+
+        // Opening the card goes straight to server mode; a capture lands as an ordinary image.
+        const r = card(0);
+        assert.equal(click(node, [r.x + 60, r.y + 40]), true);
+        await tick(5);
+        assert.equal(node._msPicker.state.server.active, true);
+        node._msPicker.seekTo(1.2);
+        const item = await node._msPicker.capture();
+        assert.equal(node._msImages.length, 1);
+        assert.equal(node._msImages[0], item);
+        assert.match(item.filename, /^multi_stitch_server_\d+\.png$/);
+        assert.deepEqual(item.source, { video: "odd.mkv", time: 1.2, server: true });
+        assert.deepEqual(item.crop, { x: 0, y: 0, w: 1, h: 1 });
+        node._msPicker.close(false);
+    });
+
     it("names captures after the video and formats times the way the cards show them", () => {
         assert.equal(picker.captureFileName({ name: "My Clip (final).mp4" }, 3.5), "My_Clip_final__3s500.png");
         assert.equal(picker.captureFileName({ filename: "x.webm" }, -1), "x_0s000.png");
