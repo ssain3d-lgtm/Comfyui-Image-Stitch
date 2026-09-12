@@ -5,19 +5,21 @@ import assert from "node:assert/strict";
 import { before, beforeEach, describe, it } from "node:test";
 import {
     imageFiles, installDom, item, loadExtension, makeNode, paintedCalls, paintedText, plainNode, setImages,
-    stageExtension, tick, widget,
+    stageExtension, tick, videoFile, widget,
 } from "./harness.mjs";
 
 const dom = installDom();
-let app, api, shared, nodeType;
+let app, api, shared, picker, nodeType;
 
 before(async () => {
-    ({ app, api, shared, nodeType } = await loadExtension(stageExtension()));
+    ({ app, api, shared, picker, nodeType } = await loadExtension(stageExtension()));
 });
 
 beforeEach(() => {
     app.extensionManager.toast.log.length = 0;
     api.uploads.length = 0;
+    api.uploadTargets.length = 0;
+    api.calls.length = 0;
     api.knobs.delayMs = 0;
     dom.imageSizes.clear();
 });
@@ -373,7 +375,7 @@ describe("toolbar and folded options", () => {
         dom.inputs.length = 0;
         assert.equal(click(node, control.add), true);
         assert.equal(dom.inputs.length, 1);
-        assert.equal(dom.inputs[0].accept, "image/*");
+        assert.equal(dom.inputs[0].accept, "image/*,video/*");
         assert.equal(dom.inputs[0].multiple, true);
 
         assert.equal(click(node, [card(0).x + 60, card(0).y + 40]), true);
@@ -812,6 +814,119 @@ describe("match reference", () => {
         assert.equal(widget(node, "output_limit").value, "none");
         assert.equal(widget(node, "layout_mode").value, "strip");
         assert.equal(widget(node, "spacing_width").value, 8, "a valid value is kept");
+    });
+});
+
+describe("video frames", () => {
+    const frame = (w = 640, h = 360) => {
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        return canvas;
+    };
+    const deleteCalls = () => api.calls.filter((c) => c.path === "/multi_stitch/video/delete")
+        .map((c) => JSON.parse(c.options.body).filenames);
+
+    it("uploads a video to the temp folder as a session-only entry and opens the picker", async () => {
+        const node = plainNode(nodeType);
+        await node.pasteFiles([videoFile("clip.mp4")]);
+        assert.equal(api.uploads.length, 1);
+        assert.deepEqual(api.uploadTargets[0], { type: "temp", subfolder: "multi_stitch_video" });
+        assert.equal(node._msVideos.length, 1);
+        const entry = node._msVideos[0];
+        assert.equal(entry.kind, "video");
+        assert.equal(entry.name, "clip.mp4");
+        assert.equal(node._msImages.length, 0, "a video is not an image");
+        assert.equal(widget(node, "images_json").value, "[]");
+        assert.ok(node._msPicker, "one video opens the frame picker right away");
+        assert.equal(node._msPicker.entry, entry);
+        assert.equal(node._msPicker.video.src, shared.imageUrl(entry));
+        assert.match(node._msPicker.video.src, /type=temp/);
+
+        // The card follows the images, says what it is, and is not saved.
+        assert.ok(paintedText(nodeType, node).some((t) => /1 video — click the card to capture frames/.test(t)));
+        const data = { properties: {} };
+        nodeType.prototype.onSerialize.call(node, data);
+        assert.equal(data.properties.multi_stitch_images, "[]");
+        node._msPicker.close(false);
+        assert.equal(node._msPicker, null);
+        assert.equal(node._msVideos.length, 1, "Keep & close leaves the video for later");
+    });
+
+    it("also accepts a video by extension when the browser gives it no MIME type", async () => {
+        const node = plainNode(nodeType);
+        await node.pasteFiles([videoFile("clip.MOV", ""), { name: "notes.txt", type: "" }]);
+        assert.equal(node._msVideos.length, 1);
+        assert.equal(api.uploads.length, 1);
+        node._msPicker?.close(false);
+    });
+
+    it("turns a captured frame into an ordinary, editable image tagged with its time", async () => {
+        const node = plainNode(nodeType);
+        await node.pasteFiles([videoFile("scene take 2.mov")]);
+        const entry = node._msVideos[0];
+        node._msPicker.close(false);
+        const item = await node.captureVideoFrame(entry, frame(), 12.3456);
+        assert.equal(node._msImages.length, 1);
+        assert.equal(node._msImages[0], item);
+        assert.match(item.filename, /^multi_stitch_.*\.png$/, "uploaded under the node's naming scheme");
+        assert.deepEqual(api.uploadTargets.at(-1), { type: "input", subfolder: "multi_stitch" }, "captures are ordinary images");
+        assert.deepEqual(item.source, { video: "scene take 2.mov", time: 12.346 });
+        assert.deepEqual(item.crop, { x: 0, y: 0, w: 1, h: 1 });
+        assert.equal(JSON.parse(widget(node, "images_json").value)[0].source.time, 12.346, "the source survives a save");
+        assert.equal(node._msHistory.past.length, 1, "a capture is an undoable edit");
+        assert.equal(node._msVideos.length, 1, "capturing keeps the video until Done");
+    });
+
+    it("deletes the temp file when the video card's × is clicked, keeping the captures", async () => {
+        const node = plainNode(nodeType);
+        await node.pasteFiles([videoFile()]);
+        const entry = node._msVideos[0];
+        node._msPicker.close(false);
+        await node.captureVideoFrame(entry, frame(), 1);
+        api.calls.length = 0;
+        // The video card follows the one image: card 1, × top-right.
+        const r = card(1);
+        assert.equal(click(node, [r.x + r.w - 13, r.y + 12]), true);
+        assert.equal(node._msVideos.length, 0);
+        assert.equal(node._msImages.length, 1, "the captured frame stays");
+        await tick(2);
+        assert.deepEqual(deleteCalls(), [[entry.filename]]);
+        assert.match(toasts().at(-1), /Video removed/);
+    });
+
+    it("Done in the picker removes the video; Clear and node removal delete the rest", async () => {
+        const node = plainNode(nodeType);
+        await node.pasteFiles([videoFile("a.mp4")]);
+        const a = node._msVideos[0];
+        api.calls.length = 0;
+        node._msPicker.close(true);
+        await tick(2);
+        assert.equal(node._msVideos.length, 0);
+        assert.deepEqual(deleteCalls(), [[a.filename]]);
+
+        await node.pasteFiles([videoFile("b.mp4"), videoFile("c.mp4")]);
+        assert.equal(node._msPicker, null, "two videos: no automatic picker");
+        const [b, c] = node._msVideos;
+        api.calls.length = 0;
+        click(node, control.clear);
+        await tick(2);
+        assert.equal(node._msVideos.length, 0);
+        assert.deepEqual(deleteCalls(), [[b.filename, c.filename]], "one request for all of them");
+
+        await node.pasteFiles([videoFile("d.mp4")]);
+        const d = node._msVideos[0];
+        api.calls.length = 0;
+        nodeType.prototype.onRemoved.call(node);
+        await tick(2);
+        assert.deepEqual(deleteCalls(), [[d.filename]]);
+    });
+
+    it("names captures after the video and formats times the way the cards show them", () => {
+        assert.equal(picker.captureFileName({ name: "My Clip (final).mp4" }, 3.5), "My_Clip_final__3s500.png");
+        assert.equal(picker.captureFileName({ filename: "x.webm" }, -1), "x_0s000.png");
+        assert.equal(picker.formatTime(75.25), "01:15.250");
+        assert.equal(picker.formatTime(NaN), "00:00.000");
     });
 });
 

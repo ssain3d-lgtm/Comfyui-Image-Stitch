@@ -16,6 +16,7 @@ const PAGE = `<!doctype html><meta charset="utf-8"><title>Multi Stitch Images te
 import { app } from "./scripts/app.js";
 import { openCropEditor } from "./pkg/web/crop_editor.js";
 import { drawImageScaled, loadTransformedThumb } from "./pkg/web/shared.js";
+import { openFramePicker } from "./pkg/web/frame_picker.js";
 await import("./pkg/web/multi_stitch.js");
 const nodeType = { prototype: {} };
 await app.extension.beforeRegisterNodeDef(nodeType, { name: "MultiStitchImages" });
@@ -25,6 +26,7 @@ window.__toasts = app.extensionManager.toast.log;
 window.__openCropEditor = openCropEditor;
 window.__loadTransformedThumb = loadTransformedThumb;
 window.__drawImageScaled = drawImageScaled;
+window.__openFramePicker = openFramePicker;
 window.__makeNode = (filename) => ({
   pos: [0, 0], size: [420, 600], flags: {}, properties: { multi_stitch_preview: false }, graph: { setDirtyCanvas() {} }, widgets: [],
   _msImages: [{ filename, type: "input", crop: { x: 0, y: 0, w: 1, h: 1 }, rotation: 0, flip_h: false, flip_v: false }],
@@ -208,6 +210,101 @@ describe("high-quality scaling", () => {
         assert.equal(r.quality, "high");
         // Every output pixel averages a 16×16 block: 128 within rounding.
         assert.ok(r.min >= 112 && r.max <= 144, `expected an even grey, got ${r.min}..${r.max}`);
+    });
+});
+
+describe("frame picker", () => {
+    it("captures the frame being shown, at native size, and steps by one frame", async (t) => {
+        const { page, errors } = await openPage();
+        const supported = await page.evaluate(() => typeof MediaRecorder !== "undefined"
+            && MediaRecorder.isTypeSupported("video/webm;codecs=vp8"));
+        if (!supported) {
+            t.skip("this Chromium cannot record WebM");
+            return;
+        }
+        const r = await page.evaluate(async () => {
+            // Two seconds of video: red, then blue from 1.0s, at 10 fps.
+            const source = document.createElement("canvas");
+            source.width = 320;
+            source.height = 180;
+            const sctx = source.getContext("2d");
+            const paint = (colour) => { sctx.fillStyle = colour; sctx.fillRect(0, 0, 320, 180); };
+            paint("#ff0000");
+            const stream = source.captureStream(10);
+            const recorder = new MediaRecorder(stream, { mimeType: "video/webm;codecs=vp8" });
+            const chunks = [];
+            recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+            const stopped = new Promise((resolve) => { recorder.onstop = resolve; });
+            recorder.start(100);
+            const started = performance.now();
+            await new Promise((resolve) => {
+                const timer = setInterval(() => {
+                    const elapsed = performance.now() - started;
+                    paint(elapsed >= 1000 ? "#0000ff" : "#ff0000");
+                    if (elapsed >= 2000) { clearInterval(timer); resolve(); }
+                }, 50);
+            });
+            recorder.stop();
+            await stopped;
+            const url = URL.createObjectURL(new Blob(chunks, { type: "video/webm" }));
+
+            const node = { _msImages: [], _msVideos: [], graph: { setDirtyCanvas() {} } };
+            const entry = { kind: "video", filename: "clip.webm", name: "clip.webm", url };
+            const captured = [];
+            const picker = window.__openFramePicker(node, entry, {
+                onCapture: (canvas, time) => {
+                    const d = canvas.getContext("2d").getImageData(canvas.width / 2, canvas.height / 2, 1, 1).data;
+                    captured.push({ time, width: canvas.width, height: canvas.height, rgb: [d[0], d[1], d[2]] });
+                    return { time };
+                },
+            });
+            const wait = (test, ms = 8000) => new Promise((resolve, reject) => {
+                const startedAt = Date.now();
+                const timer = setInterval(() => {
+                    if (test()) { clearInterval(timer); resolve(); }
+                    else if (Date.now() - startedAt > ms) { clearInterval(timer); reject(new Error("timed out: " + test)); }
+                }, 20);
+            });
+            const video = picker.video;
+            await wait(() => video.readyState >= 2 && Number.isFinite(video.duration) && video.duration > 1.5
+                && (!picker.state.hasFrameCallback || (picker.state.probed && !picker.state.probing)));
+            const detected = picker.frameDuration();
+            const seek = async (time) => {
+                const done = new Promise((resolve) => video.addEventListener("seeked", resolve, { once: true }));
+                picker.seekTo(time);
+                await done;
+                await new Promise((resolve) => setTimeout(resolve, 150));
+            };
+            await seek(1.6);
+            await picker.capture();
+            await seek(0.4);
+            await picker.capture();
+            const before = picker.currentTime();
+            const stepped = new Promise((resolve) => video.addEventListener("seeked", resolve, { once: true }));
+            picker.step(1);
+            await stepped;
+            await new Promise((resolve) => setTimeout(resolve, 150));
+            const after = picker.currentTime();
+            const overlayCount = document.querySelectorAll(".ms-video-overlay").length;
+            picker.close(false);
+            return {
+                captured, before, after, frameDuration: detected, duration: video.duration,
+                overlayCount, overlaysAfter: document.querySelectorAll(".ms-video-overlay").length,
+                shots: picker.overlay.querySelectorAll(".shot").length,
+            };
+        });
+        assert.equal(errors.length, 0, errors.join("\n"));
+        assert.equal(r.captured.length, 2, JSON.stringify(r));
+        assert.deepEqual([r.captured[0].width, r.captured[0].height], [320, 180], "native size");
+        const [blue, red] = r.captured.map((c) => c.rgb);
+        assert.ok(blue[2] > 150 && blue[0] < 100, `expected blue at 1.6s, got ${blue}`);
+        assert.ok(red[0] > 150 && red[2] < 100, `expected red at 0.4s, got ${red}`);
+        assert.ok(r.after > r.before, `one frame forward moved ${r.before} → ${r.after}`);
+        assert.ok(r.after - r.before < 0.35, `a single step, not a jump: ${r.after - r.before}`);
+        assert.ok(Math.abs(r.frameDuration - 0.1) < 0.03, `10 fps detected while probing, got ${1 / r.frameDuration}`);
+        assert.equal(r.overlayCount, 1);
+        assert.equal(r.overlaysAfter, 0, "closed");
+        assert.equal(r.shots, 2, "each capture shows in the strip");
     });
 });
 

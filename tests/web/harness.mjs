@@ -56,37 +56,53 @@ export function installDom() {
             listeners.get(type)?.delete(handler);
         },
     });
+    const overlays = [];
+    const createElement = (tag) => {
+        const element = {
+            tag,
+            style: {},
+            width: 0,
+            height: 0,
+            attached: false,
+            handlers: {},
+            children: [],
+            addEventListener(type, handler) {
+                (element.handlers[type] ||= []).push(handler);
+            },
+            removeEventListener: noop,
+            click: noop,
+            remove() {
+                element.attached = false;
+            },
+            append(...nodes) { element.children.push(...nodes); },
+            appendChild(node) { element.children.push(node); return node; },
+            // The frame picker looks its controls up by class: hand it stubs.
+            querySelector: (selector) => (element.parts ||= {})[selector] ||= createElement(selector.replace(/\W/g, "") || "part"),
+            querySelectorAll: () => [],
+            setAttribute: noop,
+            removeAttribute: noop,
+            load: noop,
+            pause: noop,
+            play: () => Promise.resolve(),
+            draws: 0,
+            getContext: () => context2d(element),
+            toBlob(callback, type) {
+                callback({ type: type || "image/png", size: 1, encoded: true });
+            },
+        };
+        if (tag === "canvas") canvases.push(element);
+        return element;
+    };
     define("document", {
         body: {
             appendChild(element) {
                 element.attached = true;
                 if (element.tag === "input") inputs.push(element);
+                if (element.tag === "div") overlays.push(element);
             },
         },
-        createElement(tag) {
-            const element = {
-                tag,
-                style: {},
-                width: 0,
-                height: 0,
-                attached: false,
-                handlers: {},
-                addEventListener(type, handler) {
-                    (element.handlers[type] ||= []).push(handler);
-                },
-                click: noop,
-                remove() {
-                    element.attached = false;
-                },
-                draws: 0,
-                getContext: () => context2d(element),
-                toBlob(callback, type) {
-                    callback({ type: type || "image/png", size: 1, encoded: true });
-                },
-            };
-            if (tag === "canvas") canvases.push(element);
-            return element;
-        },
+        head: { appendChild: noop },
+        createElement,
         addEventListener: noop,
         removeEventListener: noop,
     });
@@ -118,6 +134,7 @@ export function installDom() {
         listeners,
         canvases,
         inputs,
+        overlays,
         imageSizes,
         fire(type, event) {
             for (const handler of [...(listeners.get(type) || [])]) handler(event);
@@ -132,10 +149,11 @@ export async function loadExtension(root) {
     const { app } = await import(pathToFileURL(join(root, "scripts", "app.js")).href);
     const api = await import(pathToFileURL(join(root, "scripts", "api.js")).href);
     const shared = await import(pathToFileURL(join(root, "pkg", "web", "shared.js")).href);
+    const picker = await import(pathToFileURL(join(root, "pkg", "web", "frame_picker.js")).href);
     await import(pathToFileURL(join(root, "pkg", "web", "multi_stitch.js")).href);
     const nodeType = { prototype: {} };
     await app.extension.beforeRegisterNodeDef(nodeType, { name: "MultiStitchImages" });
-    return { app, api, shared, nodeType };
+    return { app, api, shared, picker, nodeType };
 }
 
 // The widgets INPUT_TYPES declares, in order, with their defaults.
@@ -198,6 +216,7 @@ export const widget = (node, name) => node.widgets.find((w) => w.name === name);
 export const tick = (ms = 0) => new Promise((resolve) => setTimeout(resolve, ms));
 export const imageFiles = (count, prefix = "img") =>
     Array.from({ length: count }, (_, i) => ({ name: `${prefix}${i}.png`, type: "image/png" }));
+export const videoFile = (name = "clip.mp4", type = "video/mp4") => ({ name, type });
 
 // Renders the node through the real onDrawForeground and reports what it
 // painted: every string, how many images were drawn and from which sources.

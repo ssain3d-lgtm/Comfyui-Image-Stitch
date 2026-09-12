@@ -559,20 +559,30 @@ function uniqueUploadName(file) {
     return `multi_stitch_${Date.now()}_${Math.random().toString(36).slice(2, 9)}.${ext}`;
 }
 
-export async function uploadFile(file, signal) {
+// Uploads through ComfyUI's own endpoint. `target` picks the folder: images
+// go to input/multi_stitch (the default); a video for frame capture goes to
+// the temp folder, which ComfyUI empties on start-up.
+export async function uploadFile(file, signal, target = {}) {
     const uploadName = uniqueUploadName(file);
+    const subfolder = target.subfolder || "multi_stitch";
+    const type = target.type || "input";
     const body = new FormData();
     body.append("image", file, uploadName);
-    body.append("subfolder", "multi_stitch");
-    body.append("type", "input");
+    body.append("subfolder", subfolder);
+    body.append("type", type);
 
     const response = await api.fetchApi("/upload/image", { method: "POST", body, signal });
-    if (!response.ok) throw new Error(`Image upload failed: ${response.status} ${response.statusText}`);
+    if (!response.ok) {
+        const limit = response.status === 413
+            ? " — larger than ComfyUI's upload limit (start ComfyUI with --max-upload-size to raise it)"
+            : "";
+        throw new Error(`Upload failed: ${response.status} ${response.statusText}${limit}`);
+    }
     const data = await response.json();
     return {
         filename: data.name || uploadName,
-        subfolder: data.subfolder || "multi_stitch",
-        type: data.type || "input",
+        subfolder: data.subfolder || subfolder,
+        type: data.type || type,
         crop: defaultCrop(),
         rotation: 0,
         flip_h: false,

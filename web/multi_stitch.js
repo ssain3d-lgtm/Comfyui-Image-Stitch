@@ -1,5 +1,7 @@
 import { app } from "../../scripts/app.js";
+import { api } from "../../scripts/api.js";
 import { openCropEditor } from "./crop_editor.js";
+import { canvasToPngFile, captureFileName, formatTime, openFramePicker } from "./frame_picker.js";
 import {
     commitImages,
     cropPixelBox,
@@ -51,6 +53,15 @@ const PREVIEW_RENDER_MAX_SIDE = 2048;
 const PREVIEW_RENDER_MAX_PIXELS = 4 * 1024 * 1024;
 const PREVIEW_RENDER_STEP = 256;
 const PREVIEW_RENDER_DELAY_MS = 150;
+// A video is a session-only helper for picking frames: uploaded to ComfyUI's
+// temp folder (emptied on restart), never saved with the workflow, never part
+// of the stitch, and deleted from the server as soon as its captures are done
+// (the card's ×, the picker's Done, Clear, removing the node, leaving the page).
+const VIDEO_TARGET = { type: "temp", subfolder: "multi_stitch_video" };
+const VIDEO_DELETE_ROUTE = "/multi_stitch/video/delete";
+const VIDEO_POSTER_SIDE = 512;
+const VIDEO_EXTENSIONS = /\.(mp4|m4v|webm|mov|mkv|ogv|ogg|avi|mpe?g|3gp|ts|wmv)$/i;
+const nodesWithVideos = new Set();
 // One toolbar row under the status line holds every action, so no widget
 // rows are spent on buttons.
 const TOOLBAR_H = 24;
@@ -106,8 +117,13 @@ function listTop(node) {
     return bar.y + bar.h + 6;
 }
 
+// Cards in the list: the images, then any videos waiting for capture.
+function listCount(node) {
+    return (node._msImages?.length || 0) + (node._msVideos?.length || 0);
+}
+
 function rowsOf(node) {
-    return Math.max(1, Math.ceil((node._msImages?.length || 0) / THUMB_COLS));
+    return Math.max(1, Math.ceil(listCount(node) / THUMB_COLS));
 }
 
 function heightForRows(node, rows) {
@@ -532,6 +548,14 @@ function drawCard(ctx, node, item, index, r) {
         ctx.fillRect(badgeX, r.y + 3, 48, 19);
         ctx.fillStyle = "#f6b73c";
         ctx.fillText(`${t.rotation}°${t.flip_h ? "H" : ""}${t.flip_v ? "V" : ""}`, badgeX + 4, r.y + 17);
+        badgeX += 51;
+    }
+    if (item.source?.video && badgeX + 58 < r.x + r.w - 26) {
+        // A frame captured from a video: where it came from, at a glance.
+        ctx.fillStyle = "rgba(0,0,0,.72)";
+        ctx.fillRect(badgeX, r.y + 3, 58, 19);
+        ctx.fillStyle = "#9ad0ff";
+        ctx.fillText(`🎞 ${formatTime(item.source.time).replace(/^00:/, "")}`, badgeX + 4, r.y + 17);
     }
 
     ctx.fillStyle = "rgba(0,0,0,.76)";
@@ -546,6 +570,48 @@ function drawCard(ctx, node, item, index, r) {
     ctx.fillText("≡", actions.drag.x + actions.drag.w / 2, actions.drag.y + 14);
     ctx.textAlign = "left";
     ctx.fillText("›", actions.next.x + 6, actions.next.y + 15);
+    ctx.restore();
+}
+
+function drawVideoCard(ctx, entry, r) {
+    ctx.save();
+    ctx.fillStyle = "#151a20";
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.strokeStyle = entry.failed ? "#f08a8a" : "#4a6fa5";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+    const imageRect = { x: r.x + 3, y: r.y + 3, w: r.w - 6, h: r.h - 6 };
+    if (entry.poster) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(imageRect.x, imageRect.y, imageRect.w, imageRect.h);
+        ctx.clip();
+        drawContained(ctx, entry.poster, null, imageRect);
+        ctx.restore();
+    }
+    ctx.textAlign = "center";
+    ctx.fillStyle = entry.failed ? "#f08a8a" : "#cfe0ff";
+    if (!entry.poster) {
+        ctx.fillText(entry.failed ? "Cannot play video" : "🎞 loading…", r.x + r.w / 2, r.y + r.h / 2 - 4);
+    }
+    ctx.fillStyle = "rgba(0,0,0,.72)";
+    ctx.fillRect(r.x + 3, r.y + 3, r.w - 6, 19);
+    ctx.fillStyle = "#9ad0ff";
+    const label = `🎞 ${entry.name || entry.filename}`;
+    ctx.fillText(label.length > 22 ? `${label.slice(0, 21)}…` : label, r.x + r.w / 2 - 10, r.y + 17);
+    ctx.fillStyle = "rgba(0,0,0,.76)";
+    ctx.fillRect(r.x + 3, r.y + r.h - 22, r.w - 6, 19);
+    ctx.fillStyle = "#e8e8e8";
+    ctx.fillText(
+        `${entry.duration ? formatTime(entry.duration) + "  ·  " : ""}click to capture frames`,
+        r.x + r.w / 2, r.y + r.h - 8,
+    );
+    const remove = thumbActionRects(r).remove;
+    ctx.fillStyle = "rgba(0,0,0,.76)";
+    ctx.fillRect(remove.x, remove.y, remove.w, remove.h);
+    ctx.fillStyle = "#fff";
+    ctx.textAlign = "left";
+    ctx.fillText("×", remove.x + 5, remove.y + 14);
     ctx.restore();
 }
 
@@ -565,18 +631,22 @@ function drawThumbs(node, ctx) {
         ? `  •  ~${predicted.w}×${predicted.h}${predicted.skipped ? ` (${predicted.skipped} not loaded)` : ""}`
         : "";
     const inputNote = imageInputConnected(node) ? "  + IMAGE input" : "";
-    // Longest status that still clears the controls on the right.
+    const videos = node._msVideos?.length || 0;
+    const videoNote = videos ? `  •  ${videos} video${videos === 1 ? "" : "s"} to capture from` : "";
+    // Longest status that still fits the node.
     const candidates = count
-        ? [`${noun}${estimate}${inputNote}`, `${noun}${estimate}`, noun]
-        : [node._msUnreadable
-            ? "Image list unreadable — kept as-is. Add or Clear to replace."
-            : "Select this node, then Ctrl+V images"];
+        ? [`${noun}${estimate}${inputNote}${videoNote}`, `${noun}${estimate}${videoNote}`, `${noun}${estimate}`, noun]
+        : [videos
+            ? `${videos} video${videos === 1 ? "" : "s"} — click the card to capture frames`
+            : node._msUnreadable
+                ? "Image list unreadable — kept as-is. Add or Clear to replace."
+                : "Select this node, then Ctrl+V images"];
     const room = nodeWidth(node) - 18;
     const status = candidates.find((text) => (ctx.measureText?.(text)?.width ?? 0) <= room) ?? candidates[candidates.length - 1];
     ctx.fillText(status, 9, top + 12);
     drawToolbar(ctx, node);
 
-    if (!count) {
+    if (!count && !videos) {
         const r = thumbLayout(node, 0);
         ctx.strokeStyle = "#666";
         ctx.setLineDash([5, 5]);
@@ -584,7 +654,7 @@ function drawThumbs(node, ctx) {
         ctx.setLineDash([]);
         ctx.fillStyle = "#8f8f8f";
         ctx.textAlign = "center";
-        ctx.fillText("Paste / Drop / Add images", r.x + r.w / 2, r.y + r.h / 2 - 4);
+        ctx.fillText("Paste / Drop / Add images or a video", r.x + r.w / 2, r.y + r.h / 2 - 4);
         ctx.fillText("click an image to edit · drag ≡ to reorder", r.x + r.w / 2, r.y + r.h / 2 + 12);
         ctx.restore();
         return;
@@ -601,6 +671,10 @@ function drawThumbs(node, ctx) {
     items.forEach((item, index) => {
         const r = thumbLayout(node, index);
         if (r.visible) drawCard(ctx, node, item, index, r);
+    });
+    (node._msVideos || []).forEach((entry, index) => {
+        const r = thumbLayout(node, items.length + index);
+        if (r.visible) drawVideoCard(ctx, entry, r);
     });
     ctx.restore();
 
@@ -985,8 +1059,12 @@ function restoreHistory(node, step) {
 
 function clearAllImages(node) {
     const count = node._msImages?.length || 0;
-    if (count && !confirm(`Remove all ${count} images from this node?`)) return;
+    const videos = node._msVideos?.length || 0;
+    const what = [count ? `${count} image${count === 1 ? "" : "s"}` : "", videos ? `${videos} video${videos === 1 ? "" : "s"}` : ""]
+        .filter(Boolean).join(" and ");
+    if ((count || videos) && !confirm(`Remove all ${what} from this node?`)) return;
     cancelUpload(node);
+    removeAllVideos(node);
     node._msImages = [];
     node._msThumbCache?.clear();
     node._msTransformedCache?.clear();
@@ -1103,16 +1181,22 @@ function cancelUpload(node) {
     return true;
 }
 
+function isVideoFile(file) {
+    return !!file && (String(file.type || "").startsWith("video/") || VIDEO_EXTENSIONS.test(file.name || ""));
+}
+
 async function addFiles(node, files) {
-    const images = Array.from(files || []).filter((file) => file && file.type?.startsWith("image/"));
-    if (!images.length) return;
+    const picked = Array.from(files || []).filter((file) => file && (file.type?.startsWith("image/") || isVideoFile(file)));
+    const images = picked.filter((file) => !isVideoFile(file));
+    const videos = picked.filter(isVideoFile);
+    if (!picked.length) return;
     if (node._msUpload) {
         // Uploads run sequentially and can take seconds, so say why nothing
         // happened rather than swallowing the paste.
         const run = node._msUpload;
         notify(
             "Upload in progress",
-            `Still uploading (${run.done}/${run.total}) — ${images.length} image(s) were not added. ` +
+            `Still uploading (${run.done}/${run.total}) — ${picked.length} file(s) were not added. ` +
             "Wait for it, or click Cancel in the toolbar.",
             "warn",
         );
@@ -1122,16 +1206,15 @@ async function addFiles(node, files) {
     // The backend refuses more than MAX_IMAGES at run time; refusing here
     // saves uploading files that could never be used.
     const remaining = MAX_IMAGES - (node._msImages?.length || 0);
-    if (remaining <= 0) {
+    let queue = images;
+    if (images.length && remaining <= 0) {
         notify(
             "Image limit reached",
             `This node holds at most ${MAX_IMAGES} images. Remove some before adding more.`,
             "warn",
         );
-        return;
-    }
-    let queue = images;
-    if (queue.length > remaining) {
+        queue = [];
+    } else if (queue.length > remaining) {
         notify(
             "Image limit",
             `Only ${remaining} more image${remaining === 1 ? "" : "s"} fit (max ${MAX_IMAGES}); ` +
@@ -1140,6 +1223,9 @@ async function addFiles(node, files) {
         );
         queue = queue.slice(0, remaining);
     }
+    queue = [...queue, ...videos];
+    if (!queue.length) return;
+    const addedVideos = [];
 
     node._msUploadGeneration = (node._msUploadGeneration || 0) + 1;
     const run = {
@@ -1154,6 +1240,26 @@ async function addFiles(node, files) {
 
     try {
         for (const file of queue) {
+            if (isVideoFile(file)) {
+                const uploaded = await uploadFile(file, run.abort.signal, VIDEO_TARGET);
+                const entry = {
+                    kind: "video", filename: uploaded.filename, subfolder: uploaded.subfolder, type: uploaded.type,
+                    name: file.name || uploaded.filename, poster: null, duration: null, width: 0, height: 0, failed: false,
+                };
+                if (node._msUploadGeneration !== run.generation) {
+                    deleteTempVideos([entry]);
+                    break;
+                }
+                (node._msVideos ||= []).push(entry);
+                nodesWithVideos.add(node);
+                installUnloadCleanup();
+                addedVideos.push(entry);
+                loadVideoPoster(node, entry);
+                run.done += 1;
+                updateNodeSize(node);
+                syncUploadUi(node, originalTitle);
+                continue;
+            }
             const item = await uploadFile(file, run.abort.signal);
             // Clear or Cancel ran during the await: the file is on
             // disk, but it must not reappear on a list the user just reset.
@@ -1163,6 +1269,8 @@ async function addFiles(node, files) {
             changed(node);
             syncUploadUi(node, originalTitle);
         }
+        // One video added: go straight to picking frames from it.
+        if (addedVideos.length === 1 && !node._msDisposed) openVideoPicker(node, addedVideos[0]);
     } catch (error) {
         if (error?.name !== "AbortError") {
             console.error("[Multi Stitch Images]", error);
@@ -1198,9 +1306,148 @@ function transientInput(type) {
     return { input, removeOnce };
 }
 
+// --- Videos: session-only sources for frame capture -------------------------
+
+function loadVideoPoster(node, entry) {
+    const video = document.createElement("video");
+    video.muted = true;
+    video.preload = "metadata";
+    video.playsInline = true;
+    const release = () => {
+        video.onloadedmetadata = video.onseeked = video.onerror = null;
+        try { video.removeAttribute?.("src"); video.load?.(); } catch (_) { /* discarded */ }
+    };
+    video.onerror = () => {
+        entry.failed = true;
+        release();
+        node.graph?.setDirtyCanvas(true, false);
+    };
+    video.onloadedmetadata = () => {
+        entry.width = video.videoWidth || 0;
+        entry.height = video.videoHeight || 0;
+        entry.duration = Number.isFinite(video.duration) ? video.duration : null;
+        try {
+            video.currentTime = Math.min(0.1, (entry.duration || 1) / 2);
+        } catch (_) { release(); }
+    };
+    video.onseeked = () => {
+        try {
+            const w = video.videoWidth;
+            const h = video.videoHeight;
+            if (w && h) {
+                const scale = Math.min(1, VIDEO_POSTER_SIDE / Math.max(w, h));
+                const poster = document.createElement("canvas");
+                poster.width = Math.max(1, Math.round(w * scale));
+                poster.height = Math.max(1, Math.round(h * scale));
+                drawImageScaled(poster.getContext("2d"), video, 0, 0, w, h, 0, 0, poster.width, poster.height);
+                entry.poster = poster;
+            }
+        } catch (_) { /* a poster is a nicety */ }
+        release();
+        node.graph?.setDirtyCanvas(true, false);
+    };
+    video.src = imageUrl(entry);
+}
+
+async function deleteTempVideos(entries) {
+    const filenames = entries.map((entry) => entry.filename).filter(Boolean);
+    if (!filenames.length) return;
+    try {
+        const response = await api.fetchApi(VIDEO_DELETE_ROUTE, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ filenames }),
+        });
+        if (!response.ok) console.warn(`[Multi Stitch Images] could not delete ${filenames.join(", ")}: ${response.status}`);
+    } catch (error) {
+        console.warn("[Multi Stitch Images] could not delete the temporary video", error);
+    }
+}
+
+function removeVideo(node, entry, { silent = false } = {}) {
+    const list = node._msVideos || [];
+    const index = list.indexOf(entry);
+    if (index >= 0) list.splice(index, 1);
+    if (!list.length) nodesWithVideos.delete(node);
+    if (node._msPicker?.entry === entry) node._msPicker.close(false);
+    deleteTempVideos([entry]);
+    if (!silent) notify("Video removed", `${entry.name || entry.filename} was deleted from the server; captured frames stay.`);
+    updateNodeSize(node);
+    node.graph?.setDirtyCanvas(true, true);
+}
+
+function removeAllVideos(node) {
+    const entries = [...(node._msVideos || [])];
+    if (!entries.length) return;
+    node._msVideos = [];
+    nodesWithVideos.delete(node);
+    node._msPicker?.close(false);
+    deleteTempVideos(entries);
+}
+
+// Leaving the page (reload, close) is the one exit the node cannot see:
+// a beacon asks the server to drop every video still waiting for capture.
+let unloadCleanupInstalled = false;
+function installUnloadCleanup() {
+    if (unloadCleanupInstalled || typeof window === "undefined") return;
+    unloadCleanupInstalled = true;
+    window.addEventListener("pagehide", () => {
+        const filenames = [...nodesWithVideos].flatMap((node) => (node._msVideos || []).map((entry) => entry.filename));
+        if (!filenames.length || typeof navigator === "undefined" || typeof navigator.sendBeacon !== "function") return;
+        try {
+            navigator.sendBeacon(api.apiURL(VIDEO_DELETE_ROUTE), new Blob([JSON.stringify({ filenames })], { type: "application/json" }));
+        } catch (_) { /* best effort; ComfyUI clears its temp folder on restart */ }
+    });
+}
+
+async function addCapturedFrame(node, entry, canvas, time) {
+    if ((node._msImages?.length || 0) >= MAX_IMAGES) {
+        throw new Error(`This node holds at most ${MAX_IMAGES} images. Remove some before capturing more.`);
+    }
+    const file = await canvasToPngFile(canvas, captureFileName(entry, time));
+    const item = await uploadFile(file);
+    item.source = { video: entry.name || entry.filename, time: +Number(time).toFixed(3) };
+    if (node._msDisposed) return item;
+    node._msImages.push(item);
+    changed(node);
+    return item;
+}
+
+function openVideoPicker(node, entry) {
+    if (node._msPicker) return;
+    try {
+        const picker = openFramePicker(node, entry, {
+            onCapture: (canvas, time) => addCapturedFrame(node, entry, canvas, time),
+            onDone: () => removeVideo(node, entry),
+            onClose: () => {
+                if (node._msPicker === picker) node._msPicker = null;
+                node.graph?.setDirtyCanvas(true, true);
+            },
+        });
+        picker.entry = entry;
+        node._msPicker = picker;
+    } catch (error) {
+        node._msPicker = null;
+        console.warn("[Multi Stitch Images] frame picker", error);
+    }
+}
+
+function videoIndexAt(node, graphCanvas) {
+    const mouse = graphCanvas?.graph_mouse || graphCanvas?.canvas_mouse;
+    if (node.flags?.collapsed || !Array.isArray(mouse)) return -1;
+    const x = mouse[0] - node.pos[0];
+    const y = mouse[1] - node.pos[1];
+    const images = node._msImages?.length || 0;
+    for (let i = 0; i < (node._msVideos?.length || 0); i++) {
+        const r = thumbLayout(node, images + i);
+        if (r.visible && inRect(x, y, r)) return i;
+    }
+    return -1;
+}
+
 function chooseFiles(node) {
     const { input, removeOnce } = transientInput("file");
-    input.accept = "image/*";
+    input.accept = "image/*,video/*";
     input.multiple = true;
     input.addEventListener("change", async () => {
         try {
@@ -1423,6 +1670,7 @@ function setupNode(node) {
     node._msImages = normalizeItems(fromWidget?.length ? fromWidget : fromProps ?? fromWidget);
     node._msThumbCache = new Map();
     node._msTransformedCache = new Map();
+    node._msVideos = [];
     node._msScrollRow = 0;
     resetHistory(node);
 
@@ -1434,6 +1682,8 @@ function setupNode(node) {
     updateCustomColorButton(node);
     syncConditionalWidgets(node);
     node.pasteFiles = (files) => addFiles(node, files);
+    // A frame captured from one of the node's videos, as the picker does it.
+    node.captureVideoFrame = (entry, canvas, time) => addCapturedFrame(node, entry, canvas, time);
     changed(node);
     scheduleNodeLayout(node);
 }
@@ -1547,13 +1797,13 @@ app.registerExtension({
                     return true;
                 }
                 // With no images yet, the dashed box is the "add" target too.
-                if (!this._msImages?.length && inRect(x, y, thumbLayout(this, 0))) {
+                if (!listCount(this) && inRect(x, y, thumbLayout(this, 0))) {
                     chooseFiles(this);
                     stopEvent(event, graphCanvas);
                     return true;
                 }
             }
-            if (primary && !this.flags?.collapsed && this._msImages?.length) {
+            if (primary && !this.flags?.collapsed && listCount(this)) {
                 const [x, y] = localPos(this, event, pos, graphCanvas);
                 const viewport = listViewport(this);
                 const bar = scrollbarRect(this, viewport);
@@ -1566,6 +1816,16 @@ app.registerExtension({
                         const thumbCentre = bar.y + 14 + (trackH * ((viewport.scroll + viewport.visibleRows / 2) / viewport.rows));
                         scrollList(this, y < thumbCentre ? -viewport.visibleRows : viewport.visibleRows);
                     }
+                    stopEvent(event, graphCanvas);
+                    return true;
+                }
+
+                for (let i = 0; i < (this._msVideos?.length || 0); i++) {
+                    const entry = this._msVideos[i];
+                    const r = thumbLayout(this, this._msImages.length + i);
+                    if (!r.visible || !inRect(x, y, r)) continue;
+                    if (inRect(x, y, thumbActionRects(r).remove)) removeVideo(this, entry);
+                    else openVideoPicker(this, entry);
                     stopEvent(event, graphCanvas);
                     return true;
                 }
@@ -1604,6 +1864,14 @@ app.registerExtension({
             const r = extraMenu?.apply(this, arguments);
             const index = thumbIndexAt(this, graphCanvas);
             const extra = [];
+            const videoIndex = videoIndexAt(this, graphCanvas);
+            if (videoIndex >= 0) {
+                const entry = this._msVideos[videoIndex];
+                extra.push(
+                    { content: "Capture frames…", callback: () => openVideoPicker(this, entry) },
+                    { content: "Remove video (captured frames stay)", callback: () => removeVideo(this, entry) },
+                );
+            }
             if (index >= 0) {
                 extra.push(
                     {
@@ -1629,7 +1897,7 @@ app.registerExtension({
         // Wheel over the list scrolls it when there is more than fits.
         const mouseWheel = nodeType.prototype.onMouseWheel;
         nodeType.prototype.onMouseWheel = function (event, pos, graphCanvas) {
-            if (!this.flags?.collapsed && this._msImages?.length) {
+            if (!this.flags?.collapsed && listCount(this)) {
                 const [x, y] = localPos(this, event, pos, graphCanvas);
                 const viewport = listViewport(this);
                 if (viewport.scrollable && y >= viewport.top && y <= viewport.top + viewport.height && x >= 0 && x <= nodeWidth(this)) {
@@ -1678,7 +1946,7 @@ app.registerExtension({
 
         const dragOver = nodeType.prototype.onDragOver;
         nodeType.prototype.onDragOver = function (event) {
-            if (Array.from(event?.dataTransfer?.items || []).some((item) => item.type?.startsWith("image/"))) {
+            if (Array.from(event?.dataTransfer?.items || []).some((item) => item.type?.startsWith("image/") || item.type?.startsWith("video/"))) {
                 return true;
             }
             return dragOver?.apply(this, arguments) ?? false;
@@ -1686,7 +1954,7 @@ app.registerExtension({
 
         const dragDrop = nodeType.prototype.onDragDrop;
         nodeType.prototype.onDragDrop = function (event) {
-            const files = Array.from(event?.dataTransfer?.files || []).filter((file) => file.type?.startsWith("image/"));
+            const files = Array.from(event?.dataTransfer?.files || []).filter((file) => file.type?.startsWith("image/") || isVideoFile(file));
             if (files.length) {
                 addFiles(this, files);
                 event.preventDefault?.();
@@ -1699,6 +1967,7 @@ app.registerExtension({
         nodeType.prototype.onRemoved = function () {
             this._msDisposed = true;
             cancelUpload(this);
+            removeAllVideos(this);
             for (const state of this._msThumbCache?.values() || []) state.cancel?.();
             this._msThumbCache?.clear(); this._msTransformedCache?.clear();
             clearTimeout(this._msPreviewRender?.timer);

@@ -936,6 +936,82 @@ class MultiStitchImages:
             return float("nan")
 
 
+# --- Temporary videos for frame capture ---------------------------------------
+# The frontend uploads a video to ComfyUI's temp folder (type "temp", the
+# subfolder below) only to pick frames from it in the browser; every capture
+# becomes an ordinary PNG in the input folder. The video is never part of the
+# stitch, so the node ignores it. This route lets the frontend delete the file
+# as soon as the captures are done; ComfyUI empties the temp folder on
+# start-up for anything a closed browser left behind.
+_VIDEO_SUBFOLDER = "multi_stitch_video"
+_VIDEO_EXTENSIONS = {
+    ".mp4", ".m4v", ".webm", ".mov", ".mkv", ".ogv", ".ogg", ".avi", ".mpg", ".mpeg", ".3gp", ".ts", ".wmv",
+}
+
+
+def _temp_video_path(filename: object) -> Path:
+    """The temp-folder path a frontend-named video may live at, or ValueError."""
+    name = str(filename or "")
+    if not name or name in {".", ".."} or "/" in name or "\\" in name or "\x00" in name:
+        raise ValueError(f"Multi Stitch Images: not a video file name: {name!r}")
+    if Path(name).suffix.lower() not in _VIDEO_EXTENSIONS:
+        raise ValueError(f"Multi Stitch Images: not a video file name: {name!r}")
+    root = (Path(folder_paths.get_temp_directory()) / _VIDEO_SUBFOLDER).resolve()
+    path = (root / name).resolve()
+    if path.parent != root:
+        raise ValueError(f"Multi Stitch Images: not inside the temporary video folder: {name!r}")
+    return path
+
+
+def _delete_temp_video(filename: object) -> bool:
+    """Remove one uploaded video; False when it is already gone."""
+    path = _temp_video_path(filename)
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def _video_delete_response(payload: object) -> tuple[int, dict]:
+    """(status, body) for the delete route; pure so it is testable without aiohttp."""
+    if not isinstance(payload, dict):
+        return 400, {"error": "expected a JSON object with \"filenames\""}
+    names = payload.get("filenames")
+    if names is None:
+        names = [payload.get("filename")]
+    if not isinstance(names, list) or not names or len(names) > 64:
+        return 400, {"error": "\"filenames\" must be a list of 1 to 64 names"}
+    removed: list[str] = []
+    missing: list[str] = []
+    rejected: list[str] = []
+    for name in names:
+        try:
+            (removed if _delete_temp_video(name) else missing).append(str(name))
+        except ValueError:
+            rejected.append(str(name))
+    status = 400 if rejected and not removed and not missing else 200
+    return status, {"removed": removed, "missing": missing, "rejected": rejected}
+
+
+try:
+    from aiohttp import web as _web
+    from server import PromptServer as _PromptServer
+except Exception:  # not inside ComfyUI: tests and tooling import this module too
+    _web = None
+    _PromptServer = None
+
+if _web is not None and getattr(_PromptServer, "instance", None) is not None:
+    @_PromptServer.instance.routes.post("/multi_stitch/video/delete")
+    async def _delete_temp_video_route(request):
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = None
+        status, body = _video_delete_response(payload)
+        return _web.json_response(body, status=status)
+
+
 NODE_CLASS_MAPPINGS = {
     "MultiStitchImages": MultiStitchImages,
 }
