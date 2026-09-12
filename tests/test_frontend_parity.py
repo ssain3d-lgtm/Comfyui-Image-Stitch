@@ -25,6 +25,8 @@ ms = importlib.util.module_from_spec(spec)
 assert spec and spec.loader
 spec.loader.exec_module(ms)
 
+import test_multi_stitch as support  # noqa: E402 - after the folder_paths stub above
+
 NODE = shutil.which("node")
 
 RUNNER = """
@@ -72,7 +74,7 @@ def source_to_view(crop, transform):
     return out
 
 
-@unittest.skipUnless(NODE, "node is not installed")
+@support.requires(NODE is not None, "node is not installed")
 class FrontendParityTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -129,19 +131,19 @@ class FrontendParityTests(unittest.TestCase):
             ],
         })
 
-        for case, js in zip(crops, got["crops"]):
+        for case, js in zip(crops, got["crops"], strict=True):
             with self.subTest(normalizeCrop=case):
-                self.assertClose(js, dict(zip("xywh", ms._normalize_crop(case))))
+                self.assertClose(js, dict(zip("xywh", ms._normalize_crop(case), strict=True)))
 
-        for (n, gc, d), js in zip(grid, got["grid"]):
+        for (n, gc, d), js in zip(grid, got["grid"], strict=True):
             rows, cols = ms._grid_shape(n, gc, d)
             with self.subTest(gridShape=(n, gc, d)):
                 self.assertEqual((js["rows"], js["cols"]), (rows, cols))
 
-        for (c, t), js, back in zip(mapping, got["forward"], got["roundtrip"]):
+        for (c, t), js, back in zip(mapping, got["forward"], got["roundtrip"], strict=True):
             with self.subTest(cropSourceToView=(c, t)):
-                self.assertClose(js, dict(zip("xywh", source_to_view(c, t))))
-                self.assertClose(back, dict(zip("xywh", c)))
+                self.assertClose(js, dict(zip("xywh", source_to_view(c, t), strict=True)))
+                self.assertClose(back, dict(zip("xywh", c, strict=True)))
 
     def test_layout_and_output_limit_match_python(self):
         """Placement rects and the output cap are compared exactly, pixel for pixel."""
@@ -172,7 +174,7 @@ class FrontendParityTests(unittest.TestCase):
 
         got = self.run_js({"layout": layout_cases, "limit": limit_cases})
 
-        for case, js in zip(layout_cases, got["layout"]):
+        for case, js in zip(layout_cases, got["layout"], strict=True):
             dims, layout, direction, match, columns, spacing, cell_w, cell_h, reference = case
             width, height, placements = ms._layout(
                 dims, layout, direction, match, columns, spacing, cell_w, cell_h, match_reference=reference,
@@ -183,7 +185,7 @@ class FrontendParityTests(unittest.TestCase):
                     [(p["x"], p["y"], p["w"], p["h"]) for p in js["placements"]],
                     [tuple(p) for p in placements],
                 )
-        for (w, h, mode, px), js in zip(limit_cases, got["limit"]):
+        for (w, h, mode, px), js in zip(limit_cases, got["limit"], strict=True):
             with self.subTest(limit=(w, h, mode, px)):
                 self.assertEqual((js["w"], js["h"]), ms._limited_size(w, h, mode, px))
 
@@ -201,7 +203,7 @@ class FrontendParityTests(unittest.TestCase):
                   [[(10, 10), (20, 5), (5, 20)], "largest", 0, 8], [[(100, 100), (50, 200)], "smallest", 1, 64],
                   [[(3, 3)], 1, 0, 16]]
         got = self.run_js({"size": cases})
-        for (dims, ref, mp, d), js in zip(cases, got["size"]):
+        for (dims, ref, mp, d), js in zip(cases, got["size"], strict=True):
             with self.subTest(size=(dims, ref, mp, d)):
                 self.assertEqual((js["w"], js["h"]), ms._reference_size(dims, ref, mp, d))
 
@@ -216,7 +218,7 @@ class FrontendParityTests(unittest.TestCase):
         cases += [[10, 10, {"x": 0.15, "y": 0.15, "w": 0.3, "h": 0.3}], [1, 1, {"x": 0, "y": 0, "w": 1, "h": 1}],
                   [7, 3, {"x": 0.5, "y": 0.5, "w": 0.5, "h": 0.5}], [40, 20, {"x": 0.999, "y": 0.999, "w": 0.001, "h": 0.001}]]
         got = self.run_js({"box": cases})
-        for (width, height, crop), js in zip(cases, got["box"]):
+        for (width, height, crop), js in zip(cases, got["box"], strict=True):
             left, top, right, bottom = ms._crop_box(width, height, crop)
             with self.subTest(box=(width, height, crop)):
                 self.assertEqual((js["x"], js["y"], js["w"], js["h"]), (left, top, right - left, bottom - top))

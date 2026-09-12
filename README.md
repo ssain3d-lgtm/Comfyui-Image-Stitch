@@ -264,7 +264,7 @@ grid_columns = 3
 | --- | --- | --- |
 | `direction` | `right` / `down` / `left` / `up` | `right` |
 | `match_image_size` | `true` / `false` | `true` |
-| `spacing_width` | `0` – `1024` (step 2) | `0` |
+| `spacing_width` | `0` – `1024` (step 1) | `0` |
 | `spacing_color` | `white` / `black` / `red` / `green` / `blue` / `custom` | `white` |
 | `layout_mode` | `strip` / `grid` | `strip` |
 | `grid_columns` | `1` – `16` | `3` |
@@ -609,7 +609,7 @@ Hover any widget or output slot for its **tooltip**; the table below is the summ
 | --- | --- | --- |
 | `direction` | `right` / `down` / `left` / `up` | `right` |
 | `match_image_size` | `true` / `false` | `true` |
-| `spacing_width` | `0` – `1024` (step 2) | `0` |
+| `spacing_width` | `0` – `1024` (step 1) | `0` |
 | `spacing_color` | `white` / `black` / `red` / `green` / `blue` / `custom` | `white` |
 | `layout_mode` | `strip` / `grid` | `strip` |
 | `grid_columns` | `1` – `16` | `3` |

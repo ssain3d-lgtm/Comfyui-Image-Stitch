@@ -4,13 +4,14 @@ import hashlib
 import io
 import json
 import math
+import os
 import re
 import secrets
 import sys
 import time
+from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable
 
 import numpy as np
 import torch
@@ -52,6 +53,35 @@ _ORIENTATION_TRANSPOSES = {
     8: Image.Transpose.ROTATE_90,
 }
 _ORIENTATIONS_THAT_SWAP_AXES = {5, 6, 7, 8}
+# A quarter turn clockwise in the displayed coordinate system, which is the
+# opposite direction to Pillow's own naming.
+_ROTATION_TRANSPOSES = {
+    90: Image.Transpose.ROTATE_270,
+    180: Image.Transpose.ROTATE_180,
+    270: Image.Transpose.ROTATE_90,
+}
+_TRANSPOSES_THAT_SWAP_AXES = {
+    Image.Transpose.ROTATE_90,
+    Image.Transpose.ROTATE_270,
+    Image.Transpose.TRANSPOSE,
+    Image.Transpose.TRANSVERSE,
+}
+# Every transpose is its own inverse except the two quarter turns.
+_TRANSPOSE_INVERSES = {
+    Image.Transpose.ROTATE_90: Image.Transpose.ROTATE_270,
+    Image.Transpose.ROTATE_270: Image.Transpose.ROTATE_90,
+}
+# Sample widths convert("RGB") cannot carry: it keeps the low 8 bits, so a
+# mid-grey 16-bit image comes out solid white. The value is the range the mode
+# is meant to hold; a file that exceeds it is normalised by its own maximum.
+_HIGH_DEPTH_RANGES = {
+    "I;16": 65535.0,
+    "I;16B": 65535.0,
+    "I;16L": 65535.0,
+    "I;16N": 65535.0,
+    "I": 65535.0,   # where a 16-bit PNG lands on older Pillow versions
+    "F": 1.0,
+}
 
 _DIRECTIONS = ("right", "down", "left", "up")
 _LAYOUT_MODES = ("strip", "grid")
@@ -69,29 +99,59 @@ _LEGACY_SIZE_REFERENCES = ("first", "largest", "smallest")
 _OUTPUT_LIMITS = ("none", "max_width", "max_height", "max_long_side")
 
 
-def _safe_input_path(item: dict) -> Path:
-    """Resolve an uploaded ComfyUI input image without allowing path traversal."""
+_DRIVE_LETTER = re.compile(r"^[A-Za-z]:")
+
+
+def _item_relative_path(item: dict) -> str:
+    """The item's own `subfolder/filename`, checked but never resolved.
+
+    The same lexical rules ComfyUI applies to an upload: no absolute path, no
+    drive letter, no `..` and no NUL byte. Symlinks are deliberately left
+    alone, so a subfolder of `input/` that links somewhere else keeps working,
+    as it does for ComfyUI's own Load Image.
+    """
     filename = str(item.get("filename", "")).strip()
-    subfolder = str(item.get("subfolder", "")).strip().replace("\\", "/")
-    item_type = str(item.get("type", "input")).strip().lower()
+    subfolder = str(item.get("subfolder", "")).strip()
 
     if not filename:
         raise ValueError("Multi Stitch Images: image entry has no filename.")
+    text = f"{subfolder}/{filename}" if subfolder else filename
+    text = text.replace("\\", "/")
+    if "\x00" in text:
+        raise ValueError(f"Multi Stitch Images: unsafe image path rejected: {text!r}")
+    segments = [segment for segment in text.split("/") if segment not in {"", "."}]
+    unsafe = (
+        text.startswith("/")
+        or _DRIVE_LETTER.match(text) is not None
+        or not segments
+        or ".." in segments
+    )
+    if unsafe:
+        raise ValueError(f"Multi Stitch Images: unsafe image path rejected: {text!r}")
+    return "/".join(segments)
+
+
+def _safe_input_path(item: dict) -> Path:
+    """Resolve an uploaded ComfyUI input image without allowing path traversal."""
+    item_type = str(item.get("type", "input")).strip().lower()
     if item_type not in {"input", "temp"}:
         raise ValueError(f"Multi Stitch Images: unsupported image type: {item_type}")
 
-    base = Path(folder_paths.get_input_directory() if item_type == "input" else folder_paths.get_temp_directory()).resolve()
-    relative = Path(subfolder) / filename if subfolder else Path(filename)
-    candidate = (base / relative).resolve()
+    relative = _item_relative_path(item)
+    directory = folder_paths.get_input_directory() if item_type == "input" else folder_paths.get_temp_directory()
+    # Normalised lexically, symlinks untouched: `..` is already refused above,
+    # so the join cannot leave the folder, and the check says so out loud.
+    base = os.path.abspath(directory)
+    candidate = os.path.abspath(os.path.join(base, *relative.split("/")))
+    if os.path.commonpath((base, candidate)) != base:
+        raise ValueError(f"Multi Stitch Images: unsafe image path rejected: {relative!r}")
 
-    try:
-        candidate.relative_to(base)
-    except ValueError as exc:
-        raise ValueError("Multi Stitch Images: unsafe image path rejected.") from exc
-
-    if not candidate.is_file():
-        raise FileNotFoundError(f"Multi Stitch Images: image not found: {candidate}")
-    return candidate
+    path = Path(candidate)
+    if not path.is_file():
+        # The server's own folder layout is nothing the user can act on, so the
+        # error names the item as the node's list holds it.
+        raise FileNotFoundError(f"Multi Stitch Images: image not found: {relative}")
+    return path
 
 
 def _normalize_crop(crop: object) -> tuple[float, float, float, float]:
@@ -130,22 +190,85 @@ def _normalize_transform(item: dict) -> tuple[int, bool, bool]:
     return rotation, bool(item.get("flip_h", False)), bool(item.get("flip_v", False))
 
 
+def _transform_methods(item: dict) -> list[Image.Transpose]:
+    """The transposes the item asks for: rotate first, then flip."""
+    rotation, flip_h, flip_v = _normalize_transform(item)
+    methods = []
+    if rotation in _ROTATION_TRANSPOSES:
+        methods.append(_ROTATION_TRANSPOSES[rotation])
+    if flip_h:
+        methods.append(Image.Transpose.FLIP_LEFT_RIGHT)
+    if flip_v:
+        methods.append(Image.Transpose.FLIP_TOP_BOTTOM)
+    return methods
+
+
 def _apply_transform(image: Image.Image, item: dict) -> Image.Image:
     """Rotate first, then flip in the displayed/output coordinate system."""
-    rotation, flip_h, flip_v = _normalize_transform(item)
-
-    if rotation == 90:
-        image = image.transpose(Image.Transpose.ROTATE_270)  # clockwise
-    elif rotation == 180:
-        image = image.transpose(Image.Transpose.ROTATE_180)
-    elif rotation == 270:
-        image = image.transpose(Image.Transpose.ROTATE_90)   # counter-clockwise
-
-    if flip_h:
-        image = image.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
-    if flip_v:
-        image = image.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
+    for method in _transform_methods(item):
+        image = image.transpose(method)
     return image
+
+
+def _transformed_size(size: tuple[int, int], methods: list[Image.Transpose]) -> tuple[int, int]:
+    """The size an image of `size` has once `methods` have been applied."""
+    width, height = size
+    for method in methods:
+        if method in _TRANSPOSES_THAT_SWAP_AXES:
+            width, height = height, width
+    return width, height
+
+
+def _transposed_point(x: int, y: int, width: int, height: int, method: Image.Transpose) -> tuple[int, int]:
+    """Where pixel (x, y) of a (width, height) image lands after `method`."""
+    if method == Image.Transpose.FLIP_LEFT_RIGHT:
+        return width - 1 - x, y
+    if method == Image.Transpose.FLIP_TOP_BOTTOM:
+        return x, height - 1 - y
+    if method == Image.Transpose.ROTATE_90:
+        return y, width - 1 - x
+    if method == Image.Transpose.ROTATE_180:
+        return width - 1 - x, height - 1 - y
+    if method == Image.Transpose.ROTATE_270:
+        return height - 1 - y, x
+    if method == Image.Transpose.TRANSPOSE:
+        return y, x
+    if method == Image.Transpose.TRANSVERSE:
+        return height - 1 - y, width - 1 - x
+    return x, y
+
+
+def _transposed_box(
+    box: tuple[int, int, int, int],
+    width: int,
+    height: int,
+    method: Image.Transpose,
+) -> tuple[int, int, int, int]:
+    """Where a pixel box of a (width, height) image lands after `method`."""
+    left, top, right, bottom = box
+    x0, y0 = _transposed_point(left, top, width, height, method)
+    x1, y1 = _transposed_point(right - 1, bottom - 1, width, height, method)
+    return min(x0, x1), min(y0, y1), max(x0, x1) + 1, max(y0, y1) + 1
+
+
+def _source_crop_box(
+    size: tuple[int, int],
+    methods: list[Image.Transpose],
+    box: tuple[int, int, int, int],
+) -> tuple[int, int, int, int]:
+    """The box of the decoded source that `box` in the transformed view covers.
+
+    The exact inverse of the EXIF orientation, the quarter turns and the flips,
+    walked back one transpose at a time. Each of them maps a rectangle onto a
+    rectangle, so cropping the source first and transforming the small crop
+    selects the very same pixels as transforming everything and cropping last.
+    """
+    spaces = [size]
+    for method in methods:
+        spaces.append(_transformed_size(spaces[-1], [method]))
+    for method, (width, height) in zip(reversed(methods), reversed(spaces[1:]), strict=True):
+        box = _transposed_box(box, width, height, _TRANSPOSE_INVERSES.get(method, method))
+    return box
 
 
 def _crop_box(width: int, height: int, crop: object) -> tuple[int, int, int, int]:
@@ -184,17 +307,52 @@ def _flatten_alpha(image: Image.Image, background: tuple[float, float, float]) -
     pasted screenshots and cut-outs.
     """
     if image.mode not in {"RGBA", "LA", "PA"} and "transparency" not in image.info:
-        return image.convert("RGB")
+        return image if image.mode == "RGB" else image.convert("RGB")
     rgba = image.convert("RGBA")
     solid = Image.new("RGBA", rgba.size, tuple(round(c * 255) for c in background) + (255,))
     return Image.alpha_composite(solid, rgba).convert("RGB")
 
 
+def _high_depth_array(image: Image.Image) -> np.ndarray | None:
+    """A grey image with more than 8 bits per sample as float32 [H, W, 3], else None.
+
+    convert("RGB") keeps only the low 8 bits of a 16-bit, 32-bit integer or
+    float sample, which turns a mid-grey 16-bit PNG or TIFF solid white. Scale
+    by the range the mode is meant to hold instead and stack the one channel to
+    RGB. A file that carries more than that range — an "I" image above 65535,
+    an "F" image above 1.0 — is normalised by the largest value among the
+    pixels that are actually used. Every ordinary mode returns None and is left
+    to the alpha flattening above.
+    """
+    full_range = _HIGH_DEPTH_RANGES.get(image.mode)
+    if full_range is None:
+        return None
+    array = np.array(image, dtype=np.float32)
+    if array.size:
+        array /= max(full_range, float(array.max()))
+    np.clip(array, 0.0, 1.0, out=array)
+    return np.repeat(array[:, :, np.newaxis], 3, axis=2)
+
+
+def _image_array(image: Image.Image, background: tuple[float, float, float]) -> np.ndarray:
+    """One decoded image as a float32 [H, W, 3] array in 0..1.
+
+    The scaling divides in place: a separate float32 copy of the same array
+    doubles the peak cost of a large source for nothing.
+    """
+    array = _high_depth_array(image)
+    if array is None:
+        array = np.array(_flatten_alpha(image, background), dtype=np.float32)
+        array /= 255.0
+    return array
+
+
 def _exif_orientation(source: Image.Image) -> int:
     """Read orientation without decoding pixels, including late PNG eXIf."""
     if source.format == "TIFF":
-        # Pillow's TIFF plugin already publishes the oriented size and applies
-        # its orientation during load; transposing again would rotate twice.
+        # Pillow's TIFF plugin applies the orientation itself while loading, so
+        # transposing again would rotate twice. What the versions disagree on is
+        # only the size before the load, which _decoded_size settles.
         return 1
     try:
         # Bypass PNG's override, whose getexif() calls load(). The base method
@@ -234,17 +392,38 @@ def _exif_orientation(source: Image.Image) -> int:
         return 1
 
 
-def _apply_orientation(image: Image.Image, orientation: int) -> Image.Image:
+def _orientation_methods(orientation: int) -> list[Image.Transpose]:
+    """The transpose an EXIF orientation asks for, as a list (empty for 1)."""
     method = _ORIENTATION_TRANSPOSES.get(orientation)
-    return image.transpose(method) if method is not None else image
+    return [method] if method is not None else []
+
+
+def _decoded_size(source: Image.Image) -> tuple[int, int]:
+    """The size the decoded image will have, before the node's own transposes.
+
+    Pillow's TIFF plugin turns the picture for the file's orientation as it
+    loads. From 11.0.0 it publishes the turned size the moment the file is
+    opened; up to 10.x the header still reports the size as stored and only the
+    load swaps it, which made the measured size and the decoded size disagree
+    ("the file changed while stitching"). The stored width and height say which
+    of the two this Pillow does.
+    """
+    width, height = source.size
+    if source.format != "TIFF":
+        return width, height
+    try:
+        stored = (int(source.tag_v2[256]), int(source.tag_v2[257]))
+        orientation = int(source.tag_v2.get(_EXIF_ORIENTATION, 1))
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return width, height
+    if orientation in _ORIENTATIONS_THAT_SWAP_AXES and (width, height) == stored:
+        return height, width
+    return width, height
 
 
 def _oriented_size(source: Image.Image) -> tuple[int, int]:
     """Displayed size after EXIF orientation, from the header alone."""
-    width, height = source.size
-    if _exif_orientation(source) in _ORIENTATIONS_THAT_SWAP_AXES:
-        width, height = height, width
-    return width, height
+    return _transformed_size(_decoded_size(source), _orientation_methods(_exif_orientation(source)))
 
 
 def _inspect_item(item: dict) -> tuple[tuple[int, int], tuple[int, int]]:
@@ -275,18 +454,26 @@ def _load_image(
     item: dict,
     background: tuple[float, float, float] = (1.0, 1.0, 1.0),
 ) -> torch.Tensor:
+    """One source as the [1, H, W, 3] float32 tensor the canvas is filled from.
+
+    The crop is measured in the displayed coordinate system, exactly as the
+    frontend and the estimate measure it, then mapped back into the source and
+    applied first: a small crop of a large original never materialises a
+    full-size rotated, flattened or flipped copy of it.
+    """
     path = _safe_input_path(item)
     with _open_image(path) as source:
-        image = _apply_orientation(source, _exif_orientation(source))
-        image = _flatten_alpha(image, background)
-        image = _apply_transform(image, item)
-        width, height = image.size
-        left, top, right, bottom = _crop_box(width, height, item.get("crop"))
+        methods = _orientation_methods(_exif_orientation(source)) + _transform_methods(item)
+        source_size = _decoded_size(source)
+        width, height = _transformed_size(source_size, methods)
+        box = _crop_box(width, height, item.get("crop"))
 
-        if (left, top, right, bottom) != (0, 0, width, height):
-            image = image.crop((left, top, right, bottom))
-
-        array = np.asarray(image, dtype=np.float32) / 255.0
+        image = source
+        if box != (0, 0, width, height):
+            image = source.crop(_source_crop_box(source_size, methods, box))
+        for method in methods:
+            image = image.transpose(method)
+        array = _image_array(image, background)
 
     return torch.from_numpy(array).unsqueeze(0)
 
@@ -582,6 +769,14 @@ def _limited_size(width: int, height: int, output_limit: str, output_limit_px: i
     return max(1, int(round(width * scale))), max(1, int(round(height * scale)))
 
 
+def _scaled_side(side: int, scale: float) -> int:
+    """One side scaled by the output limit's factor, rounded the way
+    _limited_size rounds (half to even) and never below one pixel."""
+    if scale == 1.0:
+        return int(side)
+    return max(1, int(round(side * scale)))
+
+
 def _validate_output_dimensions(width: int, height: int) -> None:
     pixels = int(width) * int(height)
     if width <= _MAX_OUTPUT_SIDE and height <= _MAX_OUTPUT_SIDE and pixels <= _MAX_OUTPUT_PIXELS:
@@ -707,12 +902,19 @@ def _compose_from(
     _require_choice("cells_resolution", cells_resolution, ("placed", "source"))
     if not isinstance(minimum_image_side, int) or not 0 <= minimum_image_side <= _MAX_OUTPUT_SIDE:
         raise ValueError("Multi Stitch Images: minimum_image_side must be an integer between 0 and 131072.")
-    if minimum_image_side and any(min(w * final_w / out_w, h * final_h / out_h) < minimum_image_side for x, y, w, h in placements):
+    # How much the output limit shrinks the finished canvas, per axis. A placed
+    # cell is "the size the image has in the stitched result", so it follows.
+    scale_x, scale_y = final_w / out_w, final_h / out_h
+    if minimum_image_side and any(min(w * scale_x, h * scale_y) < minimum_image_side for _, _, w, h in placements):
         raise ValueError("Multi Stitch Images: a placed image is below minimum_image_side. Increase output size, disable size matching, or lower the minimum.")
     cells = None
     if output_cells:
-        cell_w = max(w for w, h in dimensions) if cells_resolution == "source" else max(w for _, _, w, _ in placements)
-        cell_h = max(h for w, h in dimensions) if cells_resolution == "source" else max(h for _, _, _, h in placements)
+        if cells_resolution == "source":
+            cell_w = max(w for w, _ in dimensions)
+            cell_h = max(h for _, h in dimensions)
+        else:
+            cell_w = _scaled_side(max(w for _, _, w, _ in placements), scale_x)
+            cell_h = _scaled_side(max(h for _, _, _, h in placements), scale_y)
         _validate_cells_output(len(placements), cell_w, cell_h)
         color = torch.tensor(color_tuple, dtype=torch.float32)
         cells = color.view(1, 1, 1, 3).expand(len(placements), cell_h, cell_w, 3).clone()
@@ -720,12 +922,18 @@ def _compose_from(
     # The canvas starts filled with the background colour, which is what makes
     # separator bars and letterbox padding that colour in either layout.
     output = _blank_canvas(out_w, out_h, color_tuple)
-    for index, (loader, (x, y, w, h)) in enumerate(zip(loaders, placements)):
+    for index, (loader, (x, y, w, h)) in enumerate(zip(loaders, placements, strict=True)):
         source = _load_checked(loader, dimensions[index], index).to(output)
         image = _resize_exact(source, h, w)
         output[:, y:y + h, x:x + w, :] = image
         if cells is not None:
-            cell_image = source if cells_resolution == "source" else image
+            if cells_resolution == "source":
+                cell_image = source
+            elif (scale_x, scale_y) == (1.0, 1.0):
+                cell_image = image
+            else:
+                # Straight from the source, so the cell is resampled once.
+                cell_image = _resize_exact(source, _scaled_side(h, scale_y), _scaled_side(w, scale_x))
             cell_h, cell_w = cell_image.shape[1:3]
             cx = (cells.shape[2] - cell_w) // 2
             cy = (cells.shape[1] - cell_h) // 2
@@ -809,7 +1017,7 @@ class MultiStitchImages:
                                "Off keeps each image at its own size.",
                 }),
                 "spacing_width": ("INT", {
-                    "default": 0, "min": 0, "max": 1024, "step": 2,
+                    "default": 0, "min": 0, "max": 1024, "step": 1,
                     "tooltip": "Gap between images in pixels, filled with spacing_color. Odd values work too.",
                 }),
                 "spacing_color": (["white", "black", "red", "green", "blue", "custom"], {
@@ -1018,6 +1226,29 @@ class MultiStitchImages:
         return image, cells, width, height
 
     @classmethod
+    def VALIDATE_INPUTS(cls, images_json="[]"):
+        """Report a corrupt list or a missing file when the prompt is queued.
+
+        Only what costs nothing is checked — the shape of the list and whether
+        each file is still there — so queueing stays instant; no image is
+        decoded and every size and choice guard still runs in stitch().
+        """
+        try:
+            items = json.loads(images_json or "[]")
+        except json.JSONDecodeError:
+            return "Multi Stitch Images: corrupted image list in workflow."
+        if not isinstance(items, list):
+            return "Multi Stitch Images: image list must be an array."
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            try:
+                _safe_input_path(item)
+            except (ValueError, OSError) as exc:
+                return str(exc)
+        return True
+
+    @classmethod
     def IS_CHANGED(cls, images_json="[]", **kwargs):
         try:
             entries = json.loads(images_json or "[]")
@@ -1064,12 +1295,22 @@ def _temp_video_path(filename: object) -> Path:
 
 
 def _delete_temp_video(filename: object) -> bool:
-    """Remove one uploaded video; False when it is already gone."""
+    """Remove one uploaded video; False when it is already gone.
+
+    Anything else the filesystem refuses — a directory sitting under that name,
+    or Windows holding the file open while a decode reads it — is reported in
+    the node's own voice so the route can list the name as rejected instead of
+    answering 500.
+    """
     path = _temp_video_path(filename)
     try:
         path.unlink()
     except FileNotFoundError:
         return False
+    except OSError as exc:
+        raise ValueError(
+            f"Multi Stitch Images: could not delete the video {path.name!r} ({exc})."
+        ) from exc
     return True
 
 
@@ -1088,7 +1329,7 @@ def _video_delete_response(payload: object) -> tuple[int, dict]:
     for name in names:
         try:
             (removed if _delete_temp_video(name) else missing).append(str(name))
-        except ValueError:
+        except (ValueError, OSError):
             rejected.append(str(name))
     status = 400 if rejected and not removed and not missing else 200
     return status, {"removed": removed, "missing": missing, "rejected": rejected}
@@ -1209,9 +1450,30 @@ def _decode_frame_at(container, stream, seconds: float):
     return chosen
 
 
-def _video_frame_at(filename: object, seconds: float) -> tuple[Image.Image, float]:
+def _frame_image(frame, max_side: int) -> Image.Image:
+    """The decoded frame as an RGB image, at most `max_side` on its long side.
+
+    Scaling inside the colour conversion lets swscale do the work on the native
+    planes; converting a 4K frame to RGB in full and resizing afterwards costs
+    several times as much for the same result size. The long side is the same
+    either way, so a rotation applied afterwards lands on the size the caller
+    would have got from resizing the finished image.
+    """
+    long_side = max(frame.width, frame.height)
+    if max_side <= 0 or long_side <= max_side:
+        return frame.to_image()
+    scale = max_side / long_side
+    return frame.reformat(
+        width=max(1, int(round(frame.width * scale))),
+        height=max(1, int(round(frame.height * scale))),
+        format="rgb24",
+    ).to_image()
+
+
+def _video_frame_at(filename: object, seconds: float, max_side: int = 0) -> tuple[Image.Image, float]:
     """The frame displayed at `seconds` (clamped to the video) as an RGB image
-    turned the way a player shows it, with the time actually used."""
+    turned the way a player shows it, with the time actually used. A max_side
+    above zero bounds the long side, scaled while the frame is decoded."""
     seconds = float(seconds)
     with _open_video(filename) as container:
         stream = _video_stream(container)
@@ -1219,7 +1481,8 @@ def _video_frame_at(filename: object, seconds: float) -> tuple[Image.Image, floa
         # An unknown length reads as 0; it must not pin every request to the start.
         seconds = max(0.0, min(seconds, duration) if duration > 0 else seconds)
         frame = _decode_frame_at(container, stream, seconds)
-        image = _apply_transform(frame.to_image(), {"rotation": _display_rotation(stream, frame)})
+        rotation = _display_rotation(stream, frame)
+        image = _apply_transform(_frame_image(frame, max_side), {"rotation": rotation})
     return image, seconds
 
 
@@ -1259,8 +1522,11 @@ def _video_failure(exc: Exception) -> tuple[int, dict]:
     """(status, body) for a failure inside the video helpers.
 
     Checked in this order because PyAV's errors double as built-ins: its
-    FileNotFoundError is one, and its InvalidDataError is a ValueError.
-    Anything else is a bug and is raised again, for aiohttp's 500.
+    FileNotFoundError is one, and its InvalidDataError is a ValueError. A
+    filesystem refusal below those — no permission to read the upload or to
+    write the capture, a directory in the way — answers 500 in the node's own
+    voice rather than as an aiohttp traceback. Anything else is a bug and is
+    raised again, for aiohttp's own 500.
     """
     if isinstance(exc, ImportError):
         return 501, {"error": "PyAV is not installed; run: pip install av"}
@@ -1270,6 +1536,8 @@ def _video_failure(exc: Exception) -> tuple[int, dict]:
         return 415, {"error": f"PyAV could not decode the video ({exc})"}
     if isinstance(exc, ValueError):
         return 400, {"error": str(exc)}
+    if isinstance(exc, OSError):
+        return 500, {"error": f"Multi Stitch Images: the server could not read or write the file ({exc})"}
     raise exc
 
 
@@ -1291,10 +1559,13 @@ def _query_seconds(query: dict) -> float:
 
 def _preview_max_side(query: dict) -> int:
     try:
-        side = int(float(query.get("max_side", _PREVIEW_MAX_SIDE)))
+        side = float(query.get("max_side", _PREVIEW_MAX_SIDE))
     except (TypeError, ValueError) as exc:
         raise ValueError('"max_side" must be a number of pixels') from exc
-    return max(1, min(_PREVIEW_SIDE_CAP, side))
+    # int(inf) raises OverflowError, which would leave the route at 500.
+    if not math.isfinite(side):
+        raise ValueError('"max_side" must be a number of pixels')
+    return max(1, min(_PREVIEW_SIDE_CAP, int(side)))
 
 
 def _jpeg_preview(image: Image.Image, max_side: int) -> bytes:
@@ -1321,7 +1592,7 @@ def _video_preview_response(query: object) -> tuple[int, object, str]:
     try:
         query = _video_request(query)
         max_side = _preview_max_side(query)
-        image, _ = _video_frame_at(query.get("filename"), _query_seconds(query))
+        image, _ = _video_frame_at(query.get("filename"), _query_seconds(query), max_side)
         return 200, _jpeg_preview(image, max_side), "image/jpeg"
     except Exception as exc:
         return (*_video_failure(exc), "application/json")
@@ -1341,10 +1612,10 @@ def _video_capture_response(payload: object) -> tuple[int, dict]:
     try:
         payload = _video_request(payload)
         image, seconds = _video_frame_at(payload.get("filename"), _query_seconds(payload))
+        path = _capture_path()
+        image.save(path, format="PNG")
     except Exception as exc:
         return _video_failure(exc)
-    path = _capture_path()
-    image.save(path, format="PNG")
     return 200, {
         "name": path.name,
         "subfolder": _CAPTURE_SUBFOLDER,
