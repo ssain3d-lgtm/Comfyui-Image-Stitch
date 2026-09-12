@@ -20,6 +20,23 @@ from PIL import Image
 
 import folder_paths
 
+try:
+    from . import multi_stitch_gallery as gallery
+except ImportError:  # loaded as a plain module by tests and tooling
+    if "multi_stitch_gallery" in sys.modules:
+        gallery = sys.modules["multi_stitch_gallery"]
+    else:
+        import importlib.util as _importlib_util
+
+        _gallery_spec = _importlib_util.spec_from_file_location(
+            "multi_stitch_gallery", Path(__file__).resolve().with_name("multi_stitch_gallery.py"),
+        )
+        gallery = _importlib_util.module_from_spec(_gallery_spec)
+        # Registered before it is executed, so a second load of this file finds
+        # the same module instead of building a rival copy of the gallery.
+        sys.modules["multi_stitch_gallery"] = gallery
+        _gallery_spec.loader.exec_module(gallery)
+
 
 _COLOR_MAP = {
     "white": (1.0, 1.0, 1.0),
@@ -1223,6 +1240,24 @@ class MultiStitchImages:
             minimum_image_side=minimum_image_side,
             match_reference=match_reference,
         )
+        # What this node just stitched, for the gallery to offer back later.
+        # It never raises and honours the gallery's own "save every run".
+        gallery.record_run(
+            valid_items,
+            {
+                "direction": direction, "match_image_size": match_image_size,
+                "spacing_width": spacing_width, "spacing_color": spacing_color,
+                "layout_mode": layout_mode, "grid_columns": grid_columns,
+                "custom_spacing_color": custom_spacing_color, "output_limit": output_limit,
+                "output_limit_px": output_limit_px, "grid_cell_width": grid_cell_width,
+                "grid_cell_height": grid_cell_height, "output_cells": output_cells,
+                "cells_resolution": cells_resolution, "minimum_image_side": minimum_image_side,
+                "match_reference": match_reference, "size_reference": size_reference,
+                "size_megapixels": size_megapixels, "size_divisible_by": size_divisible_by,
+            },
+            image,
+            input_frames=len(frames),
+        )
         return image, cells, width, height
 
     @classmethod
@@ -1659,6 +1694,47 @@ if _web is not None and getattr(_PromptServer, "instance", None) is not None:
         if content_type != "image/jpeg":
             return _web.json_response(body, status=status)
         return _web.Response(body=body, status=status, content_type=content_type)
+
+    async def _json_body(request):
+        """The request body as JSON, or None when it is not JSON at all."""
+        try:
+            return await request.json()
+        except Exception:
+            return None
+
+    @_PromptServer.instance.routes.get("/multi_stitch/gallery")
+    async def _gallery_list_route(request):
+        return _web.json_response(await _off_loop(gallery.listing))
+
+    @_PromptServer.instance.routes.post("/multi_stitch/gallery/save")
+    async def _gallery_save_route(request):
+        status, body = await _off_loop(gallery.save_request, await _json_body(request))
+        return _web.json_response(body, status=status)
+
+    @_PromptServer.instance.routes.post("/multi_stitch/gallery/rename")
+    async def _gallery_rename_route(request):
+        payload = await _json_body(request) or {}
+        status, body = await _off_loop(gallery.rename, payload.get("id"), payload.get("name"))
+        return _web.json_response(body, status=status)
+
+    @_PromptServer.instance.routes.post("/multi_stitch/gallery/delete")
+    async def _gallery_delete_route(request):
+        payload = await _json_body(request) or {}
+        status, body = await _off_loop(
+            gallery.delete, payload.get("ids"), bool(payload.get("files")), payload.get("keep"),
+        )
+        return _web.json_response(body, status=status)
+
+    @_PromptServer.instance.routes.post("/multi_stitch/gallery/cleanup")
+    async def _gallery_cleanup_route(request):
+        payload = await _json_body(request) or {}
+        status, body = await _off_loop(gallery.cleanup, payload.get("keep"))
+        return _web.json_response(body, status=status)
+
+    @_PromptServer.instance.routes.post("/multi_stitch/gallery/settings")
+    async def _gallery_settings_route(request):
+        status, body = await _off_loop(gallery.set_settings, await _json_body(request))
+        return _web.json_response(body, status=status)
 
     @_PromptServer.instance.routes.post("/multi_stitch/video/capture")
     async def _video_capture_route(request):

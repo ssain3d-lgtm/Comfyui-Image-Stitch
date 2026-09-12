@@ -161,8 +161,14 @@ class VideoRouteTests(unittest.IsolatedAsyncioTestCase):
     def test_every_route_is_registered_once(self):
         registered = sorted((route.method, route.path) for route in self.routes)
         self.assertEqual(registered, [
+            ("GET", "/multi_stitch/gallery"),
             ("GET", "/multi_stitch/video/frame"),
             ("GET", "/multi_stitch/video/info"),
+            ("POST", "/multi_stitch/gallery/cleanup"),
+            ("POST", "/multi_stitch/gallery/delete"),
+            ("POST", "/multi_stitch/gallery/rename"),
+            ("POST", "/multi_stitch/gallery/save"),
+            ("POST", "/multi_stitch/gallery/settings"),
             ("POST", "/multi_stitch/video/capture"),
             ("POST", "/multi_stitch/video/delete"),
         ])

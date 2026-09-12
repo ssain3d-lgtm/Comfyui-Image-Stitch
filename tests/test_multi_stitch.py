@@ -1,3 +1,4 @@
+import atexit
 import importlib
 import importlib.util
 import inspect
@@ -5,6 +6,7 @@ import json
 import os
 import random
 import re
+import shutil
 import sys
 import tempfile
 import types
@@ -20,10 +22,18 @@ from PIL import Image, ImageFile, ImageOps
 
 # ComfyUI supplies folder_paths at runtime. CI intentionally tests this custom
 # node without installing all of ComfyUI, so stub only the host module first.
-folder_paths = types.ModuleType("folder_paths")
-folder_paths.get_input_directory = lambda: "."
-folder_paths.get_temp_directory = lambda: "."
-sys.modules["folder_paths"] = folder_paths
+# setdefault, not assignment: another test module may have installed the stub
+# already, and a second one would leave two host modules in play — the code
+# under test and its helpers would then disagree about where the input folder
+# is. The defaults point at a scratch directory rather than ".", so anything
+# that writes without patching (a run recording a gallery entry, say) does not
+# land in the working tree.
+_STUB_ROOT = tempfile.mkdtemp(prefix="ms-folder-paths-")
+atexit.register(shutil.rmtree, _STUB_ROOT, True)
+_stub = types.ModuleType("folder_paths")
+_stub.get_input_directory = lambda: _STUB_ROOT
+_stub.get_temp_directory = lambda: _STUB_ROOT
+folder_paths = sys.modules.setdefault("folder_paths", _stub)
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "multi_stitch.py"
 spec = importlib.util.spec_from_file_location("multi_stitch_under_test", MODULE_PATH)

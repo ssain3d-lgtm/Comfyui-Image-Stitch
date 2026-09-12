@@ -1,5 +1,6 @@
 """The gallery of compositions: recording, dedupe, listing, deletion and the
-storage summary, all against a temporary input folder."""
+storage summary against a temporary input folder, then the six routes over a
+real aiohttp application."""
 
 import json
 import os
@@ -9,10 +10,17 @@ from pathlib import Path
 from unittest.mock import patch
 
 import test_multi_stitch as support  # installs the fake folder_paths module
+from test_video_temp import load_module_with_routes
 
 import multi_stitch_gallery as gallery
 
 ms = support.ms
+
+try:
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+except ImportError:  # pragma: no cover - ComfyUI always ships aiohttp
+    web = None
 
 
 def _item(name, **extra):
@@ -184,3 +192,96 @@ class GalleryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@support.requires(web is not None, "aiohttp is not installed")
+class GalleryRouteTests(unittest.IsolatedAsyncioTestCase):
+    """The six gallery routes over real HTTP: statuses, JSON and the guards."""
+
+    async def asyncSetUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        (self.root / "multi_stitch").mkdir()
+        for name in ("a.png", "b.png"):
+            (self.root / "multi_stitch" / name).write_bytes(b"x" * 100)
+        self.routes = web.RouteTableDef()
+        self.module = load_module_with_routes(self.routes)
+        self.patches = [
+            patch.object(self.module.folder_paths, "get_input_directory", lambda: str(self.root)),
+            patch.object(self.module.folder_paths, "get_temp_directory", lambda: str(self.root)),
+        ]
+        for patcher in self.patches:
+            patcher.start()
+        app = web.Application()
+        app.add_routes(self.routes)
+        self.client = TestClient(TestServer(app))
+        await self.client.start_server()
+
+    async def asyncTearDown(self):
+        await self.client.close()
+        for patcher in self.patches:
+            patcher.stop()
+        self.temp.cleanup()
+
+    async def get(self, path):
+        response = await self.client.get(path)
+        return response.status, await response.json()
+
+    async def post(self, path, payload):
+        response = await self.client.post(path, json=payload)
+        return response.status, await response.json()
+
+    async def test_save_list_rename_and_delete_round_trip(self):
+        status, body = await self.get("/multi_stitch/gallery")
+        self.assertEqual((status, body["entries"], body["settings"]), (200, [], {"autosave": True}))
+
+        status, body = await self.post("/multi_stitch/gallery/save", {
+            "images": [_item("a.png"), _item("b.png")], "settings": {"direction": "down"},
+            "name": "Studio", "size": [800, 300],
+        })
+        self.assertEqual(status, 200)
+        entry_id = body["entry"]["id"]
+        self.assertEqual((body["entry"]["name"], body["entry"]["width"]), ("Studio", 800))
+        self.assertEqual(body["storage"]["files"], 2)
+
+        status, body = await self.post("/multi_stitch/gallery/rename", {"id": entry_id, "name": "Studio set"})
+        self.assertEqual((status, body["entry"]["name"]), (200, "Studio set"))
+
+        status, body = await self.get("/multi_stitch/gallery")
+        self.assertEqual([e["name"] for e in body["entries"]], ["Studio set"])
+
+        status, body = await self.post("/multi_stitch/gallery/delete", {"ids": [entry_id], "files": True, "keep": ["b.png"]})
+        self.assertEqual((status, body["removed"], body["files_removed"]), (200, [entry_id], 1))
+        self.assertFalse((self.root / "multi_stitch" / "a.png").exists())
+        self.assertTrue((self.root / "multi_stitch" / "b.png").exists(), "the open workflow keeps b.png")
+
+    async def test_settings_and_cleanup(self):
+        status, body = await self.post("/multi_stitch/gallery/settings", {"autosave": False})
+        self.assertEqual((status, body), (200, {"settings": {"autosave": False}}))
+        self.assertEqual((await self.get("/multi_stitch/gallery"))[1]["settings"], {"autosave": False})
+
+        status, body = await self.post("/multi_stitch/gallery/cleanup", {"keep": ["a.png"]})
+        self.assertEqual((status, body["files_removed"], body["bytes_freed"]), (200, 1, 100))
+        self.assertTrue((self.root / "multi_stitch" / "a.png").exists())
+        self.assertFalse((self.root / "multi_stitch" / "b.png").exists())
+
+    async def test_bad_requests_answer_4xx_with_a_message(self):
+        for path, payload in (
+            ("/multi_stitch/gallery/save", {"images": "nope"}),
+            ("/multi_stitch/gallery/save", None),
+            ("/multi_stitch/gallery/rename", {"id": "../etc/passwd", "name": "x"}),
+            ("/multi_stitch/gallery/delete", {"ids": []}),
+            ("/multi_stitch/gallery/delete", {"ids": ["../x"]}),
+            ("/multi_stitch/gallery/settings", []),
+        ):
+            with self.subTest(path=path, payload=payload):
+                status, body = await self.post(path, payload)
+                self.assertEqual(status, 400)
+                self.assertIn("error", body)
+        status, body = await self.post("/multi_stitch/gallery/rename", {"id": "20990101-000000-abcdef", "name": "x"})
+        self.assertEqual(status, 404)
+
+    async def test_a_body_that_is_not_json_is_rejected_not_crashed(self):
+        response = await self.client.post("/multi_stitch/gallery/save", data=b"not json")
+        self.assertEqual(response.status, 400)
+        self.assertEqual((await response.json())["error"][:20], "Multi Stitch Images:")
