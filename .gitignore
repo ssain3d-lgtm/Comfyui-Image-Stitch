@@ -11,8 +11,15 @@ dist/
 # Test / coverage
 .pytest_cache/
 .coverage
+coverage.xml
 htmlcov/
 .tox/
+playwright-report/
+
+# Lint / type-check caches
+.ruff_cache/
+.mypy_cache/
+.eslintcache
 
 # Environments
 .venv/
@@ -28,6 +35,11 @@ Thumbs.db
 # Frontend test tooling
 node_modules/
 test-results/
+*.log
+
+# TMPDIR for the frontend tests: the harness stages web/ under the OS temp dir,
+# and coverage only reports files it can see inside the workspace.
+.tmp/
 
 # Claude Code agent worktrees
 .claude/

@@ -1,15 +1,23 @@
 """What ships around the node: tooltips, the Korean locale, the example
-workflows, and the version bookkeeping. Each of these silently drifts when a
-widget is added or renamed, so they are checked against INPUT_TYPES here."""
+workflows, the version bookkeeping, and the CI and release workflows. Each of
+these silently drifts when a widget is added or renamed, so they are checked
+against INPUT_TYPES here."""
 import importlib.util
 import json
+import os
 import re
 import sys
 import types
 import unittest
 from pathlib import Path
 
+try:
+    import yaml
+except ImportError:  # pragma: no cover - exercised by the CI branch below
+    yaml = None
+
 ROOT = Path(__file__).resolve().parents[1]
+WORKFLOWS = ROOT / ".github" / "workflows"
 
 # ComfyUI supplies folder_paths at runtime; CI tests the node without it.
 if "folder_paths" not in sys.modules:
@@ -25,6 +33,40 @@ spec.loader.exec_module(ms)
 
 # Core node types the example workflows may use besides this node.
 CORE_TYPES = {"PreviewImage", "LoadImage", "ImageBatch", "Note"}
+
+# A pinned action reference: owner/repo@<40 hex>.
+PINNED_ACTION = re.compile(r"^[\w.-]+/[\w.-]+@[0-9a-f]{40}$")
+
+
+def load_workflow(test, name):
+    """A workflow file as data, or a skip when PyYAML is missing locally.
+
+    Reading a workflow as YAML instead of searching it for substrings is the
+    point of these tests: a pin that moved into a comment, or a job that grew a
+    second install step, changes the text without changing the meaning.
+
+    PyYAML is in requirements-ci.txt, so in CI a missing parser is a broken
+    environment, not a reason to report green with the workflow checks skipped.
+    """
+    if yaml is None:
+        if os.environ.get("CI"):
+            test.fail("PyYAML is missing; requirements-ci.txt must install it for the workflow checks")
+        test.skipTest("PyYAML is not installed")
+    return yaml.safe_load((WORKFLOWS / name).read_text(encoding="utf-8"))
+
+
+def triggers(workflow):
+    """The `on:` block. PyYAML reads the bare key `on` as the boolean True."""
+    return workflow.get("on", workflow.get(True, {}))
+
+
+def steps_of(job):
+    return job.get("steps") or []
+
+
+def run_lines(job):
+    """Every shell command in a job, as one string per step."""
+    return [str(step["run"]) for step in steps_of(job) if "run" in step]
 
 
 def node_inputs():
@@ -114,7 +156,7 @@ class ExampleWorkflowTests(unittest.TestCase):
             node = stitch[0]
             values = node["widgets_values"]
             self.assertEqual(len(values), len(names), f"{path.name}: widgets_values must follow INPUT_TYPES")
-            for name, value in zip(names, values):
+            for name, value in zip(names, values, strict=True):
                 kind, options = entries[name]
                 if isinstance(kind, (list, tuple)):
                     self.assertIn(value, kind, f"{path.name}: {name}")
@@ -146,11 +188,95 @@ class VersionTests(unittest.TestCase):
         self.assertIn(f"### {major_minor}에서 달라진 점", readme)
         self.assertIn(f"### What changed in {major_minor}", readme)
 
-    def test_publish_workflow_targets_pyproject_and_needs_the_token(self):
-        text = (ROOT / ".github" / "workflows" / "publish_action.yml").read_text(encoding="utf-8")
-        self.assertIn('- "pyproject.toml"', text)
-        self.assertIn("REGISTRY_ACCESS_TOKEN", text)
-        self.assertIn("Comfy-Org/publish-node-action", text)
+    def test_package_json_version_matches_pyproject(self):
+        # ComfyUI never reads package.json, but the frontend tests and the
+        # registry release come from the same tree; two versions here is how a
+        # release ends up half-done.
+        pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        version = re.search(r'^version = "([^"]+)"$', pyproject, re.M).group(1)
+        package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
+        self.assertEqual(package["version"], version, "package.json must carry the pyproject.toml version")
+
+
+class PublishWorkflowTests(unittest.TestCase):
+    def setUp(self):
+        self.workflow = load_workflow(self, "publish_action.yml")
+        self.job = self.workflow["jobs"]["publish-node"]
+        self.publish_step = next(
+            step for step in steps_of(self.job)
+            if str(step.get("uses", "")).startswith("Comfy-Org/publish-node-action")
+        )
+
+    def test_it_runs_on_a_version_change_on_main(self):
+        push = triggers(self.workflow)["push"]
+        self.assertEqual(push["branches"], ["main"])
+        self.assertIn("pyproject.toml", push["paths"])
+
+    def test_the_publish_action_is_pinned_to_a_commit(self):
+        # This step is handed the registry token, so it must not be able to
+        # change under us: a tag or a branch can be moved, a commit cannot.
+        uses = self.publish_step["uses"]
+        self.assertRegex(uses, PINNED_ACTION, f"{uses} must be pinned to a full 40-character commit SHA")
+
+    def test_it_needs_the_token_and_skips_without_one(self):
+        self.assertIn("REGISTRY_ACCESS_TOKEN", str(self.publish_step["with"]["personal_access_token"]))
+        # A guard step decides, and the publish step is conditional on it, so a
+        # fork without the secret gets a notice instead of a red run.
+        guard = next(step for step in steps_of(self.job) if step.get("id") == "token")
+        self.assertIn("REGISTRY_ACCESS_TOKEN", str(guard.get("env", {})))
+        self.assertIn("steps.token.outputs.present", str(self.publish_step.get("if", "")))
+
+
+class CIWorkflowTests(unittest.TestCase):
+    def setUp(self):
+        self.workflow = load_workflow(self, "ci.yml")
+        self.jobs = self.workflow["jobs"]
+
+    def backend_jobs(self):
+        """Jobs that run the Python test suite, by name."""
+        found = {
+            name: job for name, job in self.jobs.items()
+            if any("unittest discover" in line for line in run_lines(job))
+        }
+        self.assertTrue(found, "no job runs the backend tests any more")
+        return found
+
+    def test_every_backend_job_installs_the_pinned_test_dependencies(self):
+        # The ranges live in one file so Dependabot can see them and so two jobs
+        # cannot drift onto different versions.
+        for name, job in self.backend_jobs().items():
+            self.assertTrue(
+                any("requirements-ci.txt" in line for line in run_lines(job)),
+                f"job {name} runs the backend tests without installing requirements-ci.txt",
+            )
+
+    def test_the_pip_cache_is_keyed_on_the_requirements_file(self):
+        for name, job in self.backend_jobs().items():
+            setup = next(
+                step for step in steps_of(job)
+                if str(step.get("uses", "")).startswith("actions/setup-python")
+            )
+            self.assertEqual(
+                setup["with"].get("cache-dependency-path"), "requirements-ci.txt",
+                f"job {name} caches pip against the wrong file",
+            )
+
+
+class RequirementsTests(unittest.TestCase):
+    def test_requirements_txt_lists_pyav_for_comfyui_manager(self):
+        path = ROOT / "requirements.txt"
+        self.assertTrue(path.exists(), "requirements.txt is what ComfyUI-Manager installs")
+        names = [
+            re.split(r"[<>=!~\[; ]", line, maxsplit=1)[0].strip().lower()
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        self.assertIn("av", names, "server-side video decoding needs PyAV")
+
+    def test_ci_requirements_cover_the_test_tooling(self):
+        text = (ROOT / "requirements-ci.txt").read_text(encoding="utf-8")
+        for package in ("numpy", "pillow", "torch", "av", "aiohttp", "coverage", "ruff", "pyyaml"):
+            self.assertRegex(text, rf"(?mi)^{package}\b", f"requirements-ci.txt must pin {package}")
 
 
 if __name__ == "__main__":

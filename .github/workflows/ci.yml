@@ -14,16 +14,63 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# The tests treat a missing optional dependency as a failure rather than a skip
+# when CI is set, so a runner that quietly lost PyAV or Node cannot report green
+# by skipping the tests that need them. (GitHub sets CI itself; stated here so
+# the reason is visible and so a local `CI=1` run behaves the same.)
+env:
+  CI: "true"
+
 jobs:
+  # Whether a change can affect the backend at all. Only used to keep the
+  # Windows runner (billed at 2x) off pure frontend and documentation pull
+  # requests; pushes to main and manual runs always get it.
+  changes:
+    name: Changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Decide whether the backend is affected
+        id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          # Anything but a pull request (a push to main, a manual run), or a
+          # payload without a base to compare against: run everything.
+          if [ "$EVENT_NAME" != "pull_request" ] || [ -z "$BASE_SHA" ]; then
+            echo "backend=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Three dots: the branch's own changes, not commits the base picked up
+          # since the pull request was opened.
+          changed=$(git diff --name-only "$BASE_SHA...HEAD")
+          echo "changed files:"
+          echo "$changed"
+          if printf '%s\n' "$changed" | grep -Eq '^(multi_stitch\.py|multi_stitch_gallery\.py|tests/|\.github/workflows/ci\.yml$)'; then
+            echo "backend=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "backend=false" >> "$GITHUB_OUTPUT"
+          fi
+        shell: bash
+
   test:
+    name: Backend (ubuntu, ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
     strategy:
       fail-fast: false
       matrix:
-        # The floor declared in pyproject.toml and one current release.
-        python-version: ["3.10", "3.12"]
+        # The floor declared in pyproject.toml and the current releases.
+        python-version: ["3.10", "3.12", "3.13"]
 
     steps:
       - name: Checkout
@@ -34,8 +81,11 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
+          cache-dependency-path: requirements-ci.txt
 
       - name: Set up Node.js
+        # test_frontend_parity.py runs the browser maths under Node and compares
+        # it with Python; without Node that test would fail (not skip) here.
         uses: actions/setup-node@v7
         with:
           node-version: "22"
@@ -43,35 +93,101 @@ jobs:
       - name: Install Python test dependencies
         # --extra-index-url, not --index-url: the latter replaces PyPI entirely,
         # leaving torch's own dependencies resolvable only from the CPU wheel
-        # index. Upper bounds keep a major release from breaking CI silently.
+        # index. The pins live in requirements-ci.txt so Dependabot can see them.
         run: |
           python -m pip install --upgrade pip
-          python -m pip install \
-            --extra-index-url https://download.pytorch.org/whl/cpu \
-            "numpy>=1.24,<3" "pillow>=10,<13" "torch>=2.2,<3" "av>=12,<20"
+          python -m pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements-ci.txt
 
-      - name: Python syntax check
-        run: python -m compileall -q __init__.py multi_stitch.py tests
-
-      - name: JavaScript syntax check
-        # Globbed, so a newly added file cannot silently escape the check.
-        run: |
-          shopt -s nullglob
-          files=(web/*.js)
-          if [ ${#files[@]} -eq 0 ]; then echo "no JavaScript files found" >&2; exit 1; fi
-          for file in "${files[@]}"; do
-            echo "node --check $file"
-            node --check "$file"
-          done
-        shell: bash
+      - name: Ruff
+        # Also the syntax gate for every Python file in the tree, tests
+        # included: a file ruff cannot parse is an error, so the old
+        # `compileall` pass would only repeat this.
+        run: ruff check .
 
       - name: Backend unit tests
         # Includes a package-import smoke test, so a node that would fail to
-        # load in ComfyUI fails here too, and a parity test that runs the
-        # browser maths under Node and compares it with Python.
+        # load in ComfyUI fails here too. -v keeps per-test output readable;
+        # coverage only records while they run.
+        run: coverage run --branch -m unittest discover -s tests -p "test_*.py" -v
+
+      - name: Coverage gate
+        # The shipped Python only. Tests, and the stubs they install, would
+        # otherwise inflate the number they are supposed to measure.
+        run: coverage report --fail-under=88 --include=multi_stitch.py,multi_stitch_gallery.py,__init__.py
+
+  pillow-floor:
+    # Pillow 10.0.0 is the oldest release the declared floor allows. The
+    # resampling and EXIF APIs the node uses moved around in 10.x, so the newest
+    # Pillow passing says nothing about the version many ComfyUI installs pin.
+    name: Backend (ubuntu, 3.10, pillow 10.0.0)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: requirements-ci.txt
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      - name: Install Python test dependencies at the Pillow floor
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements-ci.txt "pillow==10.0.0"
+          python -c "import PIL; print('Pillow', PIL.__version__)"
+
+      - name: Backend unit tests
+        run: python -m unittest discover -s tests -p "test_*.py" -v
+
+  windows:
+    # Path handling (input/temp subfolders, the video temp cleanup) is the part
+    # most likely to behave differently off Linux. Unit tests only: the coverage
+    # gate and the lint gates already ran on ubuntu.
+    name: Backend (windows, 3.12)
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 25
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-ci.txt
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      - name: Install Python test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements-ci.txt
+
+      - name: Backend unit tests
         run: python -m unittest discover -s tests -p "test_*.py" -v
 
   frontend:
+    name: Frontend (node 22)
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -88,11 +204,36 @@ jobs:
       - name: Install test dependencies
         run: npm ci
 
+      - name: Lint
+        # eslint parses every web/**/*.js, so it is the JavaScript syntax gate
+        # too, and no new file can escape it.
+        run: npm run lint
+
+      - name: Cache Playwright browsers
+        # Keyed on the lockfile: the browser build a Playwright release expects
+        # changes exactly when that pin does.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-ms-playwright-${{ hashFiles('package-lock.json') }}
+
       - name: Install Chromium for Playwright
+        # Still run on a cache hit: --with-deps also installs the system
+        # libraries Chromium needs, which the cache does not carry.
         run: npx playwright install --with-deps chromium
 
-      - name: Frontend tests
+      - name: Frontend tests with coverage
         # logic.test.mjs drives the real web/*.js under Node with a stub
         # ComfyUI; browser.test.mjs runs the crop editor and clipboard copy in
-        # Chromium.
-        run: npm test
+        # Chromium. The harness stages web/ under TMPDIR, so TMPDIR points
+        # inside the workspace to get pkg/web/*.js into the coverage table.
+        #
+        # Reported, not gated: the files the Chromium tests exercise
+        # (crop_editor.js) execute in the browser, where Node's coverage cannot
+        # see them, so a threshold over this table would measure the split
+        # between the two runners rather than the tests.
+        env:
+          TMPDIR: ${{ github.workspace }}/.tmp
+        run: |
+          mkdir -p "$TMPDIR"
+          npm run test:coverage

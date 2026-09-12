@@ -1,0 +1,7 @@
+# Runtime requirements for ComfyUI-Manager. Everything else the node needs
+# (torch, numpy, Pillow, aiohttp) comes with ComfyUI itself.
+#
+# PyAV is used only server-side, to decode video for the frame picker when the
+# browser cannot play the codec. Current ComfyUI already installs it, so this
+# line is a no-op there; it is listed so a slimmed-down install still gets it.
+av>=14

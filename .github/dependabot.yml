@@ -1,0 +1,40 @@
+# Dependabot keeps the three things CI depends on current: the actions the
+# workflows call (including the SHA-pinned publish action, which would otherwise
+# never move), the frontend test tooling, and the pinned Python test
+# dependencies. Nothing here touches what ComfyUI users install — the node has
+# no runtime Python dependencies beyond what ComfyUI ships.
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    # Everything in package.json is a devDependency; saying so keeps a stray
+    # runtime dependency from being pulled in unnoticed.
+    allow:
+      - dependency-type: development
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "test"
+
+  # In practice this watches requirements-ci.txt, the only file here with upper
+  # bounds to raise. The pip ecosystem cannot be pointed at a single file, but
+  # requirements.txt holds one open-ended floor (`av>=14`) that no release can
+  # fall outside of, and pyproject.toml declares no dependencies at all, so
+  # neither produces pull requests.
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "test"
