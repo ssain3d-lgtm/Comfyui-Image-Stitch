@@ -21,6 +21,19 @@ All notable changes to **Multi Stitch Images**. The version is the one in `pypro
 - **Example workflows** (`example_workflows/`, shown in ComfyUI's template browser): paste → strip, and a three-image batch → two-column grid with the `cells` output.
 - **Registry publishing** workflow (`.github/workflows/publish_action.yml`): runs when `pyproject.toml` changes on `main`, and skips with a notice until a `REGISTRY_ACCESS_TOKEN` secret exists.
 
+### Fixed
+- **High bit-depth sources no longer come out white**: a 16-bit grey PNG or TIFF (`I;16`, `I`) and a float image are scaled by their own range instead of being clipped by `convert("RGB")`.
+- **EXIF-rotated TIFFs on Pillow 10.x**: the measured and decoded sizes disagreed there, aborting the stitch with "the file changed while stitching". The turn is now decided from the stored tags, so every Pillow from 10.0 works.
+- **Peak memory and wasted work in the decode**: the crop is mapped back to source coordinates and taken first, the transforms run on the crop, and the float conversion is in place. A 25 MP source costs roughly a third less.
+- **Three routes answered 500** where they should have explained themselves: `max_side=inf`, a directory named like a video in the temp folder, and any other `OSError` during a delete or a decode.
+- **A missing file or a corrupt list is reported when the workflow is queued**, through `VALIDATE_INPUTS`, instead of part-way through a run, and the message names the image rather than the server's absolute path.
+- **A symlinked subfolder inside `input/` works**, as it does for ComfyUI's own loaders; the path check is lexical now and still refuses `..`, absolute paths, drive letters and NUL.
+- `cells_resolution = placed` now honours `output_limit`, as its tooltip always said.
+- **ComfyUI's own undo no longer throws away a pending video** or the node's edit history: a removal that is really a graph reload is recognised, and the same node gets its session back.
+- **The frame picker and the crop editor swallow the keys they handle**, so Delete no longer removes the node underneath and Space no longer pans the canvas behind the dialog.
+- Removing or relinking one image keeps the other thumbnails; a progress suffix can no longer stick to the node's title; the `Cancel 100/256` pill and the video card's caption stay inside their boxes; a card says whether a file timed out (with a retry) or simply cannot be previewed in a browser; the clipboard message distinguishes a missing API from an insecure page, and a second `⧉ Copy` click writes the cached rendering at once.
+- The sharp preview decodes originals at the size it needs, one at a time across all nodes, and refuses a canvas the browser will not allocate with a message instead of a blank band.
+
 ### Changed
 - `match_image_size` defaults to `true` and `match_reference` to `smallest` for new nodes, so images line up by height (or width) from the start without anything being upscaled; `output_limit` stays `none`. Saved workflows keep their own values; one saved before `match_reference` existed opens with `first`, as it behaved then, and an API prompt that omits the value gets `first` too.
 - A fresh node shows five widgets (`direction`, `match_image_size`, `spacing_width`, `spacing_color`, `layout_mode`) instead of ten rows.

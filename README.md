@@ -19,6 +19,7 @@
 - **`⧉ Copy` 버튼 → 합성 결과를 Queue 없이 바로 클립보드 복사**
 - **동영상에서 장면 캡처** — 프레임 단위로 찾아 원본 해상도 PNG로 목록에 추가, 동영상은 저장 공간을 차지하지 않음. 브라우저가 못 여는 코덱은 서버(PyAV)가 디코딩
 - **기준 이미지 크기 출력** — `width`/`height` 출력 단자와 크기 패널: 기준 이미지 크기를 MP 목표로 조정하고 배수(기본 32)로 맞춤
+- **갤러리** — 실행한 구성(이미지·Crop·순서·설정)이 미리보기와 함께 기록되어 언제든 다시 불러오기, 안 쓰는 파일 정리까지
 - 툴바 한 줄 `+ Add · Clear · ⧉ Copy · ↶ ↷ · Preview · Options` — 고급 옵션은 **접혀 있고** 기본값이 아닌 것만 표시
 - 이미지별 **Crop / 90° Rotate / Flip H / Flip V**
 - Free Crop용 **상/하/좌/우 + 모서리 핸들**
@@ -218,7 +219,7 @@ grid_columns = 3
 
 `+ Add`나 드래그 앤 드롭으로 **동영상 파일**(mp4·webm·mov 등 브라우저가 재생할 수 있는 형식)을 넣으면 목록 끝에 🎞 카드가 생기고 **프레임 선택기**가 열립니다. 재생·스크러버·프레임 단위 이동(←/→, Shift를 누르면 10프레임)으로 장면을 찾고 **Capture**(Enter)를 누르면, 그 순간 화면에 보이는 프레임이 **원본 해상도 PNG**로 업로드되어 보통 이미지처럼 목록에 들어갑니다. Crop·회전·순서 변경·미리보기·복사·실행이 모두 같고, 카드에는 🎞와 캡처 시각이 표시됩니다. 한 번 열어 여러 장을 캡처할 수 있고, 카드를 다시 클릭하면 선택기가 다시 열립니다.
 
-동영상은 **저장 공간을 차지하지 않습니다.** ComfyUI의 temp 폴더(`temp/multi_stitch_video/`)에만 올라가고 워크플로우에는 저장되지 않으며, 선택기의 **Done**, 카드의 **×**, `Clear`, 노드 삭제, 페이지를 닫을 때 서버에서 지워집니다(캡처한 PNG는 남습니다). 브라우저가 비정상 종료돼 남은 파일은 ComfyUI가 다음 시작 때 temp 폴더를 비우면서 정리됩니다. 실행 시에는 캡처된 PNG만 합쳐지고 동영상은 무시됩니다.
+동영상은 **저장 공간을 차지하지 않습니다.** ComfyUI의 temp 폴더(`temp/multi_stitch_video/`)에만 올라가고 워크플로우에는 저장되지 않으며, 선택기의 **Done**, 카드의 **×**, `Clear`, 페이지를 닫을 때 서버에서 지워집니다(캡처한 PNG는 남습니다). 노드를 지워도 몇 초 뒤 지워집니다 — 실행 취소로 그래프가 다시 만들어지면 같은 노드가 동영상과 함께 돌아오기 때문입니다. 브라우저가 비정상 종료돼 남은 파일은 ComfyUI가 다음 시작 때 temp 폴더를 비우면서 정리됩니다. 실행 시에는 캡처된 PNG만 합쳐지고 동영상은 무시됩니다.
 
 - 프레임 이동은 `requestVideoFrameCallback`으로 실제 표시된 프레임의 시각을 읽어 처리하며, 영상이 준비되면 음소거로 잠깐 재생해 fps를 감지합니다(Chromium·Safari). 그 밖의 브라우저는 시간 기준으로 이동하고, 감지가 안 되면 선택기의 fps 칸에 직접 입력하면 됩니다.
 - 업로드 크기는 ComfyUI 한도(기본 100 MB, `--max-upload-size`로 조정)를 따릅니다.
@@ -240,6 +241,16 @@ grid_columns = 3
 
 **툴바와 Options** — 위젯 아래 한 줄에 `+ Add · Clear · ⧉ Copy · ↶ ↷ · Preview · Options`가 있고, 버튼용 위젯 행은 없습니다. 자주 쓰지 않는 옵션(`output_limit` 이후: 출력 제한, Grid 셀 크기, `output_cells`, `cells_resolution`, `minimum_image_side`, `match_reference`)은 **`Options ▸`를 눌러야 보입니다**. 단 **기본값이 아닌 값은 접혀 있어도 항상 표시**되고 `Options ▸ (2)`처럼 개수를 알려 주므로, 숨은 설정이 몰래 결과를 바꾸는 일은 없습니다. 접힘 여부는 워크플로우에 저장됩니다. 기본 상태의 위젯은 `direction`, `match_image_size`, `spacing_width`, `spacing_color`, `layout_mode`(Grid면 `grid_columns`) 다섯 개입니다.
 
+**갤러리** — 제목 표시줄의 **`🖼`**(물음표 왼쪽, `📐 Size` 옆)을 누르면 이 노드로 스티치했던 구성이 미리보기와 함께 나옵니다. 한 번 실행할 때마다 이미지 목록·Crop·순서·설정이 한 항목으로 기록되고, 같은 구성을 또 실행하면 항목은 하나로 유지된 채 사용 횟수만 올라갑니다.
+
+- **Load**는 그 구성을 노드에 그대로 되돌립니다(이미지와 설정 함께). **Add**는 현재 목록 뒤에 이미지만 덧붙입니다.
+- 이름은 클릭해서 바꿀 수 있고, 항목은 최대 200개까지 보관하며 넘치면 가장 오래 안 쓴 것부터 사라집니다.
+- **`save every run`** 체크를 끄면 자동 기록을 멈추고 **`＋ Save current`** 로만 저장합니다. 이 설정은 서버(`input/multi_stitch/gallery/settings.json`)에 저장되므로 위젯이 늘지 않고, 기존 워크플로우도 그대로입니다.
+- 머리글에 `input/multi_stitch` 용량과 **어떤 항목에도 안 쓰이는 파일**의 용량이 나오고, **`Clean up unused files…`** 로 그만큼만 지웁니다. 열려 있는 노드가 쓰는 파일은 절대 지우지 않지만, **디스크에 저장된 워크플로우가 참조하는 파일은 알 수 없으므로** 확인 창에서 그 점을 알려 줍니다.
+- 항목 삭제는 기본적으로 이미지 파일을 남기고, **`Delete + files`** 는 다른 항목과 열린 노드가 안 쓰는 파일만 함께 지웁니다.
+
+**Vue 노드 모드** — ComfyUI 설정의 **Vue Nodes**(Nodes 2.0)를 켜면 노드 본문이 Vue 컴포넌트로 그려져 캔버스에 직접 그리던 상태 줄·툴바·미리보기·썸네일·크기 패널이 보이지 않았습니다. 이제 그 모드에서는 같은 화면을 DOM으로 그리며, 버튼과 카드는 캔버스와 **동일한 함수**를 호출합니다. 이 표시용 위젯은 워크플로우에 저장되지 않습니다.
+
 **최종 합성 미리보기** — 썸네일 위의 띠에 실제 배치(Strip/Grid, 방향, 간격, 배경색, 출력 크기 제한)를 축소해 보여줍니다. 백엔드와 **같은 레이아웃 계산**(`_layout` ↔ `layoutPlacements`)을 쓰고 CI에서 픽셀 단위로 대조하므로, Queue 전에 보이는 배치가 곧 결과입니다. 툴바의 **`Preview`** 버튼으로 끄고 켤 수 있고(워크플로우에 저장), 아직 로드되지 않았거나 없는 이미지는 `?` 자리표시자로 표시됩니다. 평소에는 512px 썸네일로 바로 그리지만, 캔버스를 확대하거나 고해상도 화면이라 썸네일을 늘려야 할 만큼 커지면 **원본 파일로 합성본을 다시 그려**(긴 변 2048px·4 MP 이내, 노드당 하나 캐시) 선명하게 보여 줍니다. 배치나 이미지가 바뀌면 다시 그리고 그동안은 썸네일 버전이 보입니다. 축소는 절반씩 단계적으로 줄이는 고품질 방식이라 썸네일·미리보기·복사 결과 모두 계단 현상이 없습니다.
 
 **합성 결과 복사** — 툴바의 **`⧉ Copy`** 버튼은 미리보기와 같은 배치를 **원본 파일**로 다시 그려(썸네일이 아니라) 최종 크기의 PNG를 클립보드에 넣습니다. 이미지를 한 장씩 불러와 그리므로 진행률이 노드 제목에 표시됩니다. 브라우저 canvas 한도 때문에 **64 MP**까지만 렌더링하며, 그보다 크면 `output_limit`을 쓰거나 Queue로 실행하라고 알려줍니다. 연결된 `images` 입력의 프레임은 실행 시점에만 존재하므로 포함되지 않고, 로드에 실패한 이미지는 배경색으로 비워 둔 채 알려줍니다. 축소 리샘플링은 브라우저 방식이라 백엔드(bicubic)와 픽셀이 미세하게 다를 수 있습니다.
@@ -248,7 +259,7 @@ grid_columns = 3
 
 **실행 취소 / 다시 실행** — 툴바의 **`↶` / `↷`** 버튼이 추가·삭제·순서 변경·Crop/회전 편집·교체·Clear를 되돌립니다(최근 50단계, 노드가 열려 있는 동안 유지, 워크플로우를 다시 열면 초기화). ComfyUI 자체의 Ctrl+Z와는 별개입니다.
 
-**누락 이미지 교체** — 워크플로우를 옮겨 원본 파일이 없으면 카드에 `Load failed` / `click to relink`가 표시됩니다(30초 안에 로드되지 않는 파일도 같은 상태가 됩니다). 카드를 클릭(또는 우클릭 → `Replace image #N…`)해 새 파일을 고르면 **Crop·회전·반전·순서를 유지한 채** 파일만 바뀝니다. 이 교체도 실행 취소할 수 있습니다.
+**누락 이미지 교체** — 워크플로우를 옮겨 원본 파일이 없으면 카드에 `Cannot preview here` 또는 `Missing · click to relink`가 표시됩니다. 30초 안에 로드되지 않으면 `Timed out · click to retry`가 되고, 한 번 더 시도한 뒤에도 실패하면 재연결을 권합니다. 브라우저가 못 읽는 형식(TIFF·PSD·HEIC)은 서버에서는 정상 스티치되므로 그렇게 안내합니다. 카드를 클릭(또는 우클릭 → `Replace image #N…`)해 새 파일을 고르면 **Crop·회전·반전·순서를 유지한 채** 파일만 바뀝니다. 이 교체도 실행 취소할 수 있습니다.
 
 ## IMAGE 입력 · 개별 셀 출력
 
@@ -351,9 +362,11 @@ Workflow에는 다음 상태가 저장됩니다.
 - `Options ▸` 접힘 여부
 - 크기 패널(`📐 Size`) 켜짐/꺼짐
 
+갤러리는 워크플로우에 저장되지 않습니다. 항목은 서버에 있으므로 어떤 노드에서 열어도, 어떤 워크플로우에서 열어도 같은 목록이 보입니다.
+
 편집 이력(실행 취소)은 저장되지 않습니다. 참조된 파일이 디스크에서 바뀌면(크기·수정 시각) 노드는 ComfyUI 캐시를 무시하고 다음 Queue에서 다시 실행됩니다.
 
-Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮겨야 합니다. 옮기지 못한 파일은 카드에 `Load failed`로 표시되며, 그 카드를 클릭해 재연결하면 Crop과 순서는 유지됩니다.
+Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮겨야 합니다. 옮기지 못한 파일은 카드에 `click to relink`로 표시되며, 그 카드를 클릭해 재연결하면 Crop과 순서는 유지됩니다.
 
 ---
 
@@ -369,6 +382,7 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 - **Right-click a thumbnail to copy the original image** to the clipboard
 - **`⧉ Copy` button → the stitched result on the clipboard without queueing**
 - **Capture frames from a video** — find the moment frame by frame, add it as a native-resolution PNG; the video takes no storage, and the server (PyAV) decodes codecs the browser cannot
+- **Gallery** — every composition a run stitches is recorded with a preview and can be loaded back into a node; it also shows what the image folder holds and clears what nothing uses
 - **Reference-image size outputs** — `width`/`height` outputs and a size panel: the reference image's size rescaled to a megapixel target and snapped to a multiple (32 by default)
 - One toolbar row `+ Add · Clear · ⧉ Copy · ↶ ↷ · Preview · Options` — advanced options stay **folded**, only non-default ones show
 - Per-image **Crop / 90° Rotate / Flip H / Flip V**
@@ -395,6 +409,8 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 - **`⧉ Copy`** renders the stitched result in the browser and puts it on the clipboard without queueing.
 - **`match_image_size` defaults to `true`** — a new node lines images up by height (width in a vertical strip) from the start. Saved workflows keep their own value.
 - **`match_reference`** — choose the image `match_image_size` matches to: first, largest or smallest (under `Options ▸`). The default, `smallest`, lines images up without upscaling and without reordering; a workflow saved before the option existed opens with `first`, as it behaved then.
+- **Gallery** — `🖼` in the title bar (left of the `?`, beside `📐 Size`) lists every composition this node type has stitched, each with a preview. A run records the image list, its crops, the order and the settings as one entry; stitching the same composition again keeps one entry and counts the use. `Load` puts a composition back into the node, images and settings together; `Add` appends only its images. Names are editable, 200 entries are kept and the least recently used go first. `save every run` turns the recording off, leaving `＋ Save current`; that setting lives with the gallery on the server, so no node widget is added and no saved workflow shifts. The header says how much `input/multi_stitch` holds and how much of it no entry references, and `Clean up unused files…` deletes exactly that: never a file an open node uses, though a workflow saved on disk cannot be detected, which the confirmation says. Deleting an entry keeps its files unless you choose `Delete + files`.
+- **Vue node mode** — with ComfyUI's **Vue Nodes** (Nodes 2.0) setting on, the node body is a Vue component, so the canvas-drawn status line, toolbar, preview band, thumbnails and size panel did not appear. They are now rendered as DOM in that mode, with the buttons and cards calling exactly the same functions as the canvas. The widget that carries them is never saved with the workflow.
 - **Frames from a video** — adding a video opens a frame picker; captured frames are edited and stitched like any image, and the video lives only in the temp folder until the captures are done. A codec the browser cannot play is decoded by PyAV on the server, and "server capture" gives a decoder-exact frame for playable videos too.
 - **`width` / `height` outputs and a size panel** — the reference image's size (the first by default), rescaled to `size_megapixels` and snapped to a multiple of `size_divisible_by` (32 by default). The **`📐 Size`** button in the title bar adds a panel under the node with a box of that aspect and a readout such as `672 x 1184 | 9:16 | 0.80 MP | divisible by 32`.
 - **The list grows downward** — instead of scrolling, the node gets taller with the images so every card is visible.
@@ -565,7 +581,7 @@ The reference keeps its own size, and on a tie the earlier image wins. No reorde
 
 Add a **video file** (mp4, webm, mov — anything the browser can play) with `+ Add` or drag and drop: a 🎞 card appears at the end of the list and the **frame picker** opens. Find the moment with play, the scrubber and frame steps (←/→, Shift for 10 frames), then press **Capture** (Enter): the frame on screen is uploaded as a **native-resolution PNG** and joins the list as an ordinary image — crop, rotation, reordering, the preview, copy and the run all work the same, and the card shows 🎞 with the capture time. Capture as many frames as you like in one session; clicking the card reopens the picker.
 
-The video **takes no storage**. It is uploaded only to ComfyUI's temp folder (`temp/multi_stitch_video/`), is never saved with the workflow, and is deleted from the server on the picker's **Done**, the card's **×**, `Clear`, removing the node, or leaving the page (the captured PNGs stay). Anything a crashed browser leaves behind goes when ComfyUI empties its temp folder on the next start. At run time only the captured PNGs are stitched; the video is ignored.
+The video **takes no storage**. It is uploaded only to ComfyUI's temp folder (`temp/multi_stitch_video/`), is never saved with the workflow, and is deleted from the server on the picker's **Done**, the card's **×**, `Clear`, or leaving the page (the captured PNGs stay). Removing the node deletes it too, after a couple of seconds: an undo that rebuilds the graph puts the same node back, and its video comes with it. Anything a crashed browser leaves behind goes when ComfyUI empties its temp folder on the next start. At run time only the captured PNGs are stitched; the video is ignored.
 
 - Frame steps use `requestVideoFrameCallback` to read the timestamp of the frame actually shown; the frame rate is probed by playing muted for a moment once the video is ready (Chromium, Safari). Other browsers step by time; if detection fails, type the fps into the picker's field.
 - Uploads follow ComfyUI's limit (100 MB by default, `--max-upload-size` raises it).
@@ -595,7 +611,7 @@ The outputs are meant for an `Empty Latent Image` or a resize node. The **`📐 
 
 **Undo / redo** — the **`↶` / `↷`** buttons in the toolbar step through adds, removals, reorders, crop/rotation edits, replacements and Clear (the last 50 steps, kept while the node is open, reset when a workflow is reopened). Independent of ComfyUI's own Ctrl+Z.
 
-**Relink a missing image** — when a workflow moves and a source file is gone, its card reads `Load failed` / `click to relink` (a file that does not load within 30 seconds ends up the same way). Click the card (or right-click → `Replace image #N…`) and pick a file: only the file changes; **crop, rotation, flip and position are kept**. The replacement is undoable too.
+**Relink a missing image** — when a workflow moves and a source file is gone, its card reads `Cannot preview here` or `Missing · click to relink`. A file that does not load within 30 seconds reads `Timed out · click to retry` and is retried once before relinking is offered; a format the browser cannot read (TIFF, PSD, HEIC) says so, since the server stitches it fine. Click the card (or right-click → `Replace image #N…`) and pick a file: only the file changes; **crop, rotation, flip and position are kept**. The replacement is undoable too.
 
 ## IMAGE input · per-image cells output
 
@@ -698,9 +714,11 @@ The workflow stores:
 - Whether `Options ▸` is folded
 - Whether the size panel (`📐 Size`) is shown
 
+The gallery is not part of the workflow: its entries live on the server, so every node and every workflow sees the same ones.
+
 The edit history (undo) is not saved. If a referenced file changes on disk (size or modification time), the node bypasses ComfyUI's cache and runs again on the next queue.
 
-If you move the workflow to another machine, copy the referenced input images as well. A file that did not make the trip shows as `Load failed` on its card; click the card to relink it and the crop and order are kept.
+If you move the workflow to another machine, copy the referenced input images as well. A file that did not make the trip says `click to relink` on its card; click the card to relink it and the crop and order are kept.
 
 ---
 
