@@ -391,8 +391,33 @@ describe("toolbar and folded options", () => {
     });
 });
 
+// Every fillText with its position, drawn with a font of `perChar` px per
+// character, so wrapping can be checked against the room the text has.
+function textCalls(node, perChar) {
+    const calls = [];
+    const state = { textAlign: "left" };
+    const stack = [];
+    const ctx = new Proxy(state, {
+        get(target, key) {
+            if (key === "measureText") return (text) => ({ width: String(text).length * perChar });
+            if (key === "fillText") return (text, x, y, maxWidth) => calls.push({ text: String(text), x, y, maxWidth, align: target.textAlign });
+            if (key === "save") return () => stack.push({ ...target });
+            if (key === "restore") return () => Object.assign(target, stack.pop());
+            if (key === "getTransform") return () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 });
+            if (key === "createLinearGradient") return () => ({ addColorStop() {} });
+            return key in target ? target[key] : () => {};
+        },
+    });
+    nodeType.prototype.onDrawForeground.call(node, ctx);
+    return { calls, balanced: stack.length === 0 };
+}
+
 describe("empty box", () => {
-    it("spans the list width and keeps its hint inside", () => {
+    const HINT_1 = "Paste / Drop / Add images or a video";
+    const HINT_2 = "Click to edit · Drag ≡ to reorder";
+    const inBox = (calls) => calls.filter((c) => c.y >= LIST_TOP && c.y <= LIST_TOP + 92);
+
+    it("spans the list width and is the add target over all of it", () => {
         const node = plainNode(nodeType);
         dom.inputs.length = 0;
         // The right end of the list, past the first grid cell: still the add target.
@@ -401,27 +426,45 @@ describe("empty box", () => {
         assert.equal(click(node, [420 - 8 + 4, LIST_TOP + 40]), false, "but stops at the list's edge");
         assert.equal(dom.inputs.length, 1);
         for (const input of dom.inputs) input.remove();
-
-        // 7px per character: the full hint fits a 404px box.
-        const wide = paintedCalls(nodeType, node, { measure: (t) => t.length * 7 }).text;
-        assert.ok(wide.includes("Paste / Drop / Add images or a video"));
-        assert.ok(wide.includes("click an image to edit · drag ≡ to reorder"));
-
-        // 11px per character: the full hint would run past the box, so a shorter one is drawn.
-        const narrow = paintedCalls(nodeType, node, { measure: (t) => t.length * 11 }).text;
-        assert.ok(narrow.includes("Paste / Drop / Add images"));
-        assert.ok(!narrow.includes("Paste / Drop / Add images or a video"));
-        assert.ok(narrow.includes("click to edit · drag ≡ to reorder"));
-        assert.ok(!narrow.includes("click an image to edit · drag ≡ to reorder"));
     });
 
-    it("shortens the size panel's hint the same way", () => {
+    it("keeps its hints inside the box at common node widths", () => {
+        for (const width of [420, 600, 900]) {
+            const node = plainNode(nodeType);
+            node.size[0] = width;
+            node.properties.multi_stitch_size_panel = true;
+            const { calls, balanced } = textCalls(node, 7);
+            const boxWidth = width - 16;
+            const hints = inBox(calls);
+            assert.deepEqual(hints.map((c) => c.text), [HINT_1, HINT_2], `one line each at node width ${width}`);
+            for (const c of hints) {
+                const measured = c.text.length * 7;
+                assert.ok(measured <= boxWidth - 16, `fits at node width ${width}: ${c.text}`);
+                assert.equal(c.align, "center");
+                assert.ok(c.x - measured / 2 >= 8 && c.x + measured / 2 <= 8 + boxWidth, "inside the box sideways");
+                assert.ok(c.y - 12 >= LIST_TOP && c.y + 3 <= LIST_TOP + 92, "inside the box vertically");
+            }
+            assert.deepEqual(hints.map((c) => c.y), [LIST_TOP + 42, LIST_TOP + 58], "the usual two lines");
+            assert.ok(balanced, "canvas state is restored");
+        }
+    });
+
+    it("wraps a hint at a word when the box is too narrow for it, losing nothing", () => {
+        const node = plainNode(nodeType);
+        // 11px per character: the first hint measures 396px against 388px of room.
+        const hints = inBox(textCalls(node, 11).calls);
+        assert.deepEqual(hints.map((c) => c.text), ["Paste / Drop / Add images or a", "video", HINT_2]);
+        assert.deepEqual(hints.map((c) => c.y), [LIST_TOP + 34, LIST_TOP + 50, LIST_TOP + 66], "stacked around the centre");
+        for (const c of hints) assert.ok(c.text.length * 11 <= 388 && c.maxWidth === 388);
+    });
+
+    it("wraps the size panel's hint the same way", () => {
         const node = plainNode(nodeType);
         node.properties.multi_stitch_size_panel = true;
-        // 8.5px per character: the long hint (57 chars) is wider than the 372px box, the middle one fits.
-        const narrow = paintedCalls(nodeType, node, { measure: (t) => t.length * 8.5 }).text;
-        assert.ok(narrow.includes("Add an image for the width / height outputs"));
-        assert.ok(!narrow.some((t) => /its size becomes/.test(t)));
+        // 8.5px per character: the hint (57 characters) is wider than the 368px it has.
+        const panel = textCalls(node, 8.5).calls.filter((c) => c.y > LIST_TOP + 92 && c.text !== "width / height outputs");
+        assert.deepEqual(panel.map((c) => c.text), ["Add an image: its size becomes the width /", "height outputs"]);
+        for (const c of panel) assert.ok(c.text.length * 8.5 <= 368);
     });
 });
 

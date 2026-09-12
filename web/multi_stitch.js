@@ -224,6 +224,30 @@ function sizeReadout(node) {
     }
 }
 
+// Explanatory text wrapped at measured word boundaries (a "\n" always
+// breaks), preserving the font size.
+function wrapText(ctx, text, maxWidth) {
+    const lines = [];
+    for (const paragraph of text.split("\n")) {
+        let line = "";
+        for (const word of paragraph.split(/\s+/)) {
+            const next = line ? `${line} ${word}` : word;
+            if (line && (ctx.measureText?.(next)?.width ?? 0) > maxWidth) {
+                lines.push(line);
+                line = word;
+            } else line = next;
+        }
+        if (line) lines.push(line);
+    }
+    return lines;
+}
+
+function drawWrappedText(ctx, text, x, centerY, maxWidth, lineHeight = 16) {
+    const lines = wrapText(ctx, text, maxWidth);
+    const startY = centerY - (lines.length - 1) * lineHeight / 2;
+    lines.forEach((value, index) => ctx.fillText(value, x, startY + index * lineHeight, maxWidth));
+}
+
 function drawSizePanel(ctx, node, rect) {
     ctx.save();
     ctx.fillStyle = "#0c110d";
@@ -240,13 +264,9 @@ function drawSizePanel(ctx, node, rect) {
     const readout = sizeReadout(node);
     if (!readout) {
         ctx.fillStyle = "#7fb08f";
-        ctx.fillText(
-            node._msImages?.length ? "Loading…" : fitText(ctx, [
-                "Add an image: its size becomes the width / height outputs",
-                "Add an image for the width / height outputs",
-                "Add an image",
-            ], box.w - 16),
-            rect.x + rect.w / 2, box.y + box.h / 2 + 4,
+        drawWrappedText(ctx,
+            node._msImages?.length ? "Loading…" : "Add an image: its size becomes the width / height outputs",
+            rect.x + rect.w / 2, box.y + box.h / 2 + 4, box.w - 20,
         );
         ctx.fillText("width / height outputs", rect.x + rect.w / 2, rect.y + rect.h - 12);
         ctx.restore();
@@ -277,12 +297,12 @@ function drawSizePanel(ctx, node, rect) {
     ctx.font = "13px sans-serif";
     ctx.fillText(
         `${readout.w} x ${readout.h}  |  ${readout.ratio}  |  ${readout.megapixels.toFixed(2)} MP  |  divisible by ${readout.step}`,
-        rect.x + rect.w / 2, rect.y + rect.h - 12,
+        rect.x + rect.w / 2, rect.y + rect.h - 12, rect.w - 16,
     );
     ctx.textAlign = "left";
     ctx.font = "11px sans-serif";
     ctx.fillStyle = "#7fb08f";
-    ctx.fillText(`from image ${readout.index + 1} (${readout.ref.w}×${readout.ref.h})${readout.note}`, box.x + 6, box.y + 14);
+    ctx.fillText(`from image ${readout.index + 1} (${readout.ref.w}×${readout.ref.h})${readout.note}`, box.x + 6, box.y + 14, box.w - 12);
     ctx.restore();
 }
 
@@ -319,12 +339,6 @@ function thumbLayout(node, index) {
 // has room; it is the "add" target as well.
 function emptyBoxRect(node) {
     return { x: 8, y: listTop(node), w: nodeWidth(node) - 16, h: THUMB_HEIGHT, visible: true };
-}
-
-// The longest of `candidates` (longest first) that fits `room` pixels, else
-// the last one, so a caption never runs past its box.
-function fitText(ctx, candidates, room) {
-    return candidates.find((text) => (ctx.measureText?.(text)?.width ?? 0) <= room) ?? candidates[candidates.length - 1];
 }
 
 // Toolbar pills, left to right. Widths are fixed so the whole row fits a
@@ -629,7 +643,7 @@ function drawPreview(ctx, node, rect) {
         (imageInputConnected(node) ? "  + IMAGE input at run time" : "");
     ctx.fillRect(rect.x + 1, rect.y + rect.h - 17, rect.w - 2, 16);
     ctx.fillStyle = "#d0d0d0";
-    ctx.fillText(caption, rect.x + 8, rect.y + rect.h - 5);
+    ctx.fillText(caption, rect.x + 8, rect.y + rect.h - 5, rect.w - 16);
 }
 
 function drawCard(ctx, node, item, index, r) {
@@ -783,7 +797,10 @@ function drawThumbs(node, ctx) {
             : node._msUnreadable
                 ? "Image list unreadable — kept as-is. Add or Clear to replace."
                 : "Select this node, then Ctrl+V images"];
-    ctx.fillText(fitText(ctx, candidates, nodeWidth(node) - 18), 9, top + 12);
+    const room = nodeWidth(node) - 18;
+    const status = candidates.find((text) => (ctx.measureText?.(text)?.width ?? 0) <= room) ?? candidates[candidates.length - 1];
+    ctx.textAlign = "left";
+    ctx.fillText(status, 9, top + 12, room);
     drawToolbar(ctx, node);
 
     if (!count && !videos) {
@@ -794,21 +811,14 @@ function drawThumbs(node, ctx) {
         ctx.setLineDash([]);
         ctx.save();
         ctx.beginPath();
-        ctx.rect(r.x, r.y, r.w, r.h);
+        ctx.rect(r.x + 4, r.y + 4, r.w - 8, r.h - 8);
         ctx.clip();
         ctx.fillStyle = "#8f8f8f";
         ctx.textAlign = "center";
+        // Both hints as one block, centred on the box: one line each at the
+        // usual width, wrapped and stacked if the node were ever narrower.
         const room = r.w - 16;
-        ctx.fillText(fitText(ctx, [
-            "Paste / Drop / Add images or a video",
-            "Paste / Drop / Add images",
-            "Add images",
-        ], room), r.x + r.w / 2, r.y + r.h / 2 - 4);
-        ctx.fillText(fitText(ctx, [
-            "click an image to edit · drag ≡ to reorder",
-            "click to edit · drag ≡ to reorder",
-            "click to edit",
-        ], room), r.x + r.w / 2, r.y + r.h / 2 + 12);
+        drawWrappedText(ctx, "Paste / Drop / Add images or a video\nClick to edit · Drag ≡ to reorder", r.x + r.w / 2, r.y + r.h / 2 + 4, room);
         ctx.restore();
         const panel = sizePanelRect(node);
         if (panel) drawSizePanel(ctx, node, panel);
