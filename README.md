@@ -229,7 +229,7 @@ grid_columns = 3
 
 노드에는 `image`·`cells` 외에 **`width`**·**`height`**(INT) 출력이 있습니다. 값은 **기준 이미지**의 크기(자르기·회전 적용 후)에서 나옵니다.
 
-- `size_reference` — 기준 이미지: `first`(기본, 목록의 첫 이미지) / `largest` / `smallest`(면적 기준, 같으면 앞선 이미지).
+- `size_reference` — 기준 이미지의 **번호**: `1`(기본) = 목록의 첫 번째, `2` = 두 번째… IMAGE 입력의 프레임은 붙여 넣은 이미지 뒤에 이어서 세고, 끝을 넘는 번호는 마지막 이미지를 씁니다(패널에 표시).
 - `size_megapixels` — `0`(기본)이면 기준 이미지의 픽셀 수 그대로, 값을 주면 비율을 유지한 채 그 메가픽셀로 확대·축소합니다.
 - `size_divisible_by` — 각 변을 이 값의 배수로 반올림합니다(기본 `32`, 최소 이 값). 예: 1440×2560을 0.8 MP·32로 → **672×1184**.
 
@@ -276,7 +276,7 @@ grid_columns = 3
 | `cells_resolution` | `placed` / `source` (output_cells 사용 시 표시) | `placed` |
 | `minimum_image_side` | `0` = 검사 끄기 / 최대 131072px | `0` |
 | `match_reference` | `first` / `largest` / `smallest` — `match_image_size`가 켜졌을 때 기준 이미지 | `smallest` |
-| `size_reference` | `first` / `largest` / `smallest` — `width`/`height` 출력의 기준 이미지 | `first` |
+| `size_reference` | `1` – `256`, `width`/`height` 출력의 기준 이미지 번호 (1 = 첫 번째) | `1` |
 | `size_megapixels` | `0` = 기준 이미지 크기 그대로 / 최대 64 MP | `0` |
 | `size_divisible_by` | `1` – `512`, 각 변을 이 배수로 반올림 | `32` |
 | `images` (입력) | 선택 IMAGE 배치 — 붙여넣은 이미지 뒤에 추가 | — |
@@ -574,7 +574,7 @@ The video **takes no storage**. It is uploaded only to ComfyUI's temp folder (`t
 
 Besides `image` and `cells` the node outputs **`width`** and **`height`** (INT), derived from a **reference image** (its size after crop and rotation):
 
-- `size_reference` — which image: `first` (default, the first in the list), `largest` or `smallest` by area (the earlier image wins a tie).
+- `size_reference` — the reference image's **number**: `1` (default) is the first in the list, `2` the second… Frames from the IMAGE input count after the pasted images, and a number past the end means the last image (the panel says so).
 - `size_megapixels` — `0` (default) keeps the reference's own pixel count; any other value rescales it to that many megapixels at the same aspect.
 - `size_divisible_by` — each side is rounded to the nearest multiple (default `32`, never below it). Example: 1440×2560 at 0.8 MP and 32 → **672×1184**.
 
@@ -621,7 +621,7 @@ Hover any widget or output slot for its **tooltip**; the table below is the summ
 | `cells_resolution` | `placed` / `source` (shown when `output_cells` is on) | `placed` |
 | `minimum_image_side` | `0` = off, up to `131072` px | `0` |
 | `match_reference` | `first` / `largest` / `smallest` — the reference image while `match_image_size` is on | `smallest` |
-| `size_reference` | `first` / `largest` / `smallest` — the reference image for the `width`/`height` outputs | `first` |
+| `size_reference` | `1` – `256`, the number of the reference image for the `width`/`height` outputs (1 = first) | `1` |
 | `size_megapixels` | `0` = the reference's own size, up to 64 MP | `0` |
 | `size_divisible_by` | `1` – `512`, each side rounded to this multiple | `32` |
 | `images` (input) | optional IMAGE batch, appended after the pasted images | — |

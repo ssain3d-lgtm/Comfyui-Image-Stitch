@@ -193,12 +193,13 @@ class FrontendParityTests(unittest.TestCase):
         cases = []
         for _ in range(400):
             dims = [(rng.randint(1, 4000), rng.randint(1, 4000)) for _ in range(rng.randint(1, 6))]
-            cases.append([dims, rng.choice(ms._SIZE_REFERENCES), rng.choice([0, 0.5, 0.8, 1, 2.25, 12]),
+            cases.append([dims, rng.choice([1, 2, 3, 7, 0, "first", "largest", "smallest"]), rng.choice([0, 0.5, 0.8, 1, 2.25, 12]),
                           rng.choice([1, 8, 16, 32, 64])])
         # Exact halves, where half-even rounding differs from Math.round.
-        cases += [[[(48, 48)], "first", 0, 32], [[(80, 80)], "first", 0, 32], [[(1440, 2560)], "first", 0.8, 32],
+        cases += [[[(48, 48)], 1, 0, 32], [[(80, 80)], 1, 0, 32], [[(1440, 2560)], 1, 0.8, 32],
+                  [[(10, 10), (20, 5), (5, 20)], 2, 0, 8], [[(100, 100), (50, 200)], 9, 1, 64],
                   [[(10, 10), (20, 5), (5, 20)], "largest", 0, 8], [[(100, 100), (50, 200)], "smallest", 1, 64],
-                  [[(3, 3)], "first", 0, 16]]
+                  [[(3, 3)], 1, 0, 16]]
         got = self.run_js({"size": cases})
         for (dims, ref, mp, d), js in zip(cases, got["size"]):
             with self.subTest(size=(dims, ref, mp, d)):

@@ -357,8 +357,9 @@ class MultiStitchTests(unittest.TestCase):
         self.assertEqual(optional["images"][0], "IMAGE")
         self.assertEqual(optional["match_reference"][0], list(ms._MATCH_REFERENCES))
         self.assertEqual(optional["match_reference"][1]["default"], "smallest")
-        self.assertEqual(optional["size_reference"][0], list(ms._SIZE_REFERENCES))
-        self.assertEqual(optional["size_reference"][1]["default"], "first")
+        self.assertEqual(optional["size_reference"][0], "INT")
+        self.assertEqual(optional["size_reference"][1]["default"], 1)
+        self.assertEqual((optional["size_reference"][1]["min"], optional["size_reference"][1]["max"]), (1, ms._MAX_IMAGES))
         self.assertEqual(optional["size_megapixels"][0], "FLOAT")
         self.assertEqual(optional["size_megapixels"][1]["default"], 0.0)
         self.assertEqual(optional["size_divisible_by"][0], "INT")
@@ -417,10 +418,10 @@ class MultiStitchTests(unittest.TestCase):
         self.assertEqual((width, height), (32, 32), "first image, 30×20 snapped to 32s")
         self.assertIsInstance(width, int)
         self.assertIsInstance(height, int)
-        _, _, width, height = ms.MultiStitchImages().stitch(**common, size_reference="largest", size_divisible_by=4)
+        _, _, width, height = ms.MultiStitchImages().stitch(**common, size_reference=2, size_divisible_by=4)
         self.assertEqual((width, height), (100, 60))
         _, _, width, height = ms.MultiStitchImages().stitch(
-            **common, size_reference="largest", size_megapixels=1.0, size_divisible_by=32,
+            **common, size_reference=2, size_megapixels=1.0, size_divisible_by=32,
         )
         self.assertEqual((width, height), (1280, 768), "100×60 scaled to 1 MP keeps its 5:3 shape")
         # Crop and rotation count: the size is the image's footprint on the canvas.
@@ -431,10 +432,12 @@ class MultiStitchTests(unittest.TestCase):
         self.assertEqual((width, height), (20, 15))
         # Frames from the IMAGE input are candidates too.
         _, _, width, height = ms.MultiStitchImages().stitch(
-            **common, images=torch.zeros(1, 200, 300, 3), size_reference="largest", size_divisible_by=1,
+            **common, images=torch.zeros(1, 200, 300, 3), size_reference=3, size_divisible_by=1,
         )
-        self.assertEqual((width, height), (300, 200))
-        with self.assertRaisesRegex(ValueError, "size_reference must be one of"):
+        self.assertEqual((width, height), (300, 200), "IMAGE-input frames count after the pasted images")
+        _, _, width, height = ms.MultiStitchImages().stitch(**common, size_reference=7, size_divisible_by=1)
+        self.assertEqual((width, height), (100, 60), "a number past the end means the last image")
+        with self.assertRaisesRegex(ValueError, "size_reference must be an image number"):
             ms.MultiStitchImages().stitch(**common, size_reference="biggest")
 
     def test_stitch_rejects_too_many_images(self):
@@ -597,17 +600,22 @@ class MultiStitchTests(unittest.TestCase):
             ms._layout(dims, "strip", "right", False, 3, 0, match_reference="biggest")
 
     def test_reference_size_follows_the_chosen_image(self):
-        """The width/height outputs: one image's size, by list order or by area, a tie to the earlier one."""
+        """The width/height outputs: one image's size, picked by its number in the list."""
         dims = [(40, 30), (20, 80), (60, 20), (10, 120)]  # areas 1200, 1600, 1200, 1200
+        self.assertEqual(ms._reference_size(dims, 1, 0, 1), (40, 30))
+        self.assertEqual(ms._reference_size(dims, 2, 0, 1), (20, 80))
+        self.assertEqual(ms._reference_size(dims, 4, 0, 1), (10, 120))
+        self.assertEqual(ms._reference_size(dims, 9, 0, 1), (10, 120), "past the end: the last image")
+        self.assertEqual(ms._reference_size(dims, 0, 0, 1), (40, 30), "below one: the first image")
+        self.assertEqual(ms._reference_size(dims, "3", 0, 1), (60, 20), "a numeric string counts")
+        # The names the option briefly used still resolve, so nothing saved with them breaks.
         self.assertEqual(ms._reference_size(dims, "first", 0, 1), (40, 30))
         self.assertEqual(ms._reference_size(dims, "largest", 0, 1), (20, 80))
         self.assertEqual(ms._reference_size(dims, "smallest", 0, 1), (40, 30), "the first of three 1200-pixel images")
-        self.assertEqual(ms._reference_size([(10, 10), (10, 10)], "largest", 0, 1), (10, 10))
-        self.assertEqual(ms._reference_size([(9, 9)], "smallest", 0, 1), (9, 9))
-        with self.assertRaisesRegex(ValueError, "size_reference must be one of"):
+        with self.assertRaisesRegex(ValueError, "size_reference must be an image number"):
             ms._reference_size(dims, "biggest", 0, 1)
         with self.assertRaisesRegex(ValueError, "at least one image"):
-            ms._reference_size([], "first", 0, 1)
+            ms._reference_size([], 1, 0, 1)
 
     def test_reference_size_rescales_to_megapixels_and_snaps_to_a_multiple(self):
         # 1440×2560 at 0.8 MP: scale = sqrt(800000 / 3686400) = 0.4659, so 670.9×1192.6, each to the nearest 32.

@@ -63,7 +63,9 @@ _DEFAULT_MATCH_REFERENCE = "smallest"
 _LEGACY_MATCH_REFERENCE = "first"
 # Which image the width/height outputs describe. The superlatives go by area,
 # unlike match_reference, which goes by the side a strip shares.
-_SIZE_REFERENCES = ("first", "largest", "smallest")
+# size_reference is an image number, 1 = the first in the list. The names the
+# option briefly used are still understood, so nothing saved with them breaks.
+_LEGACY_SIZE_REFERENCES = ("first", "largest", "smallest")
 _OUTPUT_LIMITS = ("none", "max_width", "max_height", "max_long_side")
 
 
@@ -325,30 +327,47 @@ def _reference_index(
     return keys.index(target)
 
 
+def _size_reference_index(dimensions: list[tuple[int, int]], size_reference: object) -> int:
+    """The list index size_reference names: an image number counted from 1,
+    clamped to the list, so a number past the end means the last image (and
+    0 or less the first). The names the option briefly used are still
+    understood: first, or the largest / smallest by area, an earlier image
+    winning a tie. Mirrored by sizeReferenceIndex in web/shared.js.
+    """
+    if not dimensions:
+        raise ValueError("Multi Stitch Images: paste or add at least one image first.")
+    name = size_reference.strip().lower() if isinstance(size_reference, str) else ""
+    if name in _LEGACY_SIZE_REFERENCES:
+        if name == "first":
+            return 0
+        areas = [w * h for w, h in dimensions]
+        target = max(areas) if name == "largest" else min(areas)
+        return areas.index(target)
+    try:
+        number = int(size_reference)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"Multi Stitch Images: size_reference must be an image number (1 = first), got {size_reference!r}."
+        ) from None
+    return min(max(1, number), len(dimensions)) - 1
+
+
 def _reference_size(
     dimensions: list[tuple[int, int]],
-    size_reference: str,
+    size_reference: object,
     megapixels: float,
     divisible_by: int,
 ) -> tuple[int, int]:
-    """Width and height derived from one image of the list: the reference's own
+    """Width and height derived from one image of the list: that image's own
     size, optionally rescaled to a megapixel target, snapped to a multiple.
 
-    "first" is the list order; "largest" and "smallest" go by area, an earlier
-    image winning a tie. A megapixel target above zero scales both sides by one
-    factor, so the aspect ratio survives; each side is then rounded to the
-    nearest multiple of divisible_by with Python's round (half to even, which
-    the JavaScript mirror reproduces) and never drops below one multiple.
+    size_reference picks the image by number (see _size_reference_index). A
+    megapixel target above zero scales both sides by one factor, so the
+    aspect ratio survives; each side is then rounded to the nearest multiple
+    of divisible_by with Python's round (half to even, which the JavaScript
+    mirror reproduces) and never drops below one multiple.
     """
-    size_reference = _require_choice("size_reference", size_reference, _SIZE_REFERENCES)
-    if not dimensions:
-        raise ValueError("Multi Stitch Images: paste or add at least one image first.")
-    if size_reference == "first":
-        index = 0
-    else:
-        areas = [w * h for w, h in dimensions]
-        target = max(areas) if size_reference == "largest" else min(areas)
-        index = areas.index(target)  # an earlier image wins a tie
+    index = _size_reference_index(dimensions, size_reference)
     width, height = float(dimensions[index][0]), float(dimensions[index][1])
     megapixels = float(megapixels or 0)
     if megapixels > 0:
@@ -875,12 +894,13 @@ class MultiStitchImages:
                 }),
                 # Added after 1.2 for the width/height outputs: last again, so
                 # every earlier widget keeps its slot in saved workflows.
-                "size_reference": (list(_SIZE_REFERENCES), {
-                    "default": "first",
-                    "tooltip": "Which image the width and height outputs describe: first: the first in the "
-                               "list. largest / smallest: the largest or smallest by area. Its size after "
-                               "crop and rotation, rescaled to size_megapixels when that is above 0, with "
-                               "each side snapped to a multiple of size_divisible_by.",
+                "size_reference": ("INT", {
+                    "default": 1, "min": 1, "max": _MAX_IMAGES, "step": 1,
+                    "tooltip": "Which image the width and height outputs describe, by its number in the "
+                               "list: 1 = the first, 2 = the second… Frames from the IMAGE input count after "
+                               "the pasted images; a number past the end means the last image. Its size "
+                               "after crop and rotation, rescaled to size_megapixels when that is above 0, "
+                               "with each side snapped to a multiple of size_divisible_by.",
                 }),
                 "size_megapixels": ("FLOAT", {
                     "default": 0.0, "min": 0.0, "max": 64.0, "step": 0.05, "round": 0.01,
@@ -908,10 +928,10 @@ class MultiStitchImages:
         "The stitched strip or grid.",
         "One frame per image, centred in a uniform cell, when output_cells is on; "
         "otherwise the stitched image again.",
-        "Width of the reference image (size_reference), rescaled to size_megapixels and snapped to "
-        "size_divisible_by — for an Empty Latent or a resize node downstream.",
-        "Height of the reference image (size_reference), rescaled to size_megapixels and snapped to "
-        "size_divisible_by — for an Empty Latent or a resize node downstream.",
+        "Width of image number size_reference (1 = the first), rescaled to size_megapixels and "
+        "snapped to size_divisible_by — for an Empty Latent or a resize node downstream.",
+        "Height of image number size_reference (1 = the first), rescaled to size_megapixels and "
+        "snapped to size_divisible_by — for an Empty Latent or a resize node downstream.",
     )
 
     def stitch(
@@ -933,7 +953,7 @@ class MultiStitchImages:
         cells_resolution="placed",
         minimum_image_side=0,
         match_reference=_LEGACY_MATCH_REFERENCE,
-        size_reference="first",
+        size_reference=1,
         size_megapixels=0.0,
         size_divisible_by=32,
     ):

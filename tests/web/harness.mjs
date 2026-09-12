@@ -167,7 +167,7 @@ const WIDGET_DEFAULTS = [
     ["output_limit", "none"], ["output_limit_px", 2048], ["grid_cell_width", 0],
     ["grid_cell_height", 0], ["output_cells", false],
     ["cells_resolution", "placed"], ["minimum_image_side", 0], ["match_reference", "smallest"],
-    ["size_reference", "first"], ["size_megapixels", 0], ["size_divisible_by", 32],
+    ["size_reference", 1], ["size_megapixels", 0], ["size_divisible_by", 32],
 ];
 
 // A LiteGraph-shaped node with the widgets INPUT_TYPES declares, then run

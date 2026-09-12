@@ -805,11 +805,14 @@ describe("match reference", () => {
         widget(node, "output_limit").value = undefined;
         widget(node, "layout_mode").options.values = ["strip", "grid"];
         widget(node, "layout_mode").value = "mosaic";
+        widget(node, "size_reference").type = "number";
+        widget(node, "size_reference").value = "largest";
         widget(node, "spacing_width").value = 8;
         nodeType.prototype.onConfigure.call(node, { properties: { multi_stitch_images: "[]" } });
         assert.equal(widget(node, "match_reference").value, "first", "the behaviour the workflow was saved with, not today's default");
         assert.equal(widget(node, "output_limit").value, "none");
         assert.equal(widget(node, "layout_mode").value, "strip");
+        assert.equal(widget(node, "size_reference").value, 1, "a name on a number widget goes back to the default");
         assert.equal(widget(node, "spacing_width").value, 8, "a valid value is kept");
     });
 });
@@ -1071,13 +1074,18 @@ describe("size panel", () => {
         dom.imageSizes.set("b.png", [300, 150]);
         setImages(node, [item("a.png"), item("b.png")]);
         node.properties.multi_stitch_size_panel = true;
-        widget(node, "size_reference").value = "largest";
+        widget(node, "size_reference").value = 2;
         widget(node, "size_divisible_by").value = 64;
         paintedCalls(nodeType, node);
         await waitForThumbs(node);
-        // 300×150: 300/64 = 4.69 → 5, 150/64 = 2.34 → 2.
+        // Image 2 is 300×150: 300/64 = 4.69 → 5, 150/64 = 2.34 → 2.
         assert.ok(paintedText(nodeType, node).includes("320 x 128  |  2:1  |  0.04 MP  |  divisible by 64"));
         assert.ok(paintedText(nodeType, node).includes("from image 2 (300×150)"));
+        // A number past the end means the last image, and the panel says so.
+        widget(node, "size_reference").value = 9;
+        assert.ok(paintedText(nodeType, node).includes("from image 2 (300×150) — size_reference 9 is past the end"));
+        widget(node, "size_reference").value = 1;
+        assert.ok(paintedText(nodeType, node).includes("128 x 128  |  1:1  |  0.02 MP  |  divisible by 64"));
 
         const options = [];
         nodeType.prototype.getExtraMenuOptions.call(node, { graph_mouse: [200, 40] }, options);

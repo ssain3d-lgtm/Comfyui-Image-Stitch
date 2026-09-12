@@ -42,7 +42,9 @@ export function gridShape(count, gridColumns, direction) {
 export const DIRECTIONS = ["right", "down", "left", "up"];
 export const LAYOUT_MODES = ["strip", "grid"];
 export const MATCH_REFERENCES = ["first", "largest", "smallest"];
-export const SIZE_REFERENCES = ["first", "largest", "smallest"];
+// size_reference is an image number, 1 = the first; these names it briefly
+// used are still understood.
+export const LEGACY_SIZE_REFERENCES = ["first", "largest", "smallest"];
 export const OUTPUT_LIMITS = ["none", "max_width", "max_height", "max_long_side"];
 
 // Python's round() is half-to-even; Math.round is half-up. The backend sizes
@@ -90,19 +92,28 @@ export function preparedStripDims(dims, direction, matchImageSize, matchReferenc
     });
 }
 
-// Mirrors _reference_size: the width/height outputs — one image's own size
-// (the first, or the largest / smallest by area, earlier wins a tie),
+// Mirrors _size_reference_index: the image size_reference names, by its
+// number from 1, clamped to the list (past the end: the last image; 0 or
+// less: the first). The legacy names resolve too: first, or the largest /
+// smallest by area, an earlier image winning a tie.
+export function sizeReferenceIndex(dimensions, sizeReference) {
+    if (!dimensions.length) throw new RangeError("at least one image is required");
+    const name = typeof sizeReference === "string" ? sizeReference.trim().toLowerCase() : "";
+    if (LEGACY_SIZE_REFERENCES.includes(name)) {
+        if (name === "first") return 0;
+        const areas = dimensions.map((d) => d.w * d.h);
+        const target = name === "largest" ? Math.max(...areas) : Math.min(...areas);
+        return areas.indexOf(target);
+    }
+    const number = Math.trunc(Number(sizeReference));
+    if (!Number.isFinite(number)) throw new RangeError(`size_reference must be an image number (1 = first), got ${sizeReference}`);
+    return Math.min(Math.max(1, number), dimensions.length) - 1;
+}
+
+// Mirrors _reference_size: the width/height outputs — one image's own size,
 // rescaled to a megapixel target when one is set, each side snapped to the
 // nearest multiple of the step (never below it). Half-even rounding, like
 // Python's round().
-export function sizeReferenceIndex(dimensions, sizeReference) {
-    requireChoice("size_reference", sizeReference, SIZE_REFERENCES);
-    if (!dimensions.length) throw new RangeError("at least one image is required");
-    if (sizeReference === "first") return 0;
-    const areas = dimensions.map((d) => d.w * d.h);
-    const target = sizeReference === "largest" ? Math.max(...areas) : Math.min(...areas);
-    return areas.indexOf(target);
-}
 
 export function referenceSize(dimensions, sizeReference, megapixels, divisibleBy) {
     const index = sizeReferenceIndex(dimensions, sizeReference);

@@ -213,9 +213,11 @@ function sizeReadout(node) {
     try {
         const size = referenceSize(dims, settings.sizeReference, settings.sizeMegapixels, settings.sizeDivisibleBy);
         const index = sizeReferenceIndex(dims, settings.sizeReference);
+        const requested = Math.trunc(Number(settings.sizeReference));
         return {
             ...size, index, ref: dims[index], ratio: aspectLabel(dims[index].w, dims[index].h),
             megapixels: size.w * size.h / 1_000_000, step: settings.sizeDivisibleBy,
+            note: Number.isFinite(requested) && requested > dims.length ? ` — size_reference ${requested} is past the end` : "",
         };
     } catch (_) {
         return null;
@@ -276,7 +278,7 @@ function drawSizePanel(ctx, node, rect) {
     ctx.textAlign = "left";
     ctx.font = "11px sans-serif";
     ctx.fillStyle = "#7fb08f";
-    ctx.fillText(`from image ${readout.index + 1} (${readout.ref.w}×${readout.ref.h})`, box.x + 6, box.y + 14);
+    ctx.fillText(`from image ${readout.index + 1} (${readout.ref.w}×${readout.ref.h})${readout.note}`, box.x + 6, box.y + 14);
     ctx.restore();
 }
 
@@ -463,7 +465,7 @@ function readSettings(node) {
         outputLimitPx: Math.max(1, Number(value("output_limit_px", 2048)) || 2048),
         spacingColor: value("spacing_color", "white"),
         customColor: normalizeHex(value("custom_spacing_color", "#808080")),
-        sizeReference: value("size_reference", "first"),
+        sizeReference: value("size_reference", 1),
         sizeMegapixels: Math.max(0, Number(value("size_megapixels", 0)) || 0),
         sizeDivisibleBy: Math.max(1, Math.trunc(Number(value("size_divisible_by", 32)) || 32)),
     };
@@ -1801,7 +1803,8 @@ function restoreInvalidWidgetValues(node) {
         const choices = widget.options?.values;
         const value = widget.value;
         const invalid = value === undefined || value === null
-            || (Array.isArray(choices) && choices.length > 0 && !choices.includes(value));
+            || (Array.isArray(choices) && choices.length > 0 && !choices.includes(value))
+            || (widget.type === "number" && !Number.isFinite(Number(value)));
         if (!invalid) continue;
         widget.value = widget.name in LEGACY_VALUES ? LEGACY_VALUES[widget.name] : defaults.get(widget.name);
         restored.push(widget.name);
