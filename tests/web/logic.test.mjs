@@ -654,7 +654,7 @@ describe("copy original image", () => {
         // Off a card only the node-wide entry is offered, not the per-image ones.
         const off = [];
         nodeType.prototype.getExtraMenuOptions.call(node, { graph_mouse: [card(0).x + 65, card(0).y - 30] }, off);
-        assert.deepEqual(off.map((o) => o?.content ?? null), ["Copy stitched result", null]);
+        assert.deepEqual(off.map((o) => o?.content ?? null), ["Copy stitched result", "Show size panel (width / height outputs)", null]);
 
         const options = [];
         nodeType.prototype.getExtraMenuOptions.call(node, { graph_mouse: [card(0).x + 65, card(0).y + 46] }, options);
@@ -753,7 +753,7 @@ describe("copy the stitched result", () => {
         assert.equal(options[0].content, "Copy stitched result");
         const empty = [];
         nodeType.prototype.getExtraMenuOptions.call(plainNode(nodeType), { graph_mouse: [200, 40] }, empty);
-        assert.equal(empty.length, 0, "nothing to copy on an empty node");
+        assert.deepEqual(empty.map((o) => o?.content ?? null), ["Show size panel (width / height outputs)", null], "nothing to copy on an empty node");
     });
 });
 
@@ -1003,6 +1003,68 @@ describe("video frames", () => {
         assert.equal(picker.captureFileName({ filename: "x.webm" }, -1), "x_0s000.png");
         assert.equal(picker.formatTime(75.25), "01:15.250");
         assert.equal(picker.formatTime(NaN), "00:00.000");
+    });
+});
+
+describe("size panel", () => {
+    const SIZE_NAMES = ["size_reference", "size_megapixels", "size_divisible_by"];
+    // Centre of the title-bar pill: x = 420 − 34 − 64 + 32, y in the 30px title above the body.
+    const TITLE_BUTTON = [354, -15];
+
+    it("is off by default, toggles from the title bar and shows the outputs' size", async () => {
+        const node = plainNode(nodeType);
+        dom.imageSizes.set("tall.png", [1440, 2560]);
+        setImages(node, [item("tall.png")]);
+        widget(node, "size_megapixels").value = 0.8;
+        paintedCalls(nodeType, node);
+        await waitForThumbs(node);
+        for (const name of SIZE_NAMES) assert.equal(widget(node, name).options.hidden, true, `${name} hidden while off`);
+        const before = node.size[1];
+        assert.ok(paintedText(nodeType, node).includes("📐 Size"), "the title-bar pill is drawn");
+
+        assert.equal(click(node, TITLE_BUTTON), true);
+        assert.equal(node.properties.multi_stitch_size_panel, true);
+        assert.equal(node.size[1], before + 176 + 8, "the node grows by the panel");
+        for (const name of SIZE_NAMES) assert.equal(widget(node, name).options.hidden, false, `${name} shown while on`);
+        const painted = paintedText(nodeType, node);
+        assert.ok(painted.includes("672 x 1184  |  9:16  |  0.80 MP  |  divisible by 32"), painted.join(" | "));
+        assert.ok(painted.includes("from image 1 (1440×2560)"));
+        assert.ok(painted.includes("📐 Size ✓"));
+
+        click(node, TITLE_BUTTON);
+        assert.equal(node.properties.multi_stitch_size_panel, false);
+        assert.equal(node.size[1], before);
+    });
+
+    it("follows the reference choice and the step, and is offered in the context menu", async () => {
+        const node = plainNode(nodeType);
+        dom.imageSizes.set("a.png", [100, 100]);
+        dom.imageSizes.set("b.png", [300, 150]);
+        setImages(node, [item("a.png"), item("b.png")]);
+        node.properties.multi_stitch_size_panel = true;
+        widget(node, "size_reference").value = "largest";
+        widget(node, "size_divisible_by").value = 64;
+        paintedCalls(nodeType, node);
+        await waitForThumbs(node);
+        // 300×150: 300/64 = 4.69 → 5, 150/64 = 2.34 → 2.
+        assert.ok(paintedText(nodeType, node).includes("320 x 128  |  2:1  |  0.04 MP  |  divisible by 64"));
+        assert.ok(paintedText(nodeType, node).includes("from image 2 (300×150)"));
+
+        const options = [];
+        nodeType.prototype.getExtraMenuOptions.call(node, { graph_mouse: [200, 40] }, options);
+        const entry = options.find((o) => /size panel/i.test(o?.content || ""));
+        assert.equal(entry.content, "Hide size panel");
+        entry.callback();
+        assert.equal(node.properties.multi_stitch_size_panel, false);
+        for (const name of SIZE_NAMES) assert.equal(widget(node, name).options.hidden, true);
+    });
+
+    it("explains itself on an empty node instead of hiding", () => {
+        const node = plainNode(nodeType);
+        node.properties.multi_stitch_size_panel = true;
+        const painted = paintedText(nodeType, node);
+        assert.ok(painted.some((t) => /Add an image: its size becomes the width \/ height outputs/.test(t)));
+        assert.equal(node.size[1], 148 + 92 + 12 + 176 + 8);
     });
 });
 

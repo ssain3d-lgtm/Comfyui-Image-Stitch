@@ -19,7 +19,9 @@ import {
     normalizeCrop,
     normalizeTransform,
     redoImages,
+    referenceSize,
     renderTransformedImage,
+    sizeReferenceIndex,
     resetHistory,
     safeJsonParse,
     setWidgetHidden,
@@ -60,6 +62,15 @@ const VIDEO_DELETE_ROUTE = "/multi_stitch/video/delete";
 const VIDEO_POSTER_SIDE = 512;
 const VIDEO_EXTENSIONS = /\.(mp4|m4v|webm|mov|mkv|ogv|ogg|avi|mpe?g|3gp|ts|wmv)$/i;
 const nodesWithVideos = new Set();
+// The size panel: an optional strip under the list showing the width and
+// height the node outputs — the reference image's size, rescaled to a
+// megapixel target and snapped to a multiple — as a box of that aspect with
+// a readout, like a resize node's. Toggled from the title bar; saved with the
+// workflow; its three widgets show only while it is on.
+const SIZE_PANEL_H = 176;
+const SIZE_PANEL_BOX_H = 132;
+const SIZE_WIDGETS = ["size_reference", "size_megapixels", "size_divisible_by"];
+const titleHeight = () => globalThis.LiteGraph?.NODE_TITLE_HEIGHT || 30;
 // One toolbar row under the status line holds every action, so no widget
 // rows are spent on buttons.
 const TOOLBAR_H = 24;
@@ -125,7 +136,147 @@ function rowsOf(node) {
 }
 
 function heightForRows(node, rows) {
-    return listTop(node) + rows * ROW_H - THUMB_GAP + 12;
+    return listTop(node) + rows * ROW_H - THUMB_GAP + 12 + (sizePanelEnabled(node) ? SIZE_PANEL_H + 8 : 0);
+}
+
+function sizePanelEnabled(node) {
+    return node.properties?.multi_stitch_size_panel === true;
+}
+
+function sizePanelRect(node) {
+    if (!sizePanelEnabled(node)) return null;
+    return { x: 8, y: listTop(node) + rowsOf(node) * ROW_H - THUMB_GAP + 8, w: nodeWidth(node) - 16, h: SIZE_PANEL_H };
+}
+
+function toggleSizePanel(node) {
+    node.properties ||= {};
+    node.properties.multi_stitch_size_panel = !sizePanelEnabled(node);
+    syncConditionalWidgets(node);
+    updateNodeSize(node);
+    scheduleNodeLayout(node);
+    node.graph?.setDirtyCanvas(true, true);
+}
+
+// The toggle in the title bar, left of the frontend's help badge at the
+// right end (the title runs from -titleHeight() to 0 in node space).
+function sizeButtonRect(node) {
+    const title = titleHeight();
+    const w = 64;
+    const h = 20;
+    return { x: nodeWidth(node) - 34 - w, y: -title + Math.round((title - h) / 2), w, h };
+}
+
+function drawSizeButton(ctx, node) {
+    const r = sizeButtonRect(node);
+    const on = sizePanelEnabled(node);
+    ctx.save();
+    ctx.fillStyle = on ? "rgba(74,222,128,.22)" : "rgba(255,255,255,.10)";
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.strokeStyle = on ? "#4ade80" : "rgba(255,255,255,.35)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+    ctx.fillStyle = on ? "#c9f7d9" : "#dcdcdc";
+    ctx.font = "11px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(on ? "📐 Size ✓" : "📐 Size", r.x + r.w / 2, r.y + 14);
+    ctx.restore();
+}
+
+function gcd(a, b) {
+    while (b) [a, b] = [b, a % b];
+    return a;
+}
+
+function aspectLabel(w, h) {
+    const g = gcd(w, h) || 1;
+    const a = w / g;
+    const b = h / g;
+    return a <= 64 && b <= 64 ? `${a}:${b}` : `${(w / h).toFixed(2)}:1`;
+}
+
+// What the width/height outputs will be for the current list and settings,
+// from the same maths as the backend (referenceSize mirrors _reference_size).
+// Null while a thumbnail is still loading.
+function sizeReadout(node) {
+    const items = node._msImages || [];
+    if (!items.length) return null;
+    const known = items.map((item) => {
+        const state = loadTransformedThumb(node, item);
+        if (state.failed) return "failed";
+        return transformedCropDims(node, item);
+    });
+    if (known.some((d) => d === null)) return null;
+    const fallback = known.find((d) => d && d !== "failed") || { w: 256, h: 256 };
+    const dims = known.map((d) => (d === "failed" ? fallback : d));
+    const settings = readSettings(node);
+    try {
+        const size = referenceSize(dims, settings.sizeReference, settings.sizeMegapixels, settings.sizeDivisibleBy);
+        const index = sizeReferenceIndex(dims, settings.sizeReference);
+        return {
+            ...size, index, ref: dims[index], ratio: aspectLabel(dims[index].w, dims[index].h),
+            megapixels: size.w * size.h / 1_000_000, step: settings.sizeDivisibleBy,
+        };
+    } catch (_) {
+        return null;
+    }
+}
+
+function drawSizePanel(ctx, node, rect) {
+    ctx.save();
+    ctx.fillStyle = "#0c110d";
+    ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+    ctx.strokeStyle = "#2f6b45";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(rect.x + 0.5, rect.y + 0.5, rect.w - 1, rect.h - 1);
+    const box = { x: rect.x + 8, y: rect.y + 8, w: rect.w - 16, h: SIZE_PANEL_BOX_H };
+    ctx.fillStyle = "#050705";
+    ctx.fillRect(box.x, box.y, box.w, box.h);
+    ctx.font = "12px sans-serif";
+    ctx.textAlign = "center";
+
+    const readout = sizeReadout(node);
+    if (!readout) {
+        ctx.fillStyle = "#7fb08f";
+        ctx.fillText(
+            node._msImages?.length ? "Loading…" : "Add an image: its size becomes the width / height outputs",
+            rect.x + rect.w / 2, box.y + box.h / 2 + 4,
+        );
+        ctx.fillText("width / height outputs", rect.x + rect.w / 2, rect.y + rect.h - 12);
+        ctx.restore();
+        return;
+    }
+
+    const inset = 10;
+    const scale = Math.min((box.w - inset * 2) / readout.w, (box.h - inset * 2) / readout.h);
+    const w = Math.max(2, readout.w * scale);
+    const h = Math.max(2, readout.h * scale);
+    const x = box.x + (box.w - w) / 2;
+    const y = box.y + (box.h - h) / 2;
+    ctx.fillStyle = "rgba(74,222,128,.10)";
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = "rgba(74,222,128,.35)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x + w / 2, y);
+    ctx.lineTo(x + w / 2, y + h);
+    ctx.moveTo(x, y + h / 2);
+    ctx.lineTo(x + w, y + h / 2);
+    ctx.stroke();
+    ctx.strokeStyle = "#4ade80";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x, y, w, h);
+
+    ctx.fillStyle = "#e9ffef";
+    ctx.font = "13px sans-serif";
+    ctx.fillText(
+        `${readout.w} x ${readout.h}  |  ${readout.ratio}  |  ${readout.megapixels.toFixed(2)} MP  |  divisible by ${readout.step}`,
+        rect.x + rect.w / 2, rect.y + rect.h - 12,
+    );
+    ctx.textAlign = "left";
+    ctx.font = "11px sans-serif";
+    ctx.fillStyle = "#7fb08f";
+    ctx.fillText(`from image ${readout.index + 1} (${readout.ref.w}×${readout.ref.h})`, box.x + 6, box.y + 14);
+    ctx.restore();
 }
 
 // The window onto the thumbnail rows is the whole list: every row is shown,
@@ -311,6 +462,9 @@ function readSettings(node) {
         outputLimitPx: Math.max(1, Number(value("output_limit_px", 2048)) || 2048),
         spacingColor: value("spacing_color", "white"),
         customColor: normalizeHex(value("custom_spacing_color", "#808080")),
+        sizeReference: value("size_reference", "first"),
+        sizeMegapixels: Math.max(0, Number(value("size_megapixels", 0)) || 0),
+        sizeDivisibleBy: Math.max(1, Math.trunc(Number(value("size_divisible_by", 32)) || 32)),
     };
 }
 
@@ -625,6 +779,8 @@ function drawThumbs(node, ctx) {
         ctx.textAlign = "center";
         ctx.fillText("Paste / Drop / Add images or a video", r.x + r.w / 2, r.y + r.h / 2 - 4);
         ctx.fillText("click an image to edit · drag ≡ to reorder", r.x + r.w / 2, r.y + r.h / 2 + 12);
+        const panel = sizePanelRect(node);
+        if (panel) drawSizePanel(ctx, node, panel);
         ctx.restore();
         return;
     }
@@ -646,6 +802,9 @@ function drawThumbs(node, ctx) {
         if (r.visible) drawVideoCard(ctx, entry, r);
     });
     ctx.restore();
+
+    const panel = sizePanelRect(node);
+    if (panel) drawSizePanel(ctx, node, panel);
     ctx.restore();
 }
 
@@ -1432,6 +1591,7 @@ function syncConditionalWidgets(node) {
     for (const name of Object.keys(ADVANCED_DEFAULTS)) {
         setWidgetVisible(getWidget(node, name), relevant[name] && (open || active.includes(name)));
     }
+    for (const name of SIZE_WIDGETS) setWidgetVisible(getWidget(node, name), sizePanelEnabled(node));
 }
 
 function updateCustomColorButton(node) {
@@ -1704,6 +1864,7 @@ app.registerExtension({
             syncConditionalWidgets(this);
             updateNodeSize(this);
             drawThumbs(this, ctx);
+            if (!this.flags?.collapsed) drawSizeButton(ctx, this);
         };
 
         const widgetChanged = nodeType.prototype.onWidgetChanged;
@@ -1723,6 +1884,11 @@ app.registerExtension({
             const primary = event?.button === undefined || event.button === 0;
             if (primary && !this.flags?.collapsed) {
                 const [x, y] = localPos(this, event, pos, graphCanvas);
+                if (inRect(x, y, sizeButtonRect(this))) {
+                    toggleSizePanel(this);
+                    stopEvent(event, graphCanvas);
+                    return true;
+                }
                 const hit = Object.entries(toolbarControls(this)).find(([, rect]) => inRect(x, y, rect))?.[0];
                 if (hit) {
                     if (hit === "add") {
@@ -1817,6 +1983,10 @@ app.registerExtension({
                     callback: () => copyStitchedResult(this),
                 });
             }
+            extra.push({
+                content: sizePanelEnabled(this) ? "Hide size panel" : "Show size panel (width / height outputs)",
+                callback: () => toggleSizePanel(this),
+            });
             if (extra.length && Array.isArray(options)) options.unshift(...extra, null);
             return r;
         };

@@ -95,15 +95,17 @@ export function preparedStripDims(dims, direction, matchImageSize, matchReferenc
 // rescaled to a megapixel target when one is set, each side snapped to the
 // nearest multiple of the step (never below it). Half-even rounding, like
 // Python's round().
-export function referenceSize(dimensions, sizeReference, megapixels, divisibleBy) {
+export function sizeReferenceIndex(dimensions, sizeReference) {
     requireChoice("size_reference", sizeReference, SIZE_REFERENCES);
     if (!dimensions.length) throw new RangeError("at least one image is required");
-    let index = 0;
-    if (sizeReference !== "first") {
-        const areas = dimensions.map((d) => d.w * d.h);
-        const target = sizeReference === "largest" ? Math.max(...areas) : Math.min(...areas);
-        index = areas.indexOf(target);
-    }
+    if (sizeReference === "first") return 0;
+    const areas = dimensions.map((d) => d.w * d.h);
+    const target = sizeReference === "largest" ? Math.max(...areas) : Math.min(...areas);
+    return areas.indexOf(target);
+}
+
+export function referenceSize(dimensions, sizeReference, megapixels, divisibleBy) {
+    const index = sizeReferenceIndex(dimensions, sizeReference);
     let width = dimensions[index].w;
     let height = dimensions[index].h;
     const target = Number(megapixels) || 0;
