@@ -30,6 +30,7 @@ NODE = shutil.which("node")
 RUNNER = """
 import {
     normalizeCrop, gridShape, cropSourceToView, cropViewToSource, layoutPlacements, limitedSize, cropPixelBox,
+    referenceSize,
 } from "./pkg/web/shared.js";
 import { readFileSync } from "node:fs";
 const cases = JSON.parse(readFileSync(process.argv[2], "utf8"));
@@ -42,6 +43,7 @@ const out = {
         layoutPlacements(dims.map(([w, h]) => ({ w, h })), layout, direction, match, gc, sw, cw, ch, ref)),
     limit: (cases.limit || []).map(([w, h, mode, px]) => limitedSize(w, h, mode, px)),
     box: (cases.box || []).map(([w, h, c]) => cropPixelBox(w, h, c)),
+    size: (cases.size || []).map(([dims, ref, mp, d]) => referenceSize(dims.map(([w, h]) => ({ w, h })), ref, mp, d)),
 };
 process.stdout.write(JSON.stringify(out));
 """
@@ -184,6 +186,24 @@ class FrontendParityTests(unittest.TestCase):
         for (w, h, mode, px), js in zip(limit_cases, got["limit"]):
             with self.subTest(limit=(w, h, mode, px)):
                 self.assertEqual((js["w"], js["h"]), ms._limited_size(w, h, mode, px))
+
+    @unittest.skipUnless(hasattr(ms, "_reference_size"), "backend size outputs not merged yet")
+    def test_reference_size_matches_python(self):
+        """The width/height outputs: reference choice, megapixel rescale, half-even snapping."""
+        rng = random.Random(777)
+        cases = []
+        for _ in range(400):
+            dims = [(rng.randint(1, 4000), rng.randint(1, 4000)) for _ in range(rng.randint(1, 6))]
+            cases.append([dims, rng.choice(ms._SIZE_REFERENCES), rng.choice([0, 0.5, 0.8, 1, 2.25, 12]),
+                          rng.choice([1, 8, 16, 32, 64])])
+        # Exact halves, where half-even rounding differs from Math.round.
+        cases += [[[(48, 48)], "first", 0, 32], [[(80, 80)], "first", 0, 32], [[(1440, 2560)], "first", 0.8, 32],
+                  [[(10, 10), (20, 5), (5, 20)], "largest", 0, 8], [[(100, 100), (50, 200)], "smallest", 1, 64],
+                  [[(3, 3)], "first", 0, 16]]
+        got = self.run_js({"size": cases})
+        for (dims, ref, mp, d), js in zip(cases, got["size"]):
+            with self.subTest(size=(dims, ref, mp, d)):
+                self.assertEqual((js["w"], js["h"]), ms._reference_size(dims, ref, mp, d))
 
     def test_crop_pixel_box_matches_python(self):
         """cropPixelBox mirrors _crop_box, half-even rounding and 1px minimum included."""

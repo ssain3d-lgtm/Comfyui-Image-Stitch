@@ -9,7 +9,10 @@ export const uploads = [];
 export const uploadTargets = [];
 // Every fetchApi call, in order: {path, options}.
 export const calls = [];
-export const knobs = { delayMs: 0, failNext: false };
+// `serverVideo` false makes the PyAV routes answer 501, as a server without
+// PyAV would; `serverVideoInfo` is what /multi_stitch/video/info returns.
+export const knobs = { delayMs: 0, failNext: false, serverVideo: true, serverVideoInfo: { duration: 2, fps: 10, width: 320, height: 180, frames: 20, rotation: 0 } };
+let serverCaptures = 0;
 
 export const api = {
     apiURL(path) {
@@ -23,6 +26,28 @@ export const api = {
     },
     async fetchApi(path, options = {}) {
         calls.push({ path, options });
+        if (path.startsWith("/multi_stitch/video/info")) {
+            if (!knobs.serverVideo) {
+                return { ok: false, status: 501, statusText: "Not Implemented", json: async () => ({ error: "PyAV is not installed; run: pip install av" }) };
+            }
+            return { ok: true, status: 200, statusText: "OK", json: async () => ({ ...knobs.serverVideoInfo }) };
+        }
+        if (path === "/multi_stitch/video/capture") {
+            if (!knobs.serverVideo) {
+                return { ok: false, status: 501, statusText: "Not Implemented", json: async () => ({ error: "PyAV is not installed; run: pip install av" }) };
+            }
+            const body = JSON.parse(options.body || "{}");
+            serverCaptures += 1;
+            const name = `multi_stitch_server_${serverCaptures}.png`;
+            uploads.push(name);
+            return {
+                ok: true, status: 200, statusText: "OK",
+                json: async () => ({
+                    name, subfolder: "multi_stitch", type: "input",
+                    width: knobs.serverVideoInfo.width, height: knobs.serverVideoInfo.height, time: body.time,
+                }),
+            };
+        }
         if (path === "/multi_stitch/video/delete") {
             const body = JSON.parse(options.body || "{}");
             return {

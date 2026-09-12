@@ -28,3 +28,6 @@ Thumbs.db
 # Frontend test tooling
 node_modules/
 test-results/
+
+# Claude Code agent worktrees
+.claude/

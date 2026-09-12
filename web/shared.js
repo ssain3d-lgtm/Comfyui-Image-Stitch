@@ -42,6 +42,7 @@ export function gridShape(count, gridColumns, direction) {
 export const DIRECTIONS = ["right", "down", "left", "up"];
 export const LAYOUT_MODES = ["strip", "grid"];
 export const MATCH_REFERENCES = ["first", "largest", "smallest"];
+export const SIZE_REFERENCES = ["first", "largest", "smallest"];
 export const OUTPUT_LIMITS = ["none", "max_width", "max_height", "max_long_side"];
 
 // Python's round() is half-to-even; Math.round is half-up. The backend sizes
@@ -87,6 +88,35 @@ export function preparedStripDims(dims, direction, matchImageSize, matchReferenc
         }
         return { w: ref.w, h: Math.max(1, roundHalfEven(h * (ref.w / w))) };
     });
+}
+
+// Mirrors _reference_size: the width/height outputs — one image's own size
+// (the first, or the largest / smallest by area, earlier wins a tie),
+// rescaled to a megapixel target when one is set, each side snapped to the
+// nearest multiple of the step (never below it). Half-even rounding, like
+// Python's round().
+export function referenceSize(dimensions, sizeReference, megapixels, divisibleBy) {
+    requireChoice("size_reference", sizeReference, SIZE_REFERENCES);
+    if (!dimensions.length) throw new RangeError("at least one image is required");
+    let index = 0;
+    if (sizeReference !== "first") {
+        const areas = dimensions.map((d) => d.w * d.h);
+        const target = sizeReference === "largest" ? Math.max(...areas) : Math.min(...areas);
+        index = areas.indexOf(target);
+    }
+    let width = dimensions[index].w;
+    let height = dimensions[index].h;
+    const target = Number(megapixels) || 0;
+    if (target > 0) {
+        const scale = Math.sqrt(target * 1_000_000 / (width * height));
+        width *= scale;
+        height *= scale;
+    }
+    const step = Math.max(1, Math.trunc(Number(divisibleBy) || 1));
+    return {
+        w: Math.max(step, roundHalfEven(width / step) * step),
+        h: Math.max(step, roundHalfEven(height / step) * step),
+    };
 }
 
 // Mirrors _fit_size.

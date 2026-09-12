@@ -2,9 +2,18 @@
 // and capture the frame being shown, at the video's native size. The video
 // is a session-only helper (see multi_stitch.js); every capture is handed to
 // `hooks.onCapture(canvas, time)`, which uploads it as an ordinary image.
+import { api } from "../../scripts/api.js";
 import { imageUrl } from "./shared.js";
 
 const DEFAULT_FRAME_DURATION = 1 / 30;
+// Server mode: frames come from PyAV on the ComfyUI server instead of the
+// browser's decoder — the way in for a codec the browser cannot play, and
+// an option for a decoder-exact frame when it can.
+const SERVER_INFO_ROUTE = "/multi_stitch/video/info";
+const SERVER_FRAME_ROUTE = "/multi_stitch/video/frame";
+const SERVER_CAPTURE_ROUTE = "/multi_stitch/video/capture";
+const SERVER_PREVIEW_SIDE = 720;
+const SERVER_PREVIEW_DELAY_MS = 120;
 
 let styleInstalled = false;
 
@@ -19,6 +28,10 @@ function installStyles() {
 .ms-video-head .info{font-size:12px;color:#aaa;font-weight:400}
 .ms-video-stage{min-height:240px;display:flex;align-items:center;justify-content:center;padding:12px;background:#111}
 .ms-video-stage video{max-width:100%;max-height:60vh;background:#000}
+.ms-video-stage .server-frame{max-width:100%;max-height:56vh;background:#000;display:none}
+.ms-video-stage .server-box{display:none;flex-direction:column;align-items:center;gap:8px;width:100%}
+.ms-video-stage .server-scrub{width:min(900px,90%)}
+.ms-video-controls label.server-toggle{font-size:12px;color:#cfcfcf;display:flex;gap:6px;align-items:center}
 .ms-video-controls{display:flex;flex-wrap:wrap;gap:9px;align-items:center;padding:12px 16px;border-top:1px solid #3d3d3d}
 .ms-video-controls button,.ms-video-controls input{background:#303134;color:#eee;border:1px solid #5f6368;border-radius:7px;padding:7px 11px;font-size:13px}
 .ms-video-controls button{cursor:pointer}.ms-video-controls button:hover{background:#3c4043}
@@ -96,7 +109,10 @@ export function openFramePicker(node, entry, hooks = {}) {
           <span>Capture frames — ${escapeHtml(entry.name || entry.filename || "video")}</span>
           <span class="info">loading…</span>
         </div>
-        <div class="ms-video-stage"><video controls muted playsinline preload="auto"></video></div>
+        <div class="ms-video-stage">
+          <video controls muted playsinline preload="auto"></video>
+          <div class="server-box"><img class="server-frame" alt=""><input class="server-scrub" type="range" min="0" max="1000" step="1" value="0"></div>
+        </div>
         <div class="ms-video-controls">
           <button class="step-back10" title="10 frames back (Shift+←)">⏮ 10</button>
           <button class="step-back" title="Previous frame (←)">◀ 1</button>
@@ -105,6 +121,7 @@ export function openFramePicker(node, entry, hooks = {}) {
           <button class="step-fwd10" title="10 frames forward (Shift+→)">10 ⏭</button>
           <span class="ms-video-time">00:00.000</span>
           <label class="ms-video-hint">fps <input class="fps" type="number" min="1" max="240" step="0.001" placeholder="auto"></label>
+          <label class="server-toggle" title="Decode the frame on the ComfyUI server (PyAV): exact to the frame, any codec ffmpeg reads"><input class="server-capture" type="checkbox"> server capture</label>
           <span class="ms-video-spacer"></span>
           <button class="primary capture" title="Capture this frame (Enter)">Capture</button>
           <button class="capture-done" title="Capture this frame, then remove the video">Capture &amp; Done</button>
@@ -118,6 +135,10 @@ export function openFramePicker(node, entry, hooks = {}) {
     document.body.appendChild(overlay);
 
     const video = overlay.querySelector("video");
+    const serverBox = overlay.querySelector(".server-box");
+    const serverFrame = overlay.querySelector(".server-frame");
+    const serverScrub = overlay.querySelector(".server-scrub");
+    const serverToggle = overlay.querySelector("input.server-capture");
     const info = overlay.querySelector(".info");
     const timeLabel = overlay.querySelector(".ms-video-time");
     const status = overlay.querySelector(".ms-video-status");
@@ -137,6 +158,10 @@ export function openFramePicker(node, entry, hooks = {}) {
         probing: false,
         pendingStep: null,
         hasFrameCallback: typeof video.requestVideoFrameCallback === "function",
+        // Server mode (PyAV): `active` replaces the <video> with server-rendered
+        // previews; `capture` alone asks the server for the frame while the
+        // browser keeps showing the video.
+        server: { active: false, capture: false, available: null, info: null, time: 0, request: 0, timer: null },
     };
     const samples = [];
     let lastPlayingTime = null;
@@ -145,13 +170,21 @@ export function openFramePicker(node, entry, hooks = {}) {
         status.textContent = message || "";
         status.className = `ms-video-status${isError ? " error" : ""}`;
     };
-    const duration = () => (Number.isFinite(video.duration) && video.duration > 0 ? video.duration : state.duration);
+    const server = state.server;
+    const duration = () => {
+        if (server.active) return server.info?.duration || 0;
+        return Number.isFinite(video.duration) && video.duration > 0 ? video.duration : state.duration;
+    };
     const frameDuration = () => {
         const typed = Number(fpsInput.value);
         if (typed > 0) return 1 / typed;
+        if (server.active && server.info?.fps > 0) return 1 / server.info.fps;
         return state.detectedFrameDuration || DEFAULT_FRAME_DURATION;
     };
-    const currentTime = () => (state.hasFrameCallback ? state.mediaTime : (video.currentTime || 0));
+    const currentTime = () => {
+        if (server.active) return server.time;
+        return state.hasFrameCallback ? state.mediaTime : (video.currentTime || 0);
+    };
     const updateTime = () => {
         const fd = frameDuration();
         const t = currentTime();
@@ -159,12 +192,120 @@ export function openFramePicker(node, entry, hooks = {}) {
     };
     const updateInfo = () => {
         const parts = [];
-        if (video.videoWidth) parts.push(`${video.videoWidth}×${video.videoHeight}`);
+        const width = server.active ? server.info?.width : video.videoWidth;
+        const height = server.active ? server.info?.height : video.videoHeight;
+        if (width) parts.push(`${width}×${height}`);
         if (duration() > 0) parts.push(formatTime(duration()));
         const fps = 1 / frameDuration();
-        parts.push(`${Number.isInteger(fps) ? fps : fps.toFixed(3)} fps${fpsInput.value ? "" : state.detectedFrameDuration ? " (detected)" : " (assumed)"}`);
+        const fpsNote = fpsInput.value ? "" : server.active ? " (server)" : state.detectedFrameDuration ? " (detected)" : " (assumed)";
+        parts.push(`${Number.isInteger(fps) ? fps : fps.toFixed(3)} fps${fpsNote}`);
+        if (server.active) parts.push("server decode");
         parts.push(`${state.captures} captured`);
         info.textContent = parts.join("  ·  ");
+    };
+
+    // --- server mode -------------------------------------------------------
+    const serverQuery = (extra = {}) => new URLSearchParams({ filename: entry.filename, ...extra }).toString();
+    const fetchServerInfo = async () => {
+        if (server.info) return server.info;
+        if (server.available === false) return null;
+        try {
+            const response = await api.fetchApi(`${SERVER_INFO_ROUTE}?${serverQuery()}`);
+            const body = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                server.available = false;
+                server.error = body?.error || `server decode unavailable (${response.status})`;
+                return null;
+            }
+            server.info = body;
+            server.available = true;
+            return body;
+        } catch (error) {
+            server.available = false;
+            server.error = String(error?.message || error);
+            return null;
+        }
+    };
+    const showServerFrame = () => {
+        clearTimeout(server.timer);
+        server.timer = setTimeout(() => {
+            server.timer = null;
+            server.request += 1;
+            serverFrame.src = api.apiURL(`${SERVER_FRAME_ROUTE}?${serverQuery({
+                time: server.time.toFixed(3), max_side: String(SERVER_PREVIEW_SIDE), r: String(server.request),
+            })}`);
+        }, SERVER_PREVIEW_DELAY_MS);
+    };
+    const serverSeek = (time) => {
+        const max = server.info?.duration > 0 ? Math.max(0, server.info.duration - 0.001) : Math.max(0, time);
+        server.time = Math.max(0, Math.min(max, time));
+        if (server.info?.duration > 0) serverScrub.value = String(Math.round(server.time / server.info.duration * 1000));
+        updateTime();
+        showServerFrame();
+    };
+    const enterServerMode = async (reason) => {
+        if (server.active) return true;
+        const meta = await fetchServerInfo();
+        if (state.closed) return false;
+        if (!meta) {
+            flash(`${reason} — and the server cannot decode it either (${server.error || "PyAV unavailable"}). Convert it to MP4 (H.264) or WebM.`, true);
+            captureButton.disabled = captureDoneButton.disabled = true;
+            return false;
+        }
+        server.active = true;
+        server.capture = true;
+        serverToggle.checked = true;
+        serverToggle.disabled = true;
+        try { video.pause?.(); } catch (_) { /* switching decoders */ }
+        video.style.display = "none";
+        serverBox.style.display = "flex";
+        serverFrame.style.display = "block";
+        entry.width = meta.width || entry.width;
+        entry.height = meta.height || entry.height;
+        entry.duration = meta.duration || entry.duration;
+        captureButton.disabled = captureDoneButton.disabled = false;
+        flash(`${reason}: frames are decoded on the server (PyAV) instead.`);
+        serverSeek(Math.min(server.time, meta.duration || 0));
+        updateInfo();
+        return true;
+    };
+    const captureOnServer = async (time) => {
+        const response = await api.fetchApi(SERVER_CAPTURE_ROUTE, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ filename: entry.filename, time }),
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body?.error || `server capture failed (${response.status})`);
+        return body;
+    };
+    serverScrub.addEventListener("input", () => {
+        if (server.info?.duration > 0) serverSeek(Number(serverScrub.value) / 1000 * server.info.duration);
+    });
+    serverFrame.addEventListener("error", () => {
+        if (server.active) flash("The server could not render this frame.", true);
+    });
+    serverToggle.addEventListener("change", async () => {
+        if (server.active) return;
+        if (!serverToggle.checked) {
+            server.capture = false;
+            flash("");
+            return;
+        }
+        const meta = await fetchServerInfo();
+        if (!meta) {
+            serverToggle.checked = false;
+            server.capture = false;
+            flash(`Server capture unavailable: ${server.error || "PyAV is not installed on the server"}.`, true);
+            return;
+        }
+        server.capture = true;
+        flash("Captures are decoded on the server at the frame shown (exact to the frame).");
+    });
+    const setServerCapture = async (on) => {
+        serverToggle.checked = !!on;
+        await serverToggle.handlers?.change?.[0]?.() ?? serverToggle.dispatchEvent?.(new Event("change"));
+        return server.capture;
     };
 
     const onFrame = (_now, metadata) => {
@@ -187,6 +328,10 @@ export function openFramePicker(node, entry, hooks = {}) {
     const maxTime = () => (duration() > 0 ? Math.max(0, duration() - 0.001) : Number.POSITIVE_INFINITY);
     const seekTo = (time) => {
         state.pendingStep = null;
+        if (server.active) {
+            serverSeek(time);
+            return;
+        }
         video.pause?.();
         video.currentTime = Math.max(0, Math.min(maxTime(), time));
     };
@@ -197,6 +342,12 @@ export function openFramePicker(node, entry, hooks = {}) {
     const step = (frames) => {
         const fd = frameDuration();
         const from = currentTime();
+        if (server.active) {
+            // Server frames sit exactly on the frame grid: land in the middle.
+            const index = Math.round(from / fd) + frames;
+            serverSeek(Math.max(0, index) * fd + fd / 2);
+            return;
+        }
         seekTo(from + frames * fd + (state.hasFrameCallback ? fd / 2 : 0));
         if (state.hasFrameCallback) state.pendingStep = { from, direction: Math.sign(frames) || 1, tries: 0 };
     };
@@ -226,18 +377,23 @@ export function openFramePicker(node, entry, hooks = {}) {
         if (duration() > 0 && video.readyState >= 2) probeFrameRate();
     };
     const togglePlay = () => {
+        if (server.active) return;
         if (video.paused) video.play?.()?.catch?.(() => {});
         else video.pause?.();
     };
 
-    const addShot = (canvas, time) => {
+    const addShot = (source, time) => {
         const shot = document.createElement("div");
         shot.className = "shot";
         const thumb = document.createElement("canvas");
-        const scale = Math.min(1, 64 / Math.max(1, canvas.height));
-        thumb.width = Math.max(1, Math.round(canvas.width * scale));
-        thumb.height = Math.max(1, Math.round(canvas.height * scale));
-        thumb.getContext("2d").drawImage(canvas, 0, 0, thumb.width, thumb.height);
+        const sourceW = source.naturalWidth || source.width || 1;
+        const sourceH = source.naturalHeight || source.height || 1;
+        const scale = Math.min(1, 64 / Math.max(1, sourceH));
+        thumb.width = Math.max(1, Math.round(sourceW * scale));
+        thumb.height = Math.max(1, Math.round(sourceH * scale));
+        try {
+            thumb.getContext("2d").drawImage(source, 0, 0, thumb.width, thumb.height);
+        } catch (_) { /* a preview that has not loaded yet: the strip entry stays blank */ }
         const label = document.createElement("span");
         label.textContent = formatTime(time);
         shot.append(thumb, label);
@@ -246,28 +402,38 @@ export function openFramePicker(node, entry, hooks = {}) {
 
     const capture = async () => {
         if (state.busy) return null;
-        if (video.readyState < 2) {
+        const onServer = server.active || server.capture;
+        if (!onServer && video.readyState < 2) {
             flash("The video is still loading.", true);
             return null;
         }
         const time = currentTime();
-        let canvas;
-        try {
-            canvas = captureVideoFrame(video);
-        } catch (error) {
-            flash(String(error?.message || error), true);
-            return null;
+        let canvas = null;
+        if (!onServer) {
+            try {
+                canvas = captureVideoFrame(video);
+            } catch (error) {
+                flash(String(error?.message || error), true);
+                return null;
+            }
         }
         state.busy = true;
         captureButton.disabled = captureDoneButton.disabled = true;
-        flash(`Capturing ${formatTime(time)}…`);
+        flash(`Capturing ${formatTime(time)}${onServer ? " on the server" : ""}…`);
         try {
-            const item = await hooks.onCapture?.(canvas, time);
+            let item;
+            if (onServer) {
+                const data = await captureOnServer(time);
+                item = await hooks.onServerFrame?.(data, time);
+                canvas = server.active ? serverFrame : safeVideoSnapshot(video);
+            } else {
+                item = await hooks.onCapture?.(canvas, time);
+            }
             state.captures += 1;
-            addShot(canvas, time);
+            if (canvas) addShot(canvas, time);
             updateInfo();
             flash(`Captured ${formatTime(time)} — image ${node._msImages?.length || state.captures} in the list.`);
-            return item ?? canvas;
+            return item ?? canvas ?? true;
         } catch (error) {
             flash(String(error?.message || error), true);
             return null;
@@ -281,6 +447,7 @@ export function openFramePicker(node, entry, hooks = {}) {
     const close = (removeVideo = false) => {
         if (state.closed) return;
         state.closed = true;
+        clearTimeout(server.timer);
         if (keyHandler) document.removeEventListener("keydown", keyHandler);
         try {
             video.pause?.();
@@ -335,8 +502,8 @@ export function openFramePicker(node, entry, hooks = {}) {
     });
     video.addEventListener("timeupdate", () => { if (!state.hasFrameCallback) { state.mediaTime = video.currentTime; updateTime(); } });
     video.addEventListener("error", () => {
-        flash("This browser cannot play the video (unsupported format or codec). Convert it to MP4 (H.264) or WebM.", true);
         captureButton.disabled = captureDoneButton.disabled = true;
+        enterServerMode("This browser cannot play the video");
     });
     fpsInput.addEventListener("input", () => { updateInfo(); updateTime(); });
 
@@ -363,10 +530,27 @@ export function openFramePicker(node, entry, hooks = {}) {
     };
     document.addEventListener("keydown", keyHandler);
 
-    video.src = entry.url || imageUrl(entry);
+    if (entry.serverOnly) {
+        // The poster load already showed the browser cannot decode this file.
+        enterServerMode("This browser cannot play the video");
+    } else {
+        video.src = entry.url || imageUrl(entry);
+    }
     updateTime();
 
-    return { overlay, video, state, seekTo, step, capture, close, currentTime, frameDuration };
+    return {
+        overlay, video, state, seekTo, step, capture, close, currentTime, frameDuration,
+        serverFrame, enterServerMode, setServerCapture,
+    };
+}
+
+// A copy of the frame the <video> shows, or null when it has none to give.
+function safeVideoSnapshot(video) {
+    try {
+        return captureVideoFrame(video);
+    } catch (_) {
+        return null;
+    }
 }
 
 function escapeHtml(text) {

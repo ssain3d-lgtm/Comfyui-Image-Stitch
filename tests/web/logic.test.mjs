@@ -818,6 +818,7 @@ describe("match reference", () => {
 });
 
 describe("video frames", () => {
+    const SERVER_PREVIEW_WAIT = 160;
     const frame = (w = 640, h = 360) => {
         const canvas = document.createElement("canvas");
         canvas.width = w;
@@ -920,6 +921,84 @@ describe("video frames", () => {
         nodeType.prototype.onRemoved.call(node);
         await tick(2);
         assert.deepEqual(deleteCalls(), [[d.filename]]);
+    });
+
+    it("falls back to server decoding when the browser cannot play the video", async () => {
+        const node = plainNode(nodeType);
+        const entry = { kind: "video", filename: "odd.mkv", name: "odd.mkv", subfolder: "multi_stitch_video", type: "temp" };
+        const served = [];
+        const handle = picker.openFramePicker(node, entry, { onServerFrame: (data, time) => { served.push({ data, time }); return data; } });
+        assert.equal(handle.state.server.active, false);
+        api.calls.length = 0;
+        // The <video> reports an error, as it does for a codec it cannot decode.
+        handle.video.handlers.error[0]();
+        await tick(5);
+        assert.equal(handle.state.server.active, true);
+        assert.ok(api.calls.some((c) => c.path.startsWith("/multi_stitch/video/info?filename=odd.mkv")));
+        assert.deepEqual([entry.width, entry.height, entry.duration], [320, 180, 2]);
+        assert.equal(handle.video.style.display, "none");
+
+        // Steps follow the server's frame rate and previews come from the server.
+        handle.step(1);
+        assert.ok(Math.abs(handle.currentTime() - 0.15) < 1e-9, `one 10 fps frame in: ${handle.currentTime()}`);
+        handle.seekTo(1.5);
+        assert.equal(handle.currentTime(), 1.5);
+        await tick(SERVER_PREVIEW_WAIT);
+        assert.match(handle.serverFrame.src, /\/multi_stitch\/video\/frame\?filename=odd\.mkv&time=1\.500&max_side=720/);
+
+        // A capture asks the server for the exact frame and hands the file to the node.
+        const result = await handle.capture();
+        assert.equal(served.length, 1);
+        assert.equal(served[0].time, 1.5);
+        assert.equal(served[0].data.name, api.uploads.at(-1));
+        assert.deepEqual([served[0].data.width, served[0].data.height], [320, 180]);
+        assert.equal(result, served[0].data);
+        const post = api.calls.find((c) => c.path === "/multi_stitch/video/capture");
+        assert.deepEqual(JSON.parse(post.options.body), { filename: "odd.mkv", time: 1.5 });
+        assert.equal(handle.state.captures, 1);
+        handle.close(false);
+    });
+
+    it("says so when neither the browser nor the server can decode the video", async () => {
+        const node = plainNode(nodeType);
+        const entry = { kind: "video", filename: "odd.mkv", name: "odd.mkv" };
+        const handle = picker.openFramePicker(node, entry, {});
+        api.knobs.serverVideo = false;
+        try {
+            handle.video.handlers.error[0]();
+            await tick(5);
+            assert.equal(handle.state.server.active, false);
+            assert.equal(handle.state.server.available, false);
+            assert.match(handle.overlay.querySelector(".ms-video-status").textContent, /server cannot decode it either.*PyAV/);
+            assert.equal(await handle.setServerCapture(true), false, "the checkbox cannot be turned on either");
+        } finally {
+            api.knobs.serverVideo = true;
+            handle.close(false);
+        }
+    });
+
+    it("can capture on the server while the browser shows the video", async () => {
+        const node = plainNode(nodeType);
+        const entry = { kind: "video", filename: "clip.mp4", name: "clip.mp4" };
+        const captured = [];
+        const served = [];
+        const handle = picker.openFramePicker(node, entry, {
+            onCapture: (canvas, time) => { captured.push(time); return { canvas }; },
+            onServerFrame: (data, time) => { served.push(time); return data; },
+        });
+        assert.equal(await handle.setServerCapture(true), true);
+        assert.equal(handle.state.server.active, false, "the browser keeps playing");
+        handle.state.mediaTime = 0.7;
+        handle.state.hasFrameCallback = true;
+        await handle.capture();
+        assert.deepEqual([captured, served], [[], [0.7]]);
+        assert.equal(await handle.setServerCapture(false), false);
+        handle.video.readyState = 2;
+        handle.video.videoWidth = 320;
+        handle.video.videoHeight = 180;
+        await handle.capture();
+        assert.deepEqual([captured, served], [[0.7], [0.7]]);
+        handle.close(false);
     });
 
     it("names captures after the video and formats times the way the cards show them", () => {
