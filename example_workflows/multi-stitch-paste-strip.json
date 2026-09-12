@@ -63,6 +63,18 @@
           "type": "IMAGE",
           "links": null,
           "slot_index": 1
+        },
+        {
+          "name": "width",
+          "type": "INT",
+          "links": null,
+          "slot_index": 2
+        },
+        {
+          "name": "height",
+          "type": "INT",
+          "links": null,
+          "slot_index": 3
         }
       ],
       "properties": {
@@ -86,7 +98,10 @@
         false,
         "placed",
         0,
-        "smallest"
+        "smallest",
+        "first",
+        0.0,
+        32
       ]
     },
     {

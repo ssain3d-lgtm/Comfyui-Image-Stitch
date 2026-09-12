@@ -317,8 +317,8 @@ class MultiStitchTests(unittest.TestCase):
         )
         self.assertEqual(package.WEB_DIRECTORY, "./web")
         node = package.NODE_CLASS_MAPPINGS["MultiStitchImages"]
-        self.assertEqual(node.RETURN_TYPES, ("IMAGE", "IMAGE"))
-        self.assertEqual(node.RETURN_NAMES, ("image", "cells"))
+        self.assertEqual(node.RETURN_TYPES, ("IMAGE", "IMAGE", "INT", "INT"))
+        self.assertEqual(node.RETURN_NAMES, ("image", "cells", "width", "height"))
         self.assertEqual(node.FUNCTION, "stitch")
         self.assertTrue(callable(getattr(node, node.FUNCTION)))
         for name in package.__all__:
@@ -348,19 +348,30 @@ class MultiStitchTests(unittest.TestCase):
                 "output_cells",
             ],
         )
+        optional = inputs["optional"]
         self.assertEqual(
-            list(inputs["optional"]), ["images", "cells_resolution", "minimum_image_side", "match_reference"]
+            list(optional),
+            ["images", "cells_resolution", "minimum_image_side", "match_reference",
+             "size_reference", "size_megapixels", "size_divisible_by"],
         )
-        self.assertEqual(inputs["optional"]["images"][0], "IMAGE")
-        self.assertEqual(inputs["optional"]["match_reference"][0], list(ms._MATCH_REFERENCES))
-        self.assertEqual(inputs["optional"]["match_reference"][1]["default"], "smallest")
+        self.assertEqual(optional["images"][0], "IMAGE")
+        self.assertEqual(optional["match_reference"][0], list(ms._MATCH_REFERENCES))
+        self.assertEqual(optional["match_reference"][1]["default"], "smallest")
+        self.assertEqual(optional["size_reference"][0], list(ms._SIZE_REFERENCES))
+        self.assertEqual(optional["size_reference"][1]["default"], "first")
+        self.assertEqual(optional["size_megapixels"][0], "FLOAT")
+        self.assertEqual(optional["size_megapixels"][1]["default"], 0.0)
+        self.assertEqual(optional["size_divisible_by"][0], "INT")
+        self.assertEqual(optional["size_divisible_by"][1]["default"], 32)
         parameters = inspect.signature(ms.MultiStitchImages.stitch).parameters
-        self.assertEqual(list(parameters)[1:], list(required) + list(inputs["optional"]))
+        self.assertEqual(list(parameters)[1:], list(required) + list(optional))
         # A prompt that omits the value predates the option: keep matching to the first image.
         self.assertEqual(parameters["match_reference"].default, "first")
         # Defaults reproduce the behaviour before these widgets existed.
         for name in ("output_limit", "output_limit_px", "grid_cell_width", "grid_cell_height", "output_cells"):
             self.assertEqual(parameters[name].default, required[name][1]["default"], name)
+        for name in ("size_reference", "size_megapixels", "size_divisible_by"):
+            self.assertEqual(parameters[name].default, optional[name][1]["default"], name)
         self.assertEqual(required["output_limit"][0], list(ms._OUTPUT_LIMITS))
         self.assertEqual(required["spacing_color"][0][-1], "custom")
         self.assertEqual(required["direction"][0], list(ms._DIRECTIONS))
@@ -375,7 +386,7 @@ class MultiStitchTests(unittest.TestCase):
         """Covers the actual node entry point, not just the helpers."""
         red = self.write_png("r.png", (255, 0, 0))
         blue = self.write_png("b.png", (0, 0, 255))
-        output, cells = ms.MultiStitchImages().stitch(
+        output, cells, width, height = ms.MultiStitchImages().stitch(
             direction="right",
             match_image_size=True,
             spacing_width=0,
@@ -390,6 +401,41 @@ class MultiStitchTests(unittest.TestCase):
         self.assertEqual(output.dtype, torch.float32)
         self.assertRgb(output[0, 0, 0], (1.0, 0.0, 0.0))
         self.assertRgb(output[0, 0, 3], (0.0, 0.0, 1.0))
+        self.assertEqual((width, height), (32, 32), "the 2×2 first image, snapped up to the default multiple")
+
+    def test_stitch_outputs_the_reference_size(self):
+        """width/height describe one source as measured for the canvas, not the canvas."""
+        small = self.write_png("small.png", (255, 0, 0), size=(30, 20))
+        big = self.write_png("big.png", (0, 0, 255), size=(100, 60))
+        common = dict(
+            direction="right", match_image_size=True, spacing_width=0, spacing_color="white",
+            images_json=json.dumps([small, big]), layout_mode="strip", grid_columns=3,
+            custom_spacing_color="#808080",
+        )
+        image, _, width, height = ms.MultiStitchImages().stitch(**common)
+        self.assertEqual(tuple(image.shape), (1, 20, 63, 3), "the strip itself is unchanged")
+        self.assertEqual((width, height), (32, 32), "first image, 30×20 snapped to 32s")
+        self.assertIsInstance(width, int)
+        self.assertIsInstance(height, int)
+        _, _, width, height = ms.MultiStitchImages().stitch(**common, size_reference="largest", size_divisible_by=4)
+        self.assertEqual((width, height), (100, 60))
+        _, _, width, height = ms.MultiStitchImages().stitch(
+            **common, size_reference="largest", size_megapixels=1.0, size_divisible_by=32,
+        )
+        self.assertEqual((width, height), (1280, 768), "100×60 scaled to 1 MP keeps its 5:3 shape")
+        # Crop and rotation count: the size is the image's footprint on the canvas.
+        edited = dict(small, rotation=90, crop={"x": 0, "y": 0, "w": 1, "h": 0.5})
+        _, _, width, height = ms.MultiStitchImages().stitch(
+            **dict(common, images_json=json.dumps([edited, big])), size_divisible_by=1,
+        )
+        self.assertEqual((width, height), (20, 15))
+        # Frames from the IMAGE input are candidates too.
+        _, _, width, height = ms.MultiStitchImages().stitch(
+            **common, images=torch.zeros(1, 200, 300, 3), size_reference="largest", size_divisible_by=1,
+        )
+        self.assertEqual((width, height), (300, 200))
+        with self.assertRaisesRegex(ValueError, "size_reference must be one of"):
+            ms.MultiStitchImages().stitch(**common, size_reference="biggest")
 
     def test_stitch_rejects_too_many_images(self):
         item = self.write_png("many.png", (1, 2, 3))
@@ -550,6 +596,40 @@ class MultiStitchTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ms._layout(dims, "strip", "right", False, 3, 0, match_reference="biggest")
 
+    def test_reference_size_follows_the_chosen_image(self):
+        """The width/height outputs: one image's size, by list order or by area, a tie to the earlier one."""
+        dims = [(40, 30), (20, 80), (60, 20), (10, 120)]  # areas 1200, 1600, 1200, 1200
+        self.assertEqual(ms._reference_size(dims, "first", 0, 1), (40, 30))
+        self.assertEqual(ms._reference_size(dims, "largest", 0, 1), (20, 80))
+        self.assertEqual(ms._reference_size(dims, "smallest", 0, 1), (40, 30), "the first of three 1200-pixel images")
+        self.assertEqual(ms._reference_size([(10, 10), (10, 10)], "largest", 0, 1), (10, 10))
+        self.assertEqual(ms._reference_size([(9, 9)], "smallest", 0, 1), (9, 9))
+        with self.assertRaisesRegex(ValueError, "size_reference must be one of"):
+            ms._reference_size(dims, "biggest", 0, 1)
+        with self.assertRaisesRegex(ValueError, "at least one image"):
+            ms._reference_size([], "first", 0, 1)
+
+    def test_reference_size_rescales_to_megapixels_and_snaps_to_a_multiple(self):
+        # 1440×2560 at 0.8 MP: scale = sqrt(800000 / 3686400) = 0.4659, so 670.9×1192.6, each to the nearest 32.
+        self.assertEqual(ms._reference_size([(1440, 2560)], "first", 0.8, 32), (672, 1184))
+        self.assertEqual(ms._reference_size([(1440, 2560)], "first", 0.0, 32), (1440, 2560))
+        self.assertEqual(ms._reference_size([(1440, 2560)], "first", None, 32), (1440, 2560))
+        self.assertEqual(ms._reference_size([(1000, 500)], "first", 2.0, 1), (2000, 1000))
+        # Nearest multiple; a side exactly between two goes to the even one (Python's round).
+        self.assertEqual(ms._reference_size([(47, 81)], "first", 0, 32), (32, 96))
+        self.assertEqual(ms._reference_size([(50, 78)], "first", 0, 32), (64, 64))
+        self.assertEqual(ms._reference_size([(48, 80)], "first", 0, 32), (64, 64))
+        self.assertEqual(ms._reference_size([(112, 16)], "first", 0, 32), (128, 32), "3.5 → 4 multiples; 0.5 → 0, floored to 1")
+        # A multiple of 0 or less means no snapping; nothing ever drops below one multiple.
+        self.assertEqual(ms._reference_size([(7, 9)], "first", 0, 0), (7, 9))
+        self.assertEqual(ms._reference_size([(7, 9)], "first", 0, -4), (7, 9))
+        self.assertEqual(ms._reference_size([(7, 9)], "first", 0, None), (7, 9))
+        self.assertEqual(ms._reference_size([(1, 1)], "first", 0, 32), (32, 32))
+        self.assertEqual(ms._reference_size([(100, 100)], "first", 0.0001, 8), (8, 8))
+        width, height = ms._reference_size([(3, 5)], "first", 1.5, 8)
+        self.assertEqual((type(width), type(height)), (int, int))
+        self.assertEqual((width % 8, height % 8), (0, 0))
+
     def test_strip_left_and_up_draw_the_first_image_last(self):
         dims = [(4, 2), (6, 2), (2, 2)]
         _, _, right = ms._layout(dims, "strip", "right", False, 3, 1)
@@ -605,7 +685,7 @@ class MultiStitchTests(unittest.TestCase):
         batch[1, ..., 3] = 0         # fully transparent: shows the background
         batch[2, ..., :3] = 0.5
         batch[2, ..., 3] = 1         # opaque grey
-        image, _ = ms.MultiStitchImages().stitch(
+        image, _, *_ = ms.MultiStitchImages().stitch(
             direction="right", match_image_size=True, spacing_width=0, spacing_color="blue",
             images_json=json.dumps([green]), layout_mode="strip", grid_columns=3, custom_spacing_color="#808080",
             images=batch,
@@ -616,7 +696,7 @@ class MultiStitchTests(unittest.TestCase):
         self.assertRgb(image[0, 0, 8], (0.0, 0.0, 1.0))
         self.assertRgb(image[0, 0, 12], (0.5, 0.5, 0.5))
 
-        grey, _ = ms.MultiStitchImages().stitch(
+        grey, _, *_ = ms.MultiStitchImages().stitch(
             "right", True, 0, "white", "[]", "strip", 3, "#808080", images=torch.full((1, 2, 4, 1), 0.25),
         )
         self.assertEqual(tuple(grey.shape), (1, 2, 4, 3))

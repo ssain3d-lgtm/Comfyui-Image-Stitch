@@ -33,19 +33,19 @@ class ReferenceQualityTests(unittest.TestCase):
         defaults = dict(match_image_size=inputs['required']['match_image_size'][1]['default'],
                         match_reference=inputs['optional']['match_reference'][1]['default'])
         # The defaults: a shrinks to b's height, nothing is enlarged or capped.
-        output, _ = self.run_node([a, b], **defaults)
+        output, _, *_ = self.run_node([a, b], **defaults)
         self.assertEqual(tuple(output.shape), (1, 10, 45, 3))
         # A prompt without match_reference behaves as before the option existed.
-        output, _ = self.run_node([a, b], match_image_size=True)
+        output, _, *_ = self.run_node([a, b], match_image_size=True)
         self.assertEqual(tuple(output.shape), (1, 40, 180, 3))
         # Matching off still keeps every native size.
-        output, _ = self.run_node([a, b], match_image_size=False)
+        output, _, *_ = self.run_node([a, b], match_image_size=False)
         self.assertEqual(tuple(output.shape), (1, 40, 90, 3))
 
     def test_source_cells_preserve_resolution_even_when_composite_shrinks(self):
         a = self.write_png('a.png', (255, 0, 0), (30, 10))
         b = self.write_png('b.png', (0, 0, 255), (60, 40))
-        output, cells = self.run_node([a, b], match_image_size=True, output_limit='max_long_side',
+        output, cells, *_ = self.run_node([a, b], match_image_size=True, output_limit='max_long_side',
                                       output_limit_px=20, output_cells=True, cells_resolution='source')
         self.assertEqual(output.shape[2], 20)
         self.assertEqual(tuple(cells.shape), (2, 40, 60, 3))
