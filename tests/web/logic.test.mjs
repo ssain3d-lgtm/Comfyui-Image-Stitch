@@ -570,45 +570,42 @@ describe("undo and redo", () => {
     });
 });
 
-describe("scrollable list", () => {
-    it("shows three rows by default and scrolls the rest, hit-testing only what is visible", () => {
+describe("list height", () => {
+    const rowsTall = (rows) => LIST_TOP + rows * 99 - 7 + 12;
+
+    it("grows with the rows and keeps every card clickable", () => {
         const node = plainNode(nodeType);
         node._msImages = imageFiles(12).map((f) => item(f.name));   // four rows
-        node._msSized = false;                                      // take the default height
         paintedCalls(nodeType, node);
-        assert.equal(node.size[1], LIST_TOP + 3 * 99 - 7 + 12, "three rows tall");
+        assert.equal(node.size[1], rowsTall(4), "four rows tall");
 
-        // Row 3 (cards 9-11) is off-screen: its position is not clickable.
-        const off = nodeType.prototype.onMouseDown.call(node, pointer(20, LIST_TOP + 3 * 99 + 10), null, {});
-        assert.equal(off, false);
-        assert.equal(node._msImages.length, 12);
-
-        // The ▾ at the bottom of the scrollbar brings row 3 into view.
-        assert.equal(click(node, [408, LIST_TOP + 290 - 5]), true);
-        assert.equal(node._msScrollRow, 1);
-        // Card 9 now sits on visible row 2, in the narrower cards next to the bar.
-        const cellW = (420 - 16 - 14 - 14) / 3;
-        const removeX = 8 + cellW - 23 + 10;
-        const removeY = LIST_TOP + 2 * 99 + 3 + 9;
+        // Card 9 opens row 3, which a three-row list used to keep off-screen:
+        // its × sits at the top right of the 130px cell.
+        const removeX = 8 + 130 - 23 + 10;
+        const removeY = LIST_TOP + 3 * 99 + 3 + 9;
         assert.equal(click(node, [removeX, removeY]), true);
         assert.equal(node._msImages.length, 11);
         assert.equal(node._msImages.some((i) => i.filename === "img9.png"), false);
+        assert.equal(node.size[1], rowsTall(4), "eleven images still fill four rows");
 
-        // A wheel over the list scrolls back up; outside it is left alone.
-        assert.equal(nodeType.prototype.onMouseWheel.call(node, { canvasX: 100, canvasY: 200, deltaY: -100, preventDefault() {}, stopPropagation() {} }, null, {}), true);
-        assert.equal(node._msScrollRow, 0);
-        assert.equal(nodeType.prototype.onMouseWheel.call(node, { canvasX: 100, canvasY: 50, deltaY: 100 }, null, {}), false);
+        node._msImages.splice(9);
+        paintedCalls(nodeType, node);
+        assert.equal(node.size[1], rowsTall(3), "nine images shrink the node to three rows");
     });
 
-    it("clamps a user resize between one row and all rows", () => {
+    it("snaps a user resize back to the natural height", () => {
         const node = plainNode(nodeType);
         setImages(node, imageFiles(12).map((f) => item(f.name)));
         node.size = [420, 5000];
         nodeType.prototype.onResize.call(node, node.size);
-        assert.equal(node.size[1], LIST_TOP + 4 * 99 - 7 + 12, "no taller than the four rows");
+        assert.equal(node.size[1], rowsTall(4), "no taller than the four rows");
         node.size = [300, 50];
         nodeType.prototype.onResize.call(node, node.size);
-        assert.deepEqual(node.size, [420, LIST_TOP + 92 + 12], "no narrower than the minimum, no shorter than one row");
+        assert.deepEqual(node.size, [420, rowsTall(4)], "no narrower than the minimum, and the height is not the user's");
+    });
+
+    it("has no wheel handler of its own", () => {
+        assert.equal(nodeType.prototype.onMouseWheel, undefined, "the wheel stays ComfyUI's, for zooming");
     });
 });
 

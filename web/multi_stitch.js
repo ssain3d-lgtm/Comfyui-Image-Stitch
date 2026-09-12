@@ -35,11 +35,9 @@ const MIN_NODE_WIDTH = 420;
 // Deliberately measured in browser/client pixels, not graph coordinates, so
 // ComfyUI zoom cannot turn a normal click into an accidental reorder.
 const DRAG_THRESHOLD_PX = 6;
-// The composed-result preview band above the list, and the list itself:
-// three rows by default, scrollable beyond that, resizable by the user.
+// The composed-result preview band above the list, and the list itself,
+// which shows every row: the node grows downward with the images.
 const PREVIEW_HEIGHT = 150;
-const DEFAULT_LIST_ROWS = 3;
-const SCROLLBAR_W = 8;
 const ROW_H = THUMB_HEIGHT + THUMB_GAP;
 const NAMED_COLORS = { white: "#ffffff", black: "#000000", red: "#ff0000", green: "#00ff00", blue: "#0000ff" };
 // "Copy stitched result" renders the composite in the browser. Bounded so a
@@ -130,49 +128,32 @@ function heightForRows(node, rows) {
     return listTop(node) + rows * ROW_H - THUMB_GAP + 12;
 }
 
-// The visible window onto the thumbnail rows: how many fit in the node's
-// current height, and which row is scrolled to the top.
+// The window onto the thumbnail rows is the whole list: every row is shown,
+// so the scroll fields sit at "nothing to scroll" for the callers that read
+// them.
 function listViewport(node) {
     const top = listTop(node);
     const rows = rowsOf(node);
-    const available = (node.size?.[1] || 0) - top - 12;
-    const visibleRows = Math.max(1, Math.min(rows, Math.floor((available + THUMB_GAP) / ROW_H)));
-    const maxScroll = Math.max(0, rows - visibleRows);
-    const scroll = Math.max(0, Math.min(maxScroll, Math.floor(node._msScrollRow || 0)));
-    node._msScrollRow = scroll;
     return {
-        top, rows, visibleRows, maxScroll, scroll,
-        height: visibleRows * ROW_H - THUMB_GAP,
-        scrollable: maxScroll > 0,
+        top, rows, visibleRows: rows, maxScroll: 0, scroll: 0,
+        height: rows * ROW_H - THUMB_GAP,
+        scrollable: false,
     };
 }
 
-function scrollbarRect(node, viewport = listViewport(node)) {
-    if (!viewport.scrollable) return null;
-    return { x: nodeWidth(node) - 8 - SCROLLBAR_W, y: viewport.top, w: SCROLLBAR_W, h: viewport.height };
-}
-
-function scrollList(node, deltaRows) {
-    const viewport = listViewport(node);
-    const next = Math.max(0, Math.min(viewport.maxScroll, viewport.scroll + deltaRows));
-    if (next === viewport.scroll) return false;
-    node._msScrollRow = next;
-    node.graph?.setDirtyCanvas(true, false);
-    return true;
-}
-
+// Every card is on the node; `visible` stays because the hit-tests and the
+// drawing check it.
 function thumbLayout(node, index) {
-    const viewport = listViewport(node);
-    const width = nodeWidth(node) - 16 - (viewport.scrollable ? SCROLLBAR_W + 6 : 0);
+    const width = nodeWidth(node) - 16;
     const cellW = (width - THUMB_GAP * (THUMB_COLS - 1)) / THUMB_COLS;
     const col = index % THUMB_COLS;
-    const row = Math.floor(index / THUMB_COLS) - viewport.scroll;
+    const row = Math.floor(index / THUMB_COLS);
     return {
         x: 8 + col * (cellW + THUMB_GAP),
-        y: viewport.top + row * ROW_H,
+        y: listTop(node) + row * ROW_H,
         w: cellW,
         h: THUMB_HEIGHT,
-        visible: row >= 0 && row < viewport.visibleRows,
+        visible: true,
     };
 }
 
@@ -244,25 +225,13 @@ function thumbActionRects(r) {
 
 
 
+// The height is never the user's: the node is as tall as its rows, the
+// widgets above them and the preview band need. Only the width is kept.
 function updateNodeSize(node) {
     if (!node) return;
     const width = nodeWidth(node);
-    const rows = rowsOf(node);
-    const top = listTop(node);
+    const height = heightForRows(node, rowsOf(node));
     node.size ||= [width, 0];
-
-    // Keep the same rows visible when the widgets above the list, or the
-    // preview band, change height.
-    if (node._msListTop !== undefined && top !== node._msListTop) node.size[1] += top - node._msListTop;
-    node._msListTop = top;
-
-    let height = node.size[1] || 0;
-    if (!node._msSized) {
-        height = heightForRows(node, Math.min(rows, DEFAULT_LIST_ROWS));
-        node._msSized = true;
-    }
-    // Never shorter than one row, never taller than all the rows.
-    height = Math.max(heightForRows(node, 1), Math.min(heightForRows(node, rows), height));
 
     if (node.size[0] !== width || Math.abs(node.size[1] - height) > 0.5) {
         node.setSize?.([width, height]);
@@ -677,28 +646,6 @@ function drawThumbs(node, ctx) {
         if (r.visible) drawVideoCard(ctx, entry, r);
     });
     ctx.restore();
-
-    const bar = scrollbarRect(node, viewport);
-    if (bar) {
-        ctx.fillStyle = "rgba(255,255,255,.08)";
-        ctx.fillRect(bar.x, bar.y, bar.w, bar.h);
-        const trackH = bar.h - 2 * 14;
-        const thumbH = Math.max(12, trackH * (viewport.visibleRows / viewport.rows));
-        const thumbY = bar.y + 14 + (trackH - thumbH) * (viewport.scroll / viewport.maxScroll);
-        ctx.fillStyle = "rgba(255,255,255,.35)";
-        ctx.fillRect(bar.x + 1, thumbY, bar.w - 2, thumbH);
-        ctx.fillStyle = "#ddd";
-        ctx.textAlign = "center";
-        ctx.fillText("▴", bar.x + bar.w / 2, bar.y + 11);
-        ctx.fillText("▾", bar.x + bar.w / 2, bar.y + bar.h - 4);
-        ctx.textAlign = "left";
-        ctx.fillStyle = "#9a9a9a";
-        ctx.fillText(
-            `rows ${viewport.scroll + 1}–${Math.min(viewport.rows, viewport.scroll + viewport.visibleRows)} of ${viewport.rows}`,
-            9,
-            viewport.top + viewport.height + 10,
-        );
-    }
     ctx.restore();
 }
 
@@ -1671,7 +1618,6 @@ function setupNode(node) {
     node._msThumbCache = new Map();
     node._msTransformedCache = new Map();
     node._msVideos = [];
-    node._msScrollRow = 0;
     resetHistory(node);
 
     if (!node.widgets?.some((w) => w.name === "custom_color_picker")) {
@@ -1724,10 +1670,6 @@ app.registerExtension({
             hideWidget(getWidget(this, "custom_spacing_color"));
             this._msThumbCache ||= new Map();
             this._msTransformedCache ||= new Map();
-            this._msScrollRow = 0;
-            // The saved node size is the user's; only clamp it from here on.
-            this._msSized = true;
-            this._msListTop = undefined;
             resetHistory(this);
             updateCustomColorButton(this);
             syncConditionalWidgets(this);
@@ -1805,21 +1747,6 @@ app.registerExtension({
             }
             if (primary && !this.flags?.collapsed && listCount(this)) {
                 const [x, y] = localPos(this, event, pos, graphCanvas);
-                const viewport = listViewport(this);
-                const bar = scrollbarRect(this, viewport);
-                if (bar && inRect(x, y, bar)) {
-                    if (y < bar.y + 14) scrollList(this, -1);
-                    else if (y > bar.y + bar.h - 14) scrollList(this, 1);
-                    else {
-                        // Track click: page towards the click.
-                        const trackH = bar.h - 28;
-                        const thumbCentre = bar.y + 14 + (trackH * ((viewport.scroll + viewport.visibleRows / 2) / viewport.rows));
-                        scrollList(this, y < thumbCentre ? -viewport.visibleRows : viewport.visibleRows);
-                    }
-                    stopEvent(event, graphCanvas);
-                    return true;
-                }
-
                 for (let i = 0; i < (this._msVideos?.length || 0); i++) {
                     const entry = this._msVideos[i];
                     const r = thumbLayout(this, this._msImages.length + i);
@@ -1894,32 +1821,12 @@ app.registerExtension({
             return r;
         };
 
-        // Wheel over the list scrolls it when there is more than fits.
-        const mouseWheel = nodeType.prototype.onMouseWheel;
-        nodeType.prototype.onMouseWheel = function (event, pos, graphCanvas) {
-            if (!this.flags?.collapsed && listCount(this)) {
-                const [x, y] = localPos(this, event, pos, graphCanvas);
-                const viewport = listViewport(this);
-                if (viewport.scrollable && y >= viewport.top && y <= viewport.top + viewport.height && x >= 0 && x <= nodeWidth(this)) {
-                    const delta = Number(event?.deltaY) || Number(event?.wheelDelta) * -1 || 0;
-                    if (delta !== 0) {
-                        scrollList(this, delta > 0 ? 1 : -1);
-                        stopEvent(event, graphCanvas);
-                        return true;
-                    }
-                }
-            }
-            return mouseWheel?.apply(this, arguments) ?? false;
-        };
-
-        // A resize by the user changes how many rows are visible; keep it in range.
+        // A resize by the user keeps its width; the height snaps back to what
+        // the rows need.
         const resized = nodeType.prototype.onResize;
         nodeType.prototype.onResize = function (size) {
             const r = resized?.apply(this, arguments);
-            if (this._msImages) {
-                this._msSized = true;
-                updateNodeSize(this);
-            }
+            if (this._msImages) updateNodeSize(this);
             return r;
         };
 

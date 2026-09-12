@@ -200,12 +200,11 @@ export function plainNode(nodeType, overrides = {}) {
     return makeNode(nodeType, { properties: { multi_stitch_preview: false }, ...overrides });
 }
 
-// Assigns a list directly (bypassing upload) and gives the node room for it;
-// the next layout pass clamps the height to the rows it actually has.
+// Assigns a list directly (bypassing upload) at the harness's node size; the
+// next layout pass grows the node to the rows it has.
 export function setImages(node, items) {
     node._msImages = items;
     node.size = [420, 600];
-    node._msSized = true;
 }
 
 export const item = (filename, extra = {}) => ({

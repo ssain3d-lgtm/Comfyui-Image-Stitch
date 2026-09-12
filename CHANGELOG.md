@@ -20,6 +20,7 @@ All notable changes to **Multi Stitch Images**. The version is the one in `pypro
 - `match_image_size` defaults to `true` and `match_reference` to `smallest` for new nodes, so images line up by height (or width) from the start without anything being upscaled; `output_limit` stays `none`. Saved workflows keep their own values; one saved before `match_reference` existed opens with `first`, as it behaved then, and an API prompt that omits the value gets `first` too.
 - A fresh node shows five widgets (`direction`, `match_image_size`, `spacing_width`, `spacing_color`, `layout_mode`) instead of ten rows.
 - The status line uses the full node width; the controls moved to the toolbar.
+- The thumbnail list no longer scrolls: the node grows downward so every row is visible (the fixed-height list from 1.0 is gone; only the width is resizable).
 
 ### Tests
 - The logic suite follows the new geometry and adds a toolbar/folded-options suite; the browser suite's card coordinate follows.
