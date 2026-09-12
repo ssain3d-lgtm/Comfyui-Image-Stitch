@@ -36,7 +36,7 @@
 - 파일이 사라진 이미지 **재연결** (Crop·순서 유지)
 - 초대형 결과 생성 전 **Output Size Safety Guard**
 - 일반 `IMAGE` 출력 → `Preview Image`, `Save Image`, `VAE Encode` 등에 바로 연결
-- 추가 Python 패키지 불필요
+- 추가 Python 패키지 불필요 — 동영상 서버 디코딩에만 PyAV가 쓰이고 최신 ComfyUI에는 이미 포함되어 있습니다(ComfyUI-Manager용 `requirements.txt`에도 적어 두었습니다)
 
 ### 1.2에서 달라진 점
 
@@ -348,6 +348,8 @@ Workflow에는 다음 상태가 저장됩니다.
 - Horizontal / Vertical Flip
 - 이미지 순서
 - 미리보기 띠 켜짐/꺼짐
+- `Options ▸` 접힘 여부
+- 크기 패널(`📐 Size`) 켜짐/꺼짐
 
 편집 이력(실행 취소)은 저장되지 않습니다. 참조된 파일이 디스크에서 바뀌면(크기·수정 시각) 노드는 ComfyUI 캐시를 무시하고 다음 Queue에서 다시 실행됩니다.
 
@@ -385,7 +387,7 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 - **Relink** an image whose file went missing, keeping its crop and order
 - **Output Size Safety Guard** before giant tensors are allocated
 - Standard `IMAGE` output → `Preview Image`, `Save Image`, `VAE Encode`, etc.
-- No extra Python packages required
+- No extra Python packages required — only server-side video decoding uses PyAV, which current ComfyUI already installs (and `requirements.txt` lists it for ComfyUI-Manager)
 
 ### What changed in 1.2
 
@@ -693,6 +695,8 @@ The workflow stores:
 - Horizontal / Vertical Flip
 - Image order
 - Whether the preview band is shown
+- Whether `Options ▸` is folded
+- Whether the size panel (`📐 Size`) is shown
 
 The edit history (undo) is not saved. If a referenced file changes on disk (size or modification time), the node bypasses ComfyUI's cache and runs again on the next queue.
 

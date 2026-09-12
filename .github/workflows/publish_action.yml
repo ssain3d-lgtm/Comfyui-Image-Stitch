@@ -37,6 +37,9 @@ jobs:
 
       - name: Publish Custom Node
         if: steps.token.outputs.present == 'true'
-        uses: Comfy-Org/publish-node-action@main
+        # Pinned to a commit, not @main: this step is handed the registry token,
+        # so it must not change without a reviewed pull request. Dependabot
+        # proposes the bumps.
+        uses: Comfy-Org/publish-node-action@d2366e7abb6ab16f3bb03e3520ae25c8cf749bc9 # main as of 2026-09-12
         with:
           personal_access_token: ${{ secrets.REGISTRY_ACCESS_TOKEN }}

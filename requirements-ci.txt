@@ -1,0 +1,24 @@
+# Test-only dependencies for CI. ComfyUI users never install this file —
+# requirements.txt is the one ComfyUI-Manager reads.
+#
+# torch comes from the CPU wheel index, which the workflow passes as
+# --extra-index-url (not --index-url: replacing PyPI outright leaves torch's own
+# dependencies resolvable only from that index). Upper bounds keep a major
+# release from breaking CI on its own schedule; Dependabot proposes the bumps.
+
+# What ComfyUI itself provides at runtime, so the node can be imported and run.
+numpy>=1.24,<3
+pillow>=10,<13
+torch>=2.2,<3
+aiohttp>=3.9,<4
+
+# Server-side video decoding for the frame picker routes.
+av>=12,<20
+
+# Test tooling: the coverage gate, the lint gate, and the workflow parsing in
+# tests/test_packaging.py. ruff is held to one minor: a new minor adds rules to
+# the selected B/UP sets, and that upgrade belongs in a reviewed Dependabot PR
+# rather than in the next unrelated push.
+coverage>=7.6,<8
+ruff>=0.15.8,<0.16
+pyyaml>=6,<7
