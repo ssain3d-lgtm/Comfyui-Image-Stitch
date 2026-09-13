@@ -252,6 +252,86 @@ describe("reorder", () => {
     });
 });
 
+describe("the card's own right-click menu", () => {
+    // A LiteGraph-shaped canvas class and ContextMenu of the test's own, so the
+    // override lands on a prototype nothing else shares.
+    function arm(node, mouse) {
+        const opened = [];
+        class Canvas {
+            constructor() { this.graph_mouse = mouse; }
+            processContextMenu(target) { opened.push({ menu: "node", target: target === node ? "ours" : (target?.type ?? null) }); }
+        }
+        const canvas = new Canvas();
+        node.graph = { ...node.graph, list_of_graphcanvas: [canvas] };
+        globalThis.LiteGraph = {
+            ...globalThis.LiteGraph,
+            ContextMenu: class { constructor(values, options) { opened.push({ menu: "card", title: options?.title, values: values.map((v) => v.content) }); } },
+        };
+        assert.equal(ms.installCardMenu(node), true);
+        assert.equal(ms.installCardMenu(node), true, "installing twice wraps once");
+        return { canvas, opened, at: (point) => { canvas.graph_mouse = point; canvas.processContextMenu(node, {}); } };
+    }
+    const onCard = (node, index) => [node.pos[0] + card(node, index).x + 20, node.pos[1] + card(node, index).y + 30];
+
+    it("answers a right-click over a card with that card's entries, not the node's menu", () => {
+        const node = plainNode(nodeType);
+        setImages(node, [item("a.png"), item("b.png")]);
+        const armed = arm(node, onCard(node, 1));
+        armed.at(onCard(node, 1));
+        assert.deepEqual(armed.opened, [{
+            menu: "card",
+            title: "Image #2",
+            values: ["Edit image #2…", "Duplicate image #2", "Copy image #2 to clipboard", "Replace image #2…", "Remove image #2"],
+        }], "five entries about that image and nothing else");
+
+        // Off a card the node keeps its own menu.
+        armed.opened.length = 0;
+        armed.at([node.pos[0] + 20, node.pos[1] - 5]);
+        assert.deepEqual(armed.opened, [{ menu: "node", target: "ours" }]);
+    });
+
+    it("gives a video card its own entries and leaves other nodes alone", async () => {
+        const node = plainNode(nodeType);
+        await node.pasteFiles([videoFile()]);
+        node._msPicker?.close(false);
+        const r = card(node, 0);
+        const armed = arm(node, [node.pos[0] + r.x + 20, node.pos[1] + r.y + 30]);
+        armed.at([node.pos[0] + r.x + 20, node.pos[1] + r.y + 30]);
+        assert.deepEqual(armed.opened.at(-1).values, ["Capture frames…", "Remove video (captured frames stay)"]);
+
+        armed.opened.length = 0;
+        armed.canvas.processContextMenu({ type: "OtherNode" }, {});
+        assert.deepEqual(armed.opened, [{ menu: "node", target: "OtherNode" }], "a node that is not ours is untouched");
+        ms.removeVideo(node, node._msVideos[0], { silent: true });
+    });
+
+    it("drops the per-card entries from the node's menu once the card menu is installed", () => {
+        const node = plainNode(nodeType);
+        setImages(node, [item("a.png"), item("b.png")]);
+        // Before: no card menu here, so the node's menu carries them.
+        assert.ok(cardMenu(node, 1).some((o) => o.content === "Duplicate image #2"));
+        arm(node, onCard(node, 1));
+        const contents = cardMenu(node, 1).map((o) => o.content);
+        assert.deepEqual(contents, [
+            "Copy stitched result",
+            "Show size panel (width / height outputs)",
+            "Gallery — compositions this node stitched…",
+        ], "only what is about the node as a whole");
+    });
+
+    it("reports the entries it would show for the card under the pointer", () => {
+        const node = plainNode(nodeType);
+        setImages(node, [item("a.png")]);
+        const r = card(node, 0);
+        const over = { graph_mouse: [node.pos[0] + r.x + 10, node.pos[1] + r.y + 10] };
+        assert.equal(ms.cardEntriesUnder(node, over).title, "Image #1");
+        assert.equal(ms.cardEntriesUnder(node, { graph_mouse: [node.pos[0] + 5, node.pos[1] - 20] }), null, "off a card");
+        assert.equal(ms.cardEntriesUnder({ type: "Other" }, over), null, "not our node");
+        node.flags = { collapsed: true };
+        assert.equal(ms.cardEntriesUnder(node, over), null, "a collapsed node shows no cards");
+    });
+});
+
 describe("save and restore", () => {
     const items = () => [
         { filename: "a.png", subfolder: "multi_stitch", type: "input", crop: { x: 0.1, y: 0.2, w: 0.5, h: 0.5 }, rotation: 90, flip_h: true, flip_v: false },

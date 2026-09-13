@@ -2,6 +2,11 @@
 
 All notable changes to **Multi Stitch Images**. The version is the one in `pyproject.toml`; each release is tagged `v<version>` on `main`.
 
+## 1.2.1 — 2026-09-13
+
+### Changed
+- **A card's right-click menu is the card's own**, not five more lines on the node's. The node menu is long and is about the node — bypass, colors, clone, remove — and the per-image entries sat on top of it, so a menu opened over a picture was mostly about something else. Right-clicking a card now opens a short menu titled `Image #N` holding only `Edit`, `Duplicate`, `Copy to clipboard`, `Replace` and `Remove`; a video card gets its own two entries the same way. The node's menu keeps what is about the node as a whole: `Copy stitched result`, the size panel and the gallery. Right-clicking anywhere else on the node — the title, the widgets, the empty space — still opens the node's menu unchanged, as does right-clicking any other node. Where the frontend does not offer the pieces this needs, the entries fall back onto the node's menu exactly as before.
+
 ## 1.2.0 — 2026-09-13
 
 ### Added

@@ -2100,6 +2100,76 @@ function openVideoPicker(node, entry) {
     }
 }
 
+// What a right-click over an image card offers. The node's own menu is long
+// and is about the node; these are about one picture, so they are their own
+// short menu over the card and are only folded into the node's menu when that
+// cannot be installed.
+function imageCardEntries(node, index) {
+    return [
+        { content: `Edit image #${index + 1}…`, callback: () => openEditor(node, index) },
+        { content: `Duplicate image #${index + 1}`, callback: () => duplicateImage(node, index) },
+        { content: `Copy image #${index + 1} to clipboard`, callback: () => copyOriginalImage(node, index) },
+        { content: `Replace image #${index + 1}…`, callback: () => replaceImage(node, index) },
+        { content: `Remove image #${index + 1}`, callback: () => removeImageAt(node, index) },
+    ];
+}
+
+function videoCardEntries(node, entry) {
+    return [
+        { content: "Capture frames…", callback: () => openVideoPicker(node, entry) },
+        { content: "Remove video (captured frames stay)", callback: () => removeVideo(node, entry) },
+    ];
+}
+
+// LiteGraph decides the menu in processContextMenu, so that is where a card
+// takes over: a right-click on one answers with the card's own entries and the
+// node's menu is left for the node. Everywhere else the original runs
+// untouched. Installed once per canvas class, and only if the pieces it needs
+// are there — getExtraMenuOptions keeps the entries when they are not.
+const CARD_MENU_FLAG = "_msCardMenuInstalled";
+
+function canvasPrototype(node) {
+    return node?.graph?.list_of_graphcanvas?.[0]?.constructor?.prototype
+        || app?.canvas?.constructor?.prototype
+        || globalThis.LGraphCanvas?.prototype
+        || null;
+}
+
+function cardMenuInstalled(node) {
+    return !!canvasPrototype(node)?.[CARD_MENU_FLAG];
+}
+
+function installCardMenu(node) {
+    const prototype = canvasPrototype(node);
+    if (!prototype || prototype[CARD_MENU_FLAG]) return !!prototype?.[CARD_MENU_FLAG];
+    const ContextMenu = globalThis.LiteGraph?.ContextMenu;
+    if (typeof prototype.processContextMenu !== "function" || typeof ContextMenu !== "function") return false;
+    const original = prototype.processContextMenu;
+    prototype.processContextMenu = function (target, event) {
+        const card = cardEntriesUnder(target, this);
+        if (card) {
+            new ContextMenu(card.values, { event, title: card.title, className: "dark" });
+            return;
+        }
+        return original.apply(this, arguments);
+    };
+    prototype[CARD_MENU_FLAG] = true;
+    return true;
+}
+
+// The card under the pointer, if the node is ours and has one there.
+function cardEntriesUnder(node, graphCanvas) {
+    if (!node?._msImages || node.flags?.collapsed) return null;
+    const videoIndex = videoIndexAt(node, graphCanvas);
+    if (videoIndex >= 0) {
+        const entry = node._msVideos[videoIndex];
+        return { title: String(entry.name || entry.filename || "Video"), values: videoCardEntries(node, entry) };
+    }
+    const index = thumbIndexAt(node, graphCanvas);
+    if (index < 0) return null;
+    return { title: `Image #${index + 1}`, values: imageCardEntries(node, index) };
+}
+
 function videoIndexAt(node, graphCanvas) {
     const mouse = graphCanvas?.graph_mouse || graphCanvas?.canvas_mouse;
     if (node.flags?.collapsed || !Array.isArray(mouse)) return -1;
@@ -2407,6 +2477,7 @@ app.registerExtension({
             const r = created?.apply(this, arguments);
             setupNode(this);
             setupDomView(this);
+            installCardMenu(this);
             return r;
         };
 
@@ -2559,39 +2630,14 @@ app.registerExtension({
         const extraMenu = nodeType.prototype.getExtraMenuOptions;
         nodeType.prototype.getExtraMenuOptions = function (graphCanvas, options) {
             const r = extraMenu?.apply(this, arguments);
-            const index = thumbIndexAt(this, graphCanvas);
             const extra = [];
-            const videoIndex = videoIndexAt(this, graphCanvas);
-            if (videoIndex >= 0) {
-                const entry = this._msVideos[videoIndex];
-                extra.push(
-                    { content: "Capture frames…", callback: () => openVideoPicker(this, entry) },
-                    { content: "Remove video (captured frames stay)", callback: () => removeVideo(this, entry) },
-                );
-            }
-            if (index >= 0) {
-                extra.push(
-                    {
-                        content: `Edit image #${index + 1}…`,
-                        callback: () => openEditor(this, index),
-                    },
-                    {
-                        content: `Duplicate image #${index + 1}`,
-                        callback: () => duplicateImage(this, index),
-                    },
-                    {
-                        content: `Copy image #${index + 1} to clipboard`,
-                        callback: () => copyOriginalImage(this, index),
-                    },
-                    {
-                        content: `Replace image #${index + 1}…`,
-                        callback: () => replaceImage(this, index),
-                    },
-                    {
-                        content: `Remove image #${index + 1}`,
-                        callback: () => removeImageAt(this, index),
-                    },
-                );
+            // Without the card menu these are the only way to reach a card, so
+            // they go back on the node's menu rather than being unreachable.
+            if (!cardMenuInstalled(this)) {
+                const videoIndex = videoIndexAt(this, graphCanvas);
+                if (videoIndex >= 0) extra.push(...videoCardEntries(this, this._msVideos[videoIndex]));
+                const index = thumbIndexAt(this, graphCanvas);
+                if (index >= 0) extra.push(...imageCardEntries(this, index));
             }
             if (this._msImages?.length) {
                 extra.push({
@@ -2734,6 +2780,11 @@ export {
     thumbActionRects,
     dropIndexAt,
     dropBarRect,
+    imageCardEntries,
+    videoCardEntries,
+    cardEntriesUnder,
+    installCardMenu,
+    cardMenuInstalled,
     thumbLayout,
     titleHeight,
     toggleAdvanced,
