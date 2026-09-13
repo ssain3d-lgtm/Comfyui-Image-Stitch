@@ -23,7 +23,7 @@
         "text": ""
       },
       "widgets_values": [
-        "Multi Stitch Images — paste\n\n1. Click the Multi Stitch Images node so it is selected.\n2. Ctrl+V with images on the clipboard, or use + Add in its toolbar.\n3. Click a thumbnail to crop / rotate / flip; drag its ≡ handle to reorder.\n4. Queue. The image output is the strip.\n\nOptions ▸ in the toolbar shows the advanced settings; ⧉ Copy puts the stitched result on the clipboard without queueing."
+        "Multi Stitch Images — paste\n\n1. Click the Multi Stitch Images node so it is selected.\n2. Ctrl+V with images on the clipboard, or use + Add in its toolbar.\n3. Click a thumbnail to crop / rotate / flip; drag a card to reorder; right-click one to duplicate, copy, replace or remove it.\n4. Queue. The image output is the strip.\n\nOptions ▸ in the toolbar shows the advanced settings; ⧉ Copy puts the stitched result on the clipboard without queueing."
       ],
       "color": "#432",
       "bgcolor": "#653"

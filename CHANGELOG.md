@@ -2,6 +2,16 @@
 
 All notable changes to **Multi Stitch Images**. The version is the one in `pyproject.toml`; each release is tagged `v<version>` on `main`.
 
+## 1.2.2 — 2026-09-13
+
+### Fixed
+- **Three shipped descriptions still promised the `≡` handle** that 1.2.0 removed — the node's own `DESCRIPTION` (which ComfyUI shows on hover and the registry shows on the node's page), the Korean locale, and the note inside the `paste → strip` example workflow. All three now describe the gestures the node actually has.
+- **The card menu in Vue node mode was missing `Replace image…`**, which the canvas card menu has had all along. Both menus now offer the same five entries.
+
+### Changed
+- **A card says what it answers to while the pointer is on it.** Taking the buttons off the cards took the visible affordances with them, and the hint that explains them only ever appeared in the empty dashed box — so it vanished the moment a first image arrived. While the pointer is over a card the status line reads `Click to edit · drag to reorder · right-click for more`, and the cursor stops pretending the card is empty canvas. Both give way again the moment the pointer moves off, and the canvas keeps the cursor the frontend gave it.
+- **Columns follow the node's width instead of always being three.** A node made wider used to stretch three cards into 390×92 letterboxes while showing exactly as many images as before; it now fits as many ~130px cards as the width allows (8 at 1200px), so widening shows more images and the list gets shorter — 6 images at 1200px are one row instead of two.
+
 ## 1.2.1 — 2026-09-13
 
 ### Changed

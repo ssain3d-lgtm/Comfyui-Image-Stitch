@@ -252,6 +252,92 @@ describe("reorder", () => {
     });
 });
 
+describe("the list follows the node's width", () => {
+    const widths = (node, width) => {
+        node.size[0] = width;
+        const first = card(node, 0);
+        return { columns: ms.columnsOf(node), cardWidth: Math.round(first.w), sameRow: card(node, 1).y === first.y };
+    };
+
+    it("keeps three columns at the default width and adds more as the node grows", () => {
+        const node = plainNode(nodeType);
+        setImages(node, imageFiles(12).map((f) => item(f.name)));
+        assert.deepEqual(widths(node, 420), { columns: 3, cardWidth: 130, sameRow: true }, "the width the node opens at");
+        const wide = widths(node, 1200);
+        assert.equal(wide.columns, 8, "a wider node shows more images instead of stretching three");
+        assert.ok(wide.cardWidth >= 130 && wide.cardWidth <= 160, `cards stay near their size, got ${wide.cardWidth}`);
+        assert.equal(ms.columnsOf({ ...node, size: [200, 400] }), 3,
+            "a node narrower than the minimum is still laid out at the minimum, so three is the floor");
+    });
+
+    it("gets shorter as the columns grow, since the rows do the work", async () => {
+        const node = plainNode(nodeType);
+        const files = imageFiles(24);
+        for (const file of files) dom.imageSizes.set(file.name, [40, 20]);
+        setImages(node, files.map((f) => item(f.name)));
+        node.size[0] = 420;
+        paintedCalls(nodeType, node);
+        const narrow = node.size[1];
+        node.size[0] = 1200;
+        paintedCalls(nodeType, node);
+        assert.ok(node.size[1] < narrow, `24 images are shorter at 1200px (${node.size[1]}) than at 420px (${narrow})`);
+        // Drain the loads this started, so they do not sit in the shared queue.
+        await waitForThumbs(node);
+    });
+});
+
+describe("what the pointer is over", () => {
+    // The canvas carries the crosshair every other part of the graph uses.
+    const canvasStub = () => ({ graph_mouse: [0, 0], canvas: { style: { cursor: "crosshair" } } });
+    const move = (node, point, canvas) =>
+        nodeType.prototype.onMouseMove.call(node, pointer(point[0], point[1]), point, canvas);
+
+    it("says the gestures a card answers to while the pointer is on one", () => {
+        const node = plainNode(nodeType);
+        setImages(node, [item("a.png"), item("b.png")]);
+        assert.match(paintedText(nodeType, node)[0], /^2 images/, "the size readout while nothing is hovered");
+
+        const canvas = canvasStub();
+        move(node, centre(card(node, 1)), canvas);
+        assert.equal(node._msHoverCard, 1);
+        assert.match(paintedText(nodeType, node)[0], /Click to edit.*drag to reorder.*right-click/,
+            "the hint takes the status line's place, where the question is being asked");
+        assert.equal(canvas.canvas.style.cursor, "pointer", "and the card stops looking like canvas");
+    });
+
+    it("lets go of the hint and the cursor when the pointer leaves", () => {
+        const node = plainNode(nodeType);
+        setImages(node, [item("a.png")]);
+        const canvas = canvasStub();
+        move(node, centre(card(node, 0)), canvas);
+        assert.equal(node._msHoverCard, 0);
+        move(node, [4, 4], canvas);
+        assert.equal(node._msHoverCard, -1, "the toolbar is not a card");
+        assert.equal(canvas.canvas.style.cursor, "crosshair", "the canvas keeps the cursor it came with");
+        assert.match(paintedText(nodeType, node)[0], /^1 image/);
+
+        move(node, centre(card(node, 0)), canvas);
+        assert.equal(canvas.canvas.style.cursor, "pointer");
+        // The frontend sets the cursor for wherever the pointer went next, so
+        // leaving only drops the card's claim on it.
+        nodeType.prototype.onMouseLeave.call(node);
+        assert.equal(node._msHoverCard, -1, "leaving the node clears it too");
+        assert.equal(node._msCursorWas, undefined);
+    });
+
+    it("holds the hint on the card in hand while it is dragged", () => {
+        const node = plainNode(nodeType);
+        setImages(node, imageFiles(3).map((f) => item(f.name)));
+        const canvas = canvasStub();
+        const [hx, hy] = centre(card(node, 0));
+        nodeType.prototype.onMouseDown.call(node, pointer(hx, hy, [100, 200]), [hx, hy], canvas);
+        dom.fire("pointermove", pointer(...centre(card(node, 2)), [400, 400]));
+        move(node, centre(card(node, 2)), canvas);
+        assert.equal(canvas.canvas.style.cursor, "grabbing");
+        dom.fire("pointerup", {});
+    });
+});
+
 describe("the card's own right-click menu", () => {
     // A LiteGraph-shaped canvas class and ContextMenu of the test's own, so the
     // override lands on a prototype nothing else shares.

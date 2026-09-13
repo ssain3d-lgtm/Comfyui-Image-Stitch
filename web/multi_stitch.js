@@ -38,7 +38,10 @@ import {
 const NODE_TYPE = "MultiStitchImages";
 const THUMB_HEIGHT = 92;
 const THUMB_GAP = 7;
-const THUMB_COLS = 3;
+// The card width the three-column default gives at MIN_NODE_WIDTH. Columns are
+// derived from it, so a node made wider shows more images instead of stretching
+// three cards into letterboxes.
+const THUMB_TARGET_W = 130;
 const MIN_NODE_WIDTH = 420;
 // Deliberately measured in browser/client pixels, not graph coordinates, so
 // ComfyUI zoom cannot turn a normal click into an accidental reorder.
@@ -142,8 +145,13 @@ function listCount(node) {
     return (node._msImages?.length || 0) + (node._msVideos?.length || 0);
 }
 
+function columnsOf(node) {
+    const width = nodeWidth(node) - 16;
+    return Math.max(1, Math.floor((width + THUMB_GAP) / (THUMB_TARGET_W + THUMB_GAP)));
+}
+
 function rowsOf(node) {
-    return Math.max(1, Math.ceil(listCount(node) / THUMB_COLS));
+    return Math.max(1, Math.ceil(listCount(node) / columnsOf(node)));
 }
 
 function heightForRows(node, rows) {
@@ -349,9 +357,10 @@ function listViewport(node) {
 // drawing check it.
 function thumbLayout(node, index) {
     const width = nodeWidth(node) - 16;
-    const cellW = (width - THUMB_GAP * (THUMB_COLS - 1)) / THUMB_COLS;
-    const col = index % THUMB_COLS;
-    const row = Math.floor(index / THUMB_COLS);
+    const cols = columnsOf(node);
+    const cellW = (width - THUMB_GAP * (cols - 1)) / cols;
+    const col = index % cols;
+    const row = Math.floor(index / cols);
     return {
         x: 8 + col * (cellW + THUMB_GAP),
         y: listTop(node) + row * ROW_H,
@@ -905,6 +914,7 @@ const DOM_VIEW_ACTIONS = () => (domViewActions ||= {
     move: moveItem,
     duplicate: duplicateImage,
     copyOriginal: copyOriginalImage,
+    replace: replaceImage,
     openVideo: openVideoPicker,
     removeVideo,
     resized: (node) => node.graph?.setDirtyCanvas(true, true),
@@ -991,7 +1001,11 @@ function drawThumbs(node, ctx) {
     const room = nodeWidth(node) - 18;
     const videos = node._msVideos?.length || 0;
     ctx.textAlign = "left";
-    ctx.fillText(statusText(node, (text) => ctx.measureText?.(text)?.width ?? 0, room), 9, top + 12, room);
+    const fits = (text) => (ctx.measureText?.(text)?.width ?? 0) <= room;
+    const hint = node._msHoverCard >= 0 ? (CARD_HINTS.find(fits) ?? CARD_HINTS[CARD_HINTS.length - 1]) : null;
+    if (hint) ctx.fillStyle = "#8ab4f8";
+    ctx.fillText(hint ?? statusText(node, (text) => ctx.measureText?.(text)?.width ?? 0, room), 9, top + 12, room);
+    ctx.fillStyle = "#b8b8b8";
     drawToolbar(ctx, node);
 
     if (!count && !videos) {
@@ -1675,6 +1689,53 @@ function reorderItem(node, from, to) {
     const [item] = node._msImages.splice(from, 1);
     node._msImages.splice(to, 0, item);
     changed(node);
+}
+
+// The gestures a card answers to are invisible now that it carries no buttons,
+// so the status line says them while the pointer is on one — where the question
+// is actually asked — and the cursor stops pretending the card is canvas.
+const CARD_HINTS = [
+    "Click to edit  ·  drag to reorder  ·  right-click for more",
+    "Click to edit · drag to reorder · right-click",
+    "Click · drag · right-click",
+];
+
+function setCardHover(node, index, graphCanvas) {
+    if (node._msHoverCard !== index) {
+        node._msHoverCard = index;
+        node.graph?.setDirtyCanvas(true, false);
+    }
+    const canvas = graphCanvas?.canvas;
+    if (!canvas?.style) return;
+    // The frontend sets this cursor itself and changes it as the pointer moves
+    // between the canvas and a node, so the value to put back is the one that
+    // was there when a card took it over — not a value cached once.
+    if (index >= 0) {
+        if (node._msCursorWas === undefined) node._msCursorWas = canvas.style.cursor;
+        canvas.style.cursor = node._msThumbPress?.dragging ? "grabbing" : "pointer";
+    } else if (node._msCursorWas !== undefined) {
+        canvas.style.cursor = node._msCursorWas;
+        node._msCursorWas = undefined;
+    }
+}
+
+// The pointer left the node. The frontend sets the canvas cursor for wherever
+// it went, so only the card's claim on it is dropped here.
+function clearCardHover(node) {
+    node._msCursorWas = undefined;
+    if (node._msHoverCard !== -1) {
+        node._msHoverCard = -1;
+        node.graph?.setDirtyCanvas(true, false);
+    }
+}
+
+function cardIndexAtPoint(node, x, y) {
+    if (node.flags?.collapsed) return -1;
+    for (let i = 0; i < listCount(node); i++) {
+        const r = thumbLayout(node, i);
+        if (r.visible && inRect(x, y, r)) return i;
+    }
+    return -1;
 }
 
 function nearestThumbIndex(node, x, y) {
@@ -2667,13 +2728,21 @@ app.registerExtension({
 
         const mouseMove = nodeType.prototype.onMouseMove;
         nodeType.prototype.onMouseMove = function (event, pos, graphCanvas) {
+            const [x, y] = localPos(this, event, pos, graphCanvas);
             if (this._msThumbPress) {
-                const [x, y] = localPos(this, event, pos, graphCanvas);
+                setCardHover(this, this._msThumbPress.index, graphCanvas);
                 updateThumbnailDrag(this, x, y, event);
                 stopEvent(event);
                 return true;
             }
+            setCardHover(this, cardIndexAtPoint(this, x, y), graphCanvas);
             return mouseMove?.apply(this, arguments) ?? false;
+        };
+
+        const mouseLeave = nodeType.prototype.onMouseLeave;
+        nodeType.prototype.onMouseLeave = function () {
+            if (!this._msThumbPress) clearCardHover(this);
+            return mouseLeave?.apply(this, arguments);
         };
 
         const mouseUp = nodeType.prototype.onMouseUp;
@@ -2778,6 +2847,7 @@ export {
     sizePanelEnabled,
     sizeReadout,
     thumbActionRects,
+    columnsOf,
     dropIndexAt,
     dropBarRect,
     imageCardEntries,

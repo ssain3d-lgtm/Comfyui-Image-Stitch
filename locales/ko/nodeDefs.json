@@ -1,6 +1,6 @@
 {
   "MultiStitchImages": {
-    "description": "이미지를 Ctrl+V로 이 노드에 바로 붙여 넣고, 썸네일을 클릭해 자르기·회전·뒤집기를 한 뒤, ≡ 핸들로 순서를 바꿔 한 줄(Strip) 또는 격자(Grid)로 이어 붙입니다.",
+    "description": "이미지를 Ctrl+V로 이 노드에 바로 붙여 넣고, 썸네일을 클릭해 자르기·회전·뒤집기를 한 뒤, 카드를 끌어 순서를 바꿔(우클릭하면 복제·복사·교체·삭제) 한 줄(Strip) 또는 격자(Grid)로 이어 붙입니다.",
     "inputs": {
       "direction": {
         "name": "방향",

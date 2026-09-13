@@ -287,6 +287,7 @@ export function installDomView(node, actions) {
             ["Edit image…", () => actions.edit(node, index)],
             ["Duplicate image", () => actions.duplicate(node, index)],
             ["Copy image to clipboard", () => actions.copyOriginal(node, index)],
+            ["Replace image…", () => actions.replace(node, index)],
             ["Remove image", () => actions.remove(node, index)],
         ]));
         return el;

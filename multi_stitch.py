@@ -1147,7 +1147,7 @@ class MultiStitchImages:
     CATEGORY = "image/transform"
     DESCRIPTION = (
         "Paste multiple images directly into this node with Ctrl+V, click an image to edit, "
-        "drag its ≡ handle to reorder, then output a strip or grid."
+        "drag one to reorder, right-click one for more, then output a strip or grid."
     )
     OUTPUT_TOOLTIPS = (
         "The stitched strip or grid.",
