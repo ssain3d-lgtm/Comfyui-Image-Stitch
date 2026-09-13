@@ -115,11 +115,15 @@ jobs:
         # otherwise inflate the number they are supposed to measure.
         run: coverage report --fail-under=88 --include=multi_stitch.py,multi_stitch_gallery.py,__init__.py
 
-  pillow-floor:
-    # Pillow 10.0.0 is the oldest release the declared floor allows. The
-    # resampling and EXIF APIs the node uses moved around in 10.x, so the newest
-    # Pillow passing says nothing about the version many ComfyUI installs pin.
-    name: Backend (ubuntu, 3.10, pillow 10.0.0)
+  oldest-deps:
+    # The oldest Pillow and numpy the node supports. The resampling and EXIF
+    # APIs it uses moved around in Pillow 10.x and numpy 2 changed promotion
+    # rules, so the newest of each passing says nothing about the versions many
+    # ComfyUI installs pin. The pins are installed on their own line rather than
+    # beside requirements-ci.txt, so raising a floor there (a Dependabot bump,
+    # say) can never make this job unsatisfiable — it would only stop testing
+    # what it exists to test.
+    name: Backend (ubuntu, 3.10, oldest Pillow and numpy)
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -139,11 +143,12 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Install Python test dependencies at the Pillow floor
+      - name: Install Python test dependencies, then step down to the oldest
         run: |
           python -m pip install --upgrade pip
-          python -m pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements-ci.txt "pillow==10.0.0"
-          python -c "import PIL; print('Pillow', PIL.__version__)"
+          python -m pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements-ci.txt
+          python -m pip install "pillow==10.0.0" "numpy==1.26.4"
+          python -c "import PIL, numpy; print('Pillow', PIL.__version__, '/ numpy', numpy.__version__)"
 
       - name: Backend unit tests
         run: python -m unittest discover -s tests -p "test_*.py" -v

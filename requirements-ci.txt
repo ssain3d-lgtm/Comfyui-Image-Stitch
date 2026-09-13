@@ -7,6 +7,9 @@
 # release from breaking CI on its own schedule; Dependabot proposes the bumps.
 
 # What ComfyUI itself provides at runtime, so the node can be imported and run.
+# These floors say what CI installs by default, not what the node supports: the
+# oldest-deps job pins Pillow and numpy to the oldest supported release on its
+# own, so a bump here never stops that from being tested.
 numpy>=1.24,<3
 pillow>=10,<13
 torch>=2.2,<3
