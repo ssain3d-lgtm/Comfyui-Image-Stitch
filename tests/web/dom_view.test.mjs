@@ -72,6 +72,7 @@ function actionSpy(overrides = {}) {
             openGallery: record("openGallery"),
             edit: (node, index) => calls.push(["edit", index]),
             remove: (node, index) => calls.push(["remove", index]),
+            duplicate: (node, index) => calls.push(["duplicate", index]),
             move: (node, index, delta) => calls.push(["move", index, delta]),
             openVideo: (node, entry) => calls.push(["openVideo", entry.filename]),
             removeVideo: (node, entry) => calls.push(["removeVideo", entry.filename]),
@@ -134,6 +135,7 @@ describe("dom view", () => {
         press(handle.root, "Options");
         press(handle.root, "📐");
         const card = cards(handle.root)[1];
+        cardButton(card, "btn duplicate").handlers.click[0]({ stopPropagation() {} });
         cardButton(card, "btn remove").handlers.click[0]({ stopPropagation() {} });
         cardButton(card, "btn prev").handlers.click[0]({ stopPropagation() {} });
         cardButton(card, "btn next").handlers.click[0]({ stopPropagation() {} });
@@ -141,9 +143,21 @@ describe("dom view", () => {
         assert.deepEqual(spy.calls.filter(([name]) => name !== "drawThumb" && name !== "drawPreview" && name !== "resized"), [
             ["add"], ["clear"], ["copy"], ["undo"], ["redo"], ["openGallery"],
             ["togglePreview"], ["toggleOptions"], ["toggleSizePanel"],
-            ["remove", 1], ["move", 1, -1], ["move", 1, 1], ["edit", 1],
+            ["duplicate", 1], ["remove", 1], ["move", 1, -1], ["move", 1, 1], ["edit", 1],
         ]);
         handle.destroy();
+    });
+
+    it("offers duplicate and remove on a single image, but no reorder steps", () => {
+        const one = view.installDomView(fakeNode([item("a.png")]), actionSpy().actions);
+        const only = cards(one.root)[0].children.map((c) => c.className);
+        assert.ok(only.includes("btn duplicate") && only.includes("btn remove"));
+        assert.ok(!only.includes("btn prev") && !only.includes("btn next"), "nothing to reorder");
+        one.destroy();
+        const two = view.installDomView(fakeNode([item("a.png"), item("b.png")]), actionSpy().actions);
+        const both = cards(two.root)[0].children.map((c) => c.className);
+        assert.ok(both.includes("btn prev") && both.includes("btn next"));
+        two.destroy();
     });
 
     it("follows the state its actions report", () => {

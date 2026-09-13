@@ -55,6 +55,7 @@ function installStyles() {
 .ms-dom-view .card .badges span.video{color:#9ad0ff}
 .ms-dom-view .card .btn{position:absolute;background:rgba(0,0,0,.76);border:0;color:#fff;padding:0;width:20px;height:19px;font-size:13px;line-height:19px;text-align:center;border-radius:2px}
 .ms-dom-view .card .btn.remove{right:3px;top:3px}
+.ms-dom-view .card .btn.duplicate{right:26px;top:3px}
 .ms-dom-view .card .btn.prev{left:3px;bottom:3px}
 .ms-dom-view .card .btn.next{right:3px;bottom:3px}
 .ms-dom-view .card .label{position:absolute;left:24px;right:24px;bottom:3px;background:rgba(0,0,0,.6);color:#9ad0ff;font-size:11px;padding:2px 4px;border-radius:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;pointer-events:none}
@@ -210,13 +211,19 @@ export function installDomView(node, actions) {
         }
         if (item.source?.video) badge(`🎞 ${formatTime(item.source.time).replace(/^00:/, "")}`, "video");
         el.appendChild(badges);
+        const duplicate = button("⧉", "Add the same image once more, right after this one", () => actions.duplicate(node, index));
+        duplicate.className = "btn duplicate";
         const remove = button("×", "Remove this image", () => actions.remove(node, index));
         remove.className = "btn remove";
-        const prev = button("‹", "Move one step earlier", () => actions.move(node, index, -1));
-        prev.className = "btn prev";
-        const next = button("›", "Move one step later", () => actions.move(node, index, 1));
-        next.className = "btn next";
-        el.append(remove, prev, next);
+        el.append(duplicate, remove);
+        // Nothing to reorder while there is a single image.
+        if (actions.items(node).length > 1) {
+            const prev = button("‹", "Move one step earlier", () => actions.move(node, index, -1));
+            prev.className = "btn prev";
+            const next = button("›", "Move one step later", () => actions.move(node, index, 1));
+            next.className = "btn next";
+            el.append(prev, next);
+        }
         return el;
     };
 

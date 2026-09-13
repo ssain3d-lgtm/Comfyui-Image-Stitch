@@ -14,7 +14,8 @@
 
 - **Ctrl+V 다중 이미지 붙여넣기**
 - 이미지 클릭 → **즉시 Edit**
-- 전용 **`≡` Drag Handle**로 이미지 순서 변경
+- 전용 **`≡` Drag Handle**로 이미지 순서 변경(이미지가 하나뿐이면 나오지 않습니다)
+- 카드의 **`⧉`** 버튼으로 같은 이미지 한 장 더 넣기 — 사본은 따로 Crop·회전할 수 있습니다
 - 썸네일 **우클릭 → 원본 이미지 클립보드 복사**
 - **`⧉ Copy` 버튼 → 합성 결과를 Queue 없이 바로 클립보드 복사**
 - **동영상에서 장면 캡처** — 프레임 단위로 찾아 원본 해상도 PNG로 목록에 추가, 동영상은 저장 공간을 차지하지 않음. 브라우저가 못 여는 코덱은 서버(PyAV)가 디코딩
@@ -249,6 +250,10 @@ grid_columns = 3
 - 머리글에 `input/multi_stitch` 용량과 **어떤 항목에도 안 쓰이는 파일**의 용량이 나오고, **`Clean up unused files…`** 로 그만큼만 지웁니다. 열려 있는 노드가 쓰는 파일은 절대 지우지 않지만, **디스크에 저장된 워크플로우가 참조하는 파일은 알 수 없으므로** 확인 창에서 그 점을 알려 줍니다.
 - 항목 삭제는 기본적으로 이미지 파일을 남기고, **`Delete + files`** 는 다른 항목과 열린 노드가 안 쓰는 파일만 함께 지웁니다.
 
+**카드 버튼** — 각 카드의 오른쪽 위에 **`⧉` 복제**와 **`×` 삭제**가 있고, 아래쪽에 **`‹` `≡` `›`** 가 있습니다. `≡`는 **눌러서 끄는 손잡이**라 클릭에는 반응하지 않고 드래그로 순서를 바꿉니다. 이미지가 하나뿐이면 바꿀 순서가 없으므로 아래쪽 세 개는 아예 나오지 않습니다.
+
+**`⧉` 복제** — 같은 이미지를 바로 뒤에 한 장 더 넣습니다. 이미 업로드된 파일을 가리키기만 하므로 다시 올리지 않고, 사본의 Crop·회전·반전은 원본과 따로 편집됩니다. 우클릭 메뉴의 **`Duplicate image #N`** 도 같은 동작이고, 실행 취소도 됩니다. (썸네일을 클립보드로 복사하려면 우클릭 → **`Copy original image #N`** 입니다.)
+
 **Vue 노드 모드** — ComfyUI 설정의 **Vue Nodes**(Nodes 2.0)를 켜면 노드 본문이 Vue 컴포넌트로 그려져 캔버스에 직접 그리던 상태 줄·툴바·미리보기·썸네일·크기 패널이 보이지 않았습니다. 이제 그 모드에서는 같은 화면을 DOM으로 그리며, 버튼과 카드는 캔버스와 **동일한 함수**를 호출합니다. 이 표시용 위젯은 워크플로우에 저장되지 않습니다.
 
 **최종 합성 미리보기** — 썸네일 위의 띠에 실제 배치(Strip/Grid, 방향, 간격, 배경색, 출력 크기 제한)를 축소해 보여줍니다. 백엔드와 **같은 레이아웃 계산**(`_layout` ↔ `layoutPlacements`)을 쓰고 CI에서 픽셀 단위로 대조하므로, Queue 전에 보이는 배치가 곧 결과입니다. 툴바의 **`Preview`** 버튼으로 끄고 켤 수 있고(워크플로우에 저장), 아직 로드되지 않았거나 없는 이미지는 `?` 자리표시자로 표시됩니다. 평소에는 512px 썸네일로 바로 그리지만, 캔버스를 확대하거나 고해상도 화면이라 썸네일을 늘려야 할 만큼 커지면 **원본 파일로 합성본을 다시 그려**(긴 변 2048px·4 MP 이내, 노드당 하나 캐시) 선명하게 보여 줍니다. 배치나 이미지가 바뀌면 다시 그리고 그동안은 썸네일 버전이 보입니다. 축소는 절반씩 단계적으로 줄이는 고품질 방식이라 썸네일·미리보기·복사 결과 모두 계단 현상이 없습니다.
@@ -383,6 +388,7 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 - **`⧉ Copy` button → the stitched result on the clipboard without queueing**
 - **Capture frames from a video** — find the moment frame by frame, add it as a native-resolution PNG; the video takes no storage, and the server (PyAV) decodes codecs the browser cannot
 - **Gallery** — every composition a run stitches is recorded with a preview and can be loaded back into a node; it also shows what the image folder holds and clears what nothing uses
+- **Duplicate an image** — `⧉` on a card adds the same file once more, right after it, croppable and rotatable on its own
 - **Reference-image size outputs** — `width`/`height` outputs and a size panel: the reference image's size rescaled to a megapixel target and snapped to a multiple (32 by default)
 - One toolbar row `+ Add · Clear · ⧉ Copy · ↶ ↷ · Preview · Options` — advanced options stay **folded**, only non-default ones show
 - Per-image **Crop / 90° Rotate / Flip H / Flip V**
@@ -410,6 +416,8 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 - **`match_image_size` defaults to `true`** — a new node lines images up by height (width in a vertical strip) from the start. Saved workflows keep their own value.
 - **`match_reference`** — choose the image `match_image_size` matches to: first, largest or smallest (under `Options ▸`). The default, `smallest`, lines images up without upscaling and without reordering; a workflow saved before the option existed opens with `first`, as it behaved then.
 - **Gallery** — `🖼` in the title bar (left of the `?`, beside `📐 Size`) lists every composition this node type has stitched, each with a preview. A run records the image list, its crops, the order and the settings as one entry; stitching the same composition again keeps one entry and counts the use. `Load` puts a composition back into the node, images and settings together; `Add` appends only its images. Names are editable, 200 entries are kept and the least recently used go first. `save every run` turns the recording off, leaving `＋ Save current`; that setting lives with the gallery on the server, so no node widget is added and no saved workflow shifts. The header says how much `input/multi_stitch` holds and how much of it no entry references, and `Clean up unused files…` deletes exactly that: never a file an open node uses, though a workflow saved on disk cannot be detected, which the confirmation says. Deleting an entry keeps its files unless you choose `Delete + files`.
+- **Card controls** — `⧉` duplicate and `×` remove sit at the top right of a card, `‹ ≡ ›` at the bottom. `≡` is a **drag handle**, so it does nothing on a click; drag it to reorder. With a single image there is nothing to reorder, so the bottom three are not drawn at all.
+- **Duplicate** — `⧉` adds the same image once more, right after it. It points at the file already uploaded, so nothing is uploaded again, and the copy's crop, rotation and flips are edited independently of the original. The context menu offers `Duplicate image #N` as well, and the step is undoable. (To put a thumbnail on the clipboard instead, right-click → `Copy original image #N`.)
 - **Vue node mode** — with ComfyUI's **Vue Nodes** (Nodes 2.0) setting on, the node body is a Vue component, so the canvas-drawn status line, toolbar, preview band, thumbnails and size panel did not appear. They are now rendered as DOM in that mode, with the buttons and cards calling exactly the same functions as the canvas. The widget that carries them is never saved with the workflow.
 - **Frames from a video** — adding a video opens a frame picker; captured frames are edited and stitched like any image, and the video lives only in the temp folder until the captures are done. A codec the browser cannot play is decoded by PyAV on the server, and "server capture" gives a decoder-exact frame for playable videos too.
 - **`width` / `height` outputs and a size panel** — the reference image's size (the first by default), rescaled to `size_megapixels` and snapped to a multiple of `size_divisible_by` (32 by default). The **`📐 Size`** button in the title bar adds a panel under the node with a box of that aspect and a readout such as `672 x 1184 | 9:16 | 0.80 MP | divisible by 32`.

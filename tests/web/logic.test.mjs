@@ -63,7 +63,8 @@ async function waitForThumbs(node) {
 const click = (node, [x, y]) => nodeType.prototype.onMouseDown.call(node, pointer(x, y), [x, y], {});
 // A click in the middle of one toolbar pill, wherever toolbarControls puts it.
 const clickControl = (node, name) => click(node, centre(ms.toolbarControls(node)[name]));
-const clickCardAction = (node, index, action) => click(node, centre(ms.thumbActionRects(card(node, index))[action]));
+const clickCardAction = (node, index, action) =>
+    click(node, centre(ms.thumbActionRects(card(node, index), node._msImages.length)[action]));
 const until = async (condition, ms = 2000) => {
     const start = Date.now();
     while (!condition()) {
@@ -421,6 +422,66 @@ function textCalls(node, perChar) {
     return { calls, balanced: stack.length === 0 };
 }
 
+describe("duplicating an image", () => {
+    it("adds the same image once more, right after the one it came from", () => {
+        const node = makeNode(nodeType);
+        // Through applyImages, so the history has the starting list in it — as
+        // it does when the images arrive from a paste or the gallery.
+        ms.applyImages(node, [item("a.png"), item("b.png", { rotation: 90, crop: { x: 0.1, y: 0.2, w: 0.5, h: 0.5 } })], { pushHistory: false });
+        assert.equal(clickCardAction(node, 1, "duplicate"), true);
+        const names = node._msImages.map((i) => i.filename);
+        assert.deepEqual(names, ["a.png", "b.png", "b.png"], "the copy sits next to its original");
+        const [, original, copy] = node._msImages;
+        assert.deepEqual(copy.crop, original.crop);
+        assert.equal(copy.rotation, 90, "the copy keeps the edits made so far");
+        assert.notEqual(copy.crop, original.crop, "but its crop is its own object, editable apart");
+        assert.equal(JSON.parse(widget(node, "images_json").value).length, 3, "the widget follows");
+
+        // Editing the copy must leave the original alone.
+        copy.crop.w = 0.25;
+        assert.equal(original.crop.w, 0.5);
+
+        assert.equal(ms.undo(node), true);
+        assert.deepEqual(node._msImages.map((i) => i.filename), ["a.png", "b.png"], "and it is undoable");
+    });
+
+    it("refuses to go past the image limit, and says so", () => {
+        const node = makeNode(nodeType);
+        setImages(node, Array.from({ length: shared.MAX_IMAGES }, (_, i) => item(`f${i}.png`)));
+        app.extensionManager.toast.log.length = 0;
+        assert.equal(ms.duplicateImage(node, 0), false);
+        assert.equal(node._msImages.length, shared.MAX_IMAGES);
+        assert.match(toasts().join(" "), /warn\/Cannot duplicate/);
+        assert.equal(ms.duplicateImage(node, 999), false, "and does nothing for a card that is not there");
+    });
+
+    it("is offered in the context menu for the card under the pointer", () => {
+        const node = makeNode(nodeType);
+        setImages(node, [item("a.png"), item("b.png")]);
+        const options = [];
+        const r = card(node, 1);
+        nodeType.prototype.getExtraMenuOptions.call(node, { graph_mouse: [node.pos[0] + r.x + 10, node.pos[1] + r.y + 10] }, options);
+        const duplicate = options.find((o) => o?.content === "Duplicate image #2");
+        assert.ok(duplicate, `expected a duplicate entry, got ${options.map((o) => o?.content).join(", ")}`);
+        duplicate.callback();
+        assert.deepEqual(node._msImages.map((i) => i.filename), ["a.png", "b.png", "b.png"]);
+    });
+
+    it("leaves out the reorder controls while there is only one image", () => {
+        const node = makeNode(nodeType);
+        setImages(node, [item("a.png")]);
+        const rects = ms.thumbActionRects(card(node, 0), 1);
+        assert.deepEqual(Object.keys(rects), ["duplicate", "remove"], "no ≡ handle and no ‹ › steps");
+        const painted = paintedText(nodeType, node);
+        assert.ok(painted.includes("⧉"));
+        assert.ok(!painted.includes("≡"), "the handle a single image cannot use is not drawn");
+        // Two images bring them back.
+        setImages(node, [item("a.png"), item("b.png")]);
+        assert.deepEqual(Object.keys(ms.thumbActionRects(card(node, 0), 2)).sort(), ["drag", "duplicate", "next", "prev", "remove"]);
+        assert.ok(paintedText(nodeType, node).includes("≡"));
+    });
+});
+
 describe("empty box", () => {
     // Pasting goes through ComfyUI's pasteFiles, which only ever hands over
     // image items, so the hint promises images for a paste and a video only by
@@ -758,8 +819,8 @@ describe("copy original image", () => {
 
         const options = [];
         nodeType.prototype.getExtraMenuOptions.call(node, { graph_mouse: [card(node, 0).x + 65, card(node, 0).y + 46] }, options);
-        assert.equal(options[0].content, "Copy original image #1");
-        assert.equal(options[1].content, "Replace image #1…");
+        assert.deepEqual(options.slice(0, 3).map((o) => o.content),
+            ["Copy original image #1", "Duplicate image #1", "Replace image #1…"]);
         await options[0].callback();
         assert.equal(written.length, 1);
         assert.equal(written[0].type, "image/png", "a JPEG source is re-encoded");

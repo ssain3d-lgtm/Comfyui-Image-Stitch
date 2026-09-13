@@ -424,13 +424,20 @@ function toggleAdvanced(node) {
     node.graph?.setDirtyCanvas(true, true);
 }
 
-function thumbActionRects(r) {
-    return {
+// `count` is how many images the list holds: with only one there is nothing
+// to reorder, so the ≡ handle and the ‹ › steps are left out rather than
+// sitting there doing nothing when clicked.
+function thumbActionRects(r, count = 2) {
+    const rects = {
+        duplicate: { x: r.x + r.w - 46, y: r.y + 3, w: 20, h: 19 },
         remove: { x: r.x + r.w - 23, y: r.y + 3, w: 20, h: 19 },
-        prev: { x: r.x + 3, y: r.y + r.h - 22, w: 20, h: 19 },
-        drag: { x: r.x + r.w / 2 - 13, y: r.y + r.h - 22, w: 26, h: 19 },
-        next: { x: r.x + r.w - 23, y: r.y + r.h - 22, w: 20, h: 19 },
     };
+    if (count > 1) {
+        rects.prev = { x: r.x + 3, y: r.y + r.h - 22, w: 20, h: 19 };
+        rects.drag = { x: r.x + r.w / 2 - 13, y: r.y + r.h - 22, w: 26, h: 19 };
+        rects.next = { x: r.x + r.w - 23, y: r.y + r.h - 22, w: 20, h: 19 };
+    }
+    return rects;
 }
 
 
@@ -694,7 +701,7 @@ function drawPreview(ctx, node, rect) {
 }
 
 function drawCard(ctx, node, item, index, r) {
-    const actions = thumbActionRects(r);
+    const actions = thumbActionRects(r, node._msImages?.length || 1);
     const press = node._msThumbPress;
     const isSource = press?.dragging && press.index === index;
     const isTarget = press?.dragging && press.target === index;
@@ -769,17 +776,18 @@ function drawCard(ctx, node, item, index, r) {
     }
 
     ctx.fillStyle = "rgba(0,0,0,.76)";
-    ctx.fillRect(actions.remove.x, actions.remove.y, actions.remove.w, actions.remove.h);
-    ctx.fillRect(actions.prev.x, actions.prev.y, actions.prev.w, actions.prev.h);
-    ctx.fillRect(actions.drag.x, actions.drag.y, actions.drag.w, actions.drag.h);
-    ctx.fillRect(actions.next.x, actions.next.y, actions.next.w, actions.next.h);
+    for (const rect of Object.values(actions)) ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
     ctx.fillStyle = "#fff";
     ctx.fillText("×", actions.remove.x + 5, actions.remove.y + 14);
-    ctx.fillText("‹", actions.prev.x + 6, actions.prev.y + 15);
     ctx.textAlign = "center";
-    ctx.fillText("≡", actions.drag.x + actions.drag.w / 2, actions.drag.y + 14);
+    ctx.fillText("⧉", actions.duplicate.x + actions.duplicate.w / 2, actions.duplicate.y + 14);
+    if (actions.drag) {
+        ctx.fillText("≡", actions.drag.x + actions.drag.w / 2, actions.drag.y + 14);
+        ctx.textAlign = "left";
+        ctx.fillText("‹", actions.prev.x + 6, actions.prev.y + 15);
+        ctx.fillText("›", actions.next.x + 6, actions.next.y + 15);
+    }
     ctx.textAlign = "left";
-    ctx.fillText("›", actions.next.x + 6, actions.next.y + 15);
     ctx.restore();
 }
 
@@ -903,6 +911,7 @@ const DOM_VIEW_ACTIONS = () => (domViewActions ||= {
     edit: openEditor,
     remove: removeImageAt,
     move: moveItem,
+    duplicate: duplicateImage,
     openVideo: openVideoPicker,
     removeVideo,
     resized: (node) => node.graph?.setDirtyCanvas(true, true),
@@ -1636,6 +1645,24 @@ function moveItem(node, index, delta) {
     if (target < 0 || target >= node._msImages.length) return false;
     const [item] = node._msImages.splice(index, 1);
     node._msImages.splice(target, 0, item);
+    changed(node);
+    return true;
+}
+
+// The same image once more, right after the one it came from: a second copy
+// of a file already in the input folder needs no upload, and its crop and
+// transform can then be edited on its own.
+function duplicateImage(node, index) {
+    const items = node._msImages || [];
+    const item = items[index];
+    if (!item) return false;
+    if (items.length >= MAX_IMAGES) {
+        notify("Cannot duplicate", `A node holds at most ${MAX_IMAGES} images.`, "warn");
+        return false;
+    }
+    const copy = { ...item, crop: { ...normalizeCrop(item.crop) } };
+    if (item.source) copy.source = { ...item.source };
+    items.splice(index + 1, 0, copy);
     changed(node);
     return true;
 }
@@ -2512,14 +2539,16 @@ app.registerExtension({
                     const r = thumbLayout(this, i);
                     if (!r.visible || !inRect(x, y, r)) continue;
 
-                    const actions = thumbActionRects(r);
-                    if (inRect(x, y, actions.remove)) {
+                    const actions = thumbActionRects(r, this._msImages.length);
+                    if (inRect(x, y, actions.duplicate)) {
+                        duplicateImage(this, i);
+                    } else if (inRect(x, y, actions.remove)) {
                         removeImageAt(this, i);
-                    } else if (inRect(x, y, actions.prev)) {
+                    } else if (actions.prev && inRect(x, y, actions.prev)) {
                         moveItem(this, i, -1);
-                    } else if (inRect(x, y, actions.next)) {
+                    } else if (actions.next && inRect(x, y, actions.next)) {
                         moveItem(this, i, 1);
-                    } else if (inRect(x, y, actions.drag)) {
+                    } else if (actions.drag && inRect(x, y, actions.drag)) {
                         startThumbnailDrag(this, i, x, y, event, graphCanvas);
                     } else {
                         // Editing no longer competes with reorder gesture detection.
@@ -2552,6 +2581,10 @@ app.registerExtension({
                     {
                         content: `Copy original image #${index + 1}`,
                         callback: () => copyOriginalImage(this, index),
+                    },
+                    {
+                        content: `Duplicate image #${index + 1}`,
+                        callback: () => duplicateImage(this, index),
                     },
                     {
                         content: `Replace image #${index + 1}…`,
@@ -2677,6 +2710,7 @@ export {
     drawContained,
     drawPreview,
     drawSizePanel,
+    duplicateImage,
     emptyBoxRect,
     listCount,
     listTop,
