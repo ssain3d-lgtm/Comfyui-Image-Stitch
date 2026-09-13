@@ -10,7 +10,7 @@
 # These floors say what CI installs by default, not what the node supports: the
 # oldest-deps job pins Pillow and numpy to the oldest supported release on its
 # own, so a bump here never stops that from being tested.
-numpy>=1.24,<3
+numpy>=2.2.6,<3
 pillow>=10,<13
 torch>=2.2,<3
 aiohttp>=3.14.3,<4
