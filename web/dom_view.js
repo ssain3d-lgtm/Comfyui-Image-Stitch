@@ -44,7 +44,10 @@ function installStyles() {
 .ms-dom-view button.on{background:#2f6b45;border-color:#4ade80;color:#c9f7d9}
 .ms-dom-view canvas.preview{width:100%;height:${PREVIEW_H}px;display:block;background:#101010;border:1px solid #333;border-radius:3px}
 .ms-dom-view .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}
-.ms-dom-view .card{position:relative;height:${CARD_H}px;background:#171717;border:1px solid #555;border-radius:3px;overflow:hidden}
+.ms-dom-view .card{position:relative;height:${CARD_H}px;background:#171717;border:1px solid #555;border-radius:3px;overflow:hidden;cursor:grab}
+.ms-dom-view .card.dragging{opacity:.55}
+.ms-dom-view .card.drop-before,.ms-dom-view .card.drop-after{box-shadow:inset 3px 0 0 #8ab4f8}
+.ms-dom-view .card.drop-after{box-shadow:inset -3px 0 0 #8ab4f8}
 .ms-dom-view .card.edited{border-color:#f6b73c}
 .ms-dom-view .card canvas.thumb{position:absolute;inset:3px;width:calc(100% - 6px);height:calc(100% - 6px);cursor:pointer}
 .ms-dom-view .card .text{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:#8d8d8d;padding:4px 26px;cursor:pointer}
@@ -55,9 +58,9 @@ function installStyles() {
 .ms-dom-view .card .badges span.video{color:#9ad0ff}
 .ms-dom-view .card .btn{position:absolute;background:rgba(0,0,0,.76);border:0;color:#fff;padding:0;width:20px;height:19px;font-size:13px;line-height:19px;text-align:center;border-radius:2px}
 .ms-dom-view .card .btn.remove{right:3px;top:3px}
-.ms-dom-view .card .btn.duplicate{right:26px;top:3px}
-.ms-dom-view .card .btn.prev{left:3px;bottom:3px}
-.ms-dom-view .card .btn.next{right:3px;bottom:3px}
+.ms-card-menu{position:fixed;z-index:10000;background:#2b2b2b;border:1px solid #4a4a4a;border-radius:4px;padding:3px;display:flex;flex-direction:column;min-width:150px;box-shadow:0 4px 14px rgba(0,0,0,.5);font:12px sans-serif}
+.ms-card-menu button{background:transparent;border:0;color:#e6e6e6;text-align:left;padding:5px 9px;border-radius:3px;cursor:pointer;font:inherit}
+.ms-card-menu button:hover{background:#3d5a80}
 .ms-dom-view .card .label{position:absolute;left:24px;right:24px;bottom:3px;background:rgba(0,0,0,.6);color:#9ad0ff;font-size:11px;padding:2px 4px;border-radius:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;pointer-events:none}
 .ms-dom-view .empty{border:1px dashed #666;border-radius:3px;height:${CARD_H}px;display:flex;align-items:center;justify-content:center;text-align:center;color:#8f8f8f;cursor:pointer;padding:0 12px}
 .ms-dom-view .empty.over{border-color:#8ab4f8;color:#c8d8ff}
@@ -177,6 +180,46 @@ export function installDomView(node, actions) {
         if (files) actions.addFiles(node, files);
     });
 
+    // Which card is in hand, and the marks showing where it would land.
+    let drag = null;
+    const clearDropMarks = () => {
+        for (const card of cards.children || []) card.classList?.remove("drop-before", "drop-after", "dragging");
+    };
+
+    // Right-click on a card. The canvas puts these on LiteGraph's node menu,
+    // which cannot tell which card was under the pointer here, so the DOM
+    // rendering opens its own small popup instead.
+    const closeMenu = () => {
+        view.menu?.remove?.();
+        view.menu = null;
+    };
+    const openMenu = (event, entries) => {
+        event.preventDefault?.();
+        event.stopPropagation?.();
+        closeMenu();
+        const menu = document.createElement("div");
+        menu.className = "ms-card-menu";
+        menu.style.left = `${event.clientX ?? 0}px`;
+        menu.style.top = `${event.clientY ?? 0}px`;
+        for (const [label, run] of entries) {
+            const entry = document.createElement("button");
+            entry.textContent = label;
+            entry.addEventListener("click", (click) => {
+                click.stopPropagation?.();
+                closeMenu();
+                run();
+            });
+            menu.appendChild(entry);
+        }
+        menu.addEventListener("contextmenu", (e) => e.preventDefault?.());
+        document.body.appendChild(menu);
+        view.menu = menu;
+        // Not this very event: the press that opened it would close it again.
+        setTimeout(() => {
+            if (view.menu === menu) window.addEventListener("pointerdown", closeMenu, { once: true, capture: true });
+        }, 0);
+    };
+
     const cardFor = (item, index) => {
         const el = document.createElement("div");
         el.className = `card${isCropped(item.crop) || isTransformed(item) ? " edited" : ""}`;
@@ -209,21 +252,42 @@ export function installDomView(node, actions) {
             const t = normalizeTransform(item);
             badge(`${t.rotation}°${t.flip_h ? "H" : ""}${t.flip_v ? "V" : ""}`, "edit");
         }
-        if (item.source?.video) badge(`🎞 ${formatTime(item.source.time).replace(/^00:/, "")}`, "video");
         el.appendChild(badges);
-        const duplicate = button("⧉", "Add the same image once more, right after this one", () => actions.duplicate(node, index));
-        duplicate.className = "btn duplicate";
-        const remove = button("×", "Remove this image", () => actions.remove(node, index));
-        remove.className = "btn remove";
-        el.append(duplicate, remove);
-        // Nothing to reorder while there is a single image.
-        if (actions.items(node).length > 1) {
-            const prev = button("‹", "Move one step earlier", () => actions.move(node, index, -1));
-            prev.className = "btn prev";
-            const next = button("›", "Move one step later", () => actions.move(node, index, 1));
-            next.className = "btn next";
-            el.append(prev, next);
-        }
+        el.title = "Click to edit · drag to reorder · right-click for more";
+        // Reordering is the card itself, so no handle covers the picture. The
+        // card the pointer is over shows on which side the held one would land.
+        el.draggable = true;
+        el.addEventListener("dragstart", (event) => {
+            drag = index;
+            el.classList?.add("dragging");
+            try {
+                event.dataTransfer.effectAllowed = "move";
+                event.dataTransfer.setData("text/plain", String(index));
+            } catch (_) {}
+        });
+        el.addEventListener("dragend", () => { drag = null; clearDropMarks(); });
+        el.addEventListener("dragover", (event) => {
+            if (drag === null || drag === index) return;
+            event.preventDefault?.();
+            event.stopPropagation?.();
+            clearDropMarks();
+            el.classList?.add(drag < index ? "drop-after" : "drop-before");
+        });
+        el.addEventListener("dragleave", () => el.classList?.remove("drop-before", "drop-after"));
+        el.addEventListener("drop", (event) => {
+            if (drag === null || drag === index) return;
+            event.preventDefault?.();
+            event.stopPropagation?.();
+            const from = drag;
+            drag = null;
+            clearDropMarks();
+            actions.move(node, from, index - from);
+        });
+        el.addEventListener("contextmenu", (event) => openMenu(event, [
+            ["Edit image…", () => actions.edit(node, index)],
+            ["Duplicate image", () => actions.duplicate(node, index)],
+            ["Remove image", () => actions.remove(node, index)],
+        ]));
         return el;
     };
 
@@ -329,6 +393,7 @@ export function installDomView(node, actions) {
     }
     view.destroy = () => {
         view.alive = false;
+        closeMenu();
         clearTimeout(view.timer);
         const widget = view.widget;
         if (widget) {

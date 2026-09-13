@@ -424,20 +424,37 @@ function toggleAdvanced(node) {
     node.graph?.setDirtyCanvas(true, true);
 }
 
-// `count` is how many images the list holds: with only one there is nothing
-// to reorder, so the ≡ handle and the ‹ › steps are left out rather than
-// sitting there doing nothing when clicked.
-function thumbActionRects(r, count = 2) {
-    const rects = {
-        duplicate: { x: r.x + r.w - 46, y: r.y + 3, w: 20, h: 19 },
-        remove: { x: r.x + r.w - 23, y: r.y + 3, w: 20, h: 19 },
-    };
-    if (count > 1) {
-        rects.prev = { x: r.x + 3, y: r.y + r.h - 22, w: 20, h: 19 };
-        rects.drag = { x: r.x + r.w / 2 - 13, y: r.y + r.h - 22, w: 26, h: 19 };
-        rects.next = { x: r.x + r.w - 23, y: r.y + r.h - 22, w: 20, h: 19 };
+// Only the video card carries a button. A click on it captures frames, so
+// removing it needs a corner of its own. Image cards have none: dragging one
+// reorders it, a click opens the editor and the rest is the right-click menu,
+// which leaves the whole card for the picture.
+function thumbActionRects(r) {
+    return { remove: { x: r.x + r.w - 23, y: r.y + 3, w: 20, h: 19 } };
+}
+
+// Where a card being dragged would land: a slot between cards, 0 to length.
+// The nearest card decides the row, its middle decides which side.
+function dropIndexAt(node, x, y) {
+    const count = node?._msImages?.length || 0;
+    if (!count) return 0;
+    const nearest = nearestThumbIndex(node, x, y);
+    if (nearest < 0) return count;
+    const r = thumbLayout(node, nearest);
+    return x < r.x + r.w / 2 ? nearest : nearest + 1;
+}
+
+// The bar drawn at that slot: down the left edge of the card that would follow,
+// or past the right edge of the last one.
+function dropBarRect(node, slot) {
+    const count = node?._msImages?.length || 0;
+    if (!count) return null;
+    const index = Math.min(Math.max(0, slot), count);
+    if (index < count) {
+        const r = thumbLayout(node, index);
+        return { x: r.x - 4, y: r.y, w: 3, h: r.h };
     }
-    return rects;
+    const r = thumbLayout(node, count - 1);
+    return { x: r.x + r.w + 1, y: r.y, w: 3, h: r.h };
 }
 
 
@@ -701,19 +718,15 @@ function drawPreview(ctx, node, rect) {
 }
 
 function drawCard(ctx, node, item, index, r) {
-    const actions = thumbActionRects(r, node._msImages?.length || 1);
     const press = node._msThumbPress;
     const isSource = press?.dragging && press.index === index;
-    const isTarget = press?.dragging && press.target === index;
 
     ctx.save();
     if (isSource) ctx.globalAlpha = 0.55;
     ctx.fillStyle = "#171717";
     ctx.fillRect(r.x, r.y, r.w, r.h);
-    ctx.strokeStyle = isTarget
-        ? "#8ab4f8"
-        : (isCropped(item.crop) || isTransformed(item) ? "#f6b73c" : "#555");
-    ctx.lineWidth = isTarget ? 3 : 1;
+    ctx.strokeStyle = isCropped(item.crop) || isTransformed(item) ? "#f6b73c" : "#555";
+    ctx.lineWidth = 1;
     ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
 
     const state = loadTransformedThumb(node, item);
@@ -765,27 +778,6 @@ function drawCard(ctx, node, item, index, r) {
         ctx.fillRect(badgeX, r.y + 3, 48, 19);
         ctx.fillStyle = "#f6b73c";
         ctx.fillText(`${t.rotation}°${t.flip_h ? "H" : ""}${t.flip_v ? "V" : ""}`, badgeX + 4, r.y + 17);
-        badgeX += 51;
-    }
-    if (item.source?.video && badgeX + 58 < r.x + r.w - 26) {
-        // A frame captured from a video: where it came from, at a glance.
-        ctx.fillStyle = "rgba(0,0,0,.72)";
-        ctx.fillRect(badgeX, r.y + 3, 58, 19);
-        ctx.fillStyle = "#9ad0ff";
-        ctx.fillText(`🎞 ${formatTime(item.source.time).replace(/^00:/, "")}`, badgeX + 4, r.y + 17);
-    }
-
-    ctx.fillStyle = "rgba(0,0,0,.76)";
-    for (const rect of Object.values(actions)) ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
-    ctx.fillStyle = "#fff";
-    ctx.fillText("×", actions.remove.x + 5, actions.remove.y + 14);
-    ctx.textAlign = "center";
-    ctx.fillText("⧉", actions.duplicate.x + actions.duplicate.w / 2, actions.duplicate.y + 14);
-    if (actions.drag) {
-        ctx.fillText("≡", actions.drag.x + actions.drag.w / 2, actions.drag.y + 14);
-        ctx.textAlign = "left";
-        ctx.fillText("‹", actions.prev.x + 6, actions.prev.y + 15);
-        ctx.fillText("›", actions.next.x + 6, actions.next.y + 15);
     }
     ctx.textAlign = "left";
     ctx.restore();
@@ -1018,7 +1010,7 @@ function drawThumbs(node, ctx) {
         const room = r.w - 16;
         // ComfyUI hands only image items to pasteFiles, so a paste is images
         // only; a video arrives by drop or through Add.
-        drawWrappedText(ctx, "Paste images · Drop or Add images or a video\nClick to edit · Drag ≡ to reorder", r.x + r.w / 2, r.y + r.h / 2 + 4, room);
+        drawWrappedText(ctx, "Paste images · Drop or Add images or a video\nClick to edit · Drag to reorder\nRight-click a card for more", r.x + r.w / 2, r.y + r.h / 2 + 4, room);
         ctx.restore();
         const panel = sizePanelRect(node);
         if (panel) drawSizePanel(ctx, node, panel);
@@ -1042,6 +1034,16 @@ function drawThumbs(node, ctx) {
         const r = thumbLayout(node, items.length + index);
         if (r.visible) drawVideoCard(ctx, entry, r);
     });
+
+    // Where the card in hand would land, drawn on top of the row it splits.
+    const press = node._msThumbPress;
+    if (press?.dragging) {
+        const bar = dropBarRect(node, press.drop ?? press.index);
+        if (bar) {
+            ctx.fillStyle = "#8ab4f8";
+            ctx.fillRect(bar.x, bar.y, bar.w, bar.h);
+        }
+    }
     ctx.restore();
 
     const panel = sizePanelRect(node);
@@ -2238,10 +2240,7 @@ function updateThumbnailDrag(node, x, y, event) {
     if (!press.dragging && dragDistancePx(press, event, x, y) >= DRAG_THRESHOLD_PX) {
         press.dragging = true;
     }
-    if (press.dragging) {
-        const nearest = nearestThumbIndex(node, x, y);
-        if (nearest >= 0) press.target = nearest;
-    }
+    if (press.dragging) press.drop = dropIndexAt(node, x, y);
     node.graph?.setDirtyCanvas(true, false);
     return true;
 }
@@ -2254,7 +2253,12 @@ function finishThumbnailDrag(node) {
     detachPressFallback(press);
     node._msThumbPress = null;
 
-    if (press.dragging) reorderItem(node, press.index, press.target);
+    // A slot is between cards, so landing after its own place shifts by one.
+    // Releasing without having moved was a plain click: open the editor.
+    if (press.dragging) {
+        const slot = press.drop ?? press.index;
+        reorderItem(node, press.index, slot > press.index ? slot - 1 : slot);
+    } else openEditor(node, press.index);
 
     node.graph?.setDirtyCanvas(true, false);
     return true;
@@ -2264,7 +2268,7 @@ function startThumbnailDrag(node, index, localX, localY, event, graphCanvas) {
     const client = clientPos(event);
     const press = {
         index,
-        target: index,
+        drop: index,
         startX: localX,
         startY: localY,
         currentX: localX,
@@ -2539,23 +2543,11 @@ app.registerExtension({
                     const r = thumbLayout(this, i);
                     if (!r.visible || !inRect(x, y, r)) continue;
 
-                    const actions = thumbActionRects(r, this._msImages.length);
-                    if (inRect(x, y, actions.duplicate)) {
-                        duplicateImage(this, i);
-                    } else if (inRect(x, y, actions.remove)) {
-                        removeImageAt(this, i);
-                    } else if (actions.prev && inRect(x, y, actions.prev)) {
-                        moveItem(this, i, -1);
-                    } else if (actions.next && inRect(x, y, actions.next)) {
-                        moveItem(this, i, 1);
-                    } else if (actions.drag && inRect(x, y, actions.drag)) {
-                        startThumbnailDrag(this, i, x, y, event, graphCanvas);
-                    } else {
-                        // Editing no longer competes with reorder gesture detection.
-                        // The image area is a direct single-click edit target.
-                        openEditor(this, i);
-                    }
-
+                    // The card is picked up as it is pressed: moving it shows
+                    // where it would land, releasing without moving opens the
+                    // editor. Duplicating and removing are on the right-click
+                    // menu, so no button sits over the picture.
+                    startThumbnailDrag(this, i, x, y, event, graphCanvas);
                     stopEvent(event);
                     return true;
                 }
@@ -2579,16 +2571,24 @@ app.registerExtension({
             if (index >= 0) {
                 extra.push(
                     {
-                        content: `Copy original image #${index + 1}`,
-                        callback: () => copyOriginalImage(this, index),
+                        content: `Edit image #${index + 1}…`,
+                        callback: () => openEditor(this, index),
                     },
                     {
                         content: `Duplicate image #${index + 1}`,
                         callback: () => duplicateImage(this, index),
                     },
                     {
+                        content: `Copy original image #${index + 1}`,
+                        callback: () => copyOriginalImage(this, index),
+                    },
+                    {
                         content: `Replace image #${index + 1}…`,
                         callback: () => replaceImage(this, index),
+                    },
+                    {
+                        content: `Remove image #${index + 1}`,
+                        callback: () => removeImageAt(this, index),
                     },
                 );
             }
@@ -2731,6 +2731,8 @@ export {
     sizePanelEnabled,
     sizeReadout,
     thumbActionRects,
+    dropIndexAt,
+    dropBarRect,
     thumbLayout,
     titleHeight,
     toggleAdvanced,

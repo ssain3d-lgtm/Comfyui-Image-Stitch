@@ -396,7 +396,8 @@ describe("copy original image", () => {
             const options = [];
             // graph_mouse over card 0: the list starts 148px down (toolbar row included), 130px cells.
             window.__nodeType.prototype.getExtraMenuOptions.call(node, { graph_mouse: [73, 194] }, options);
-            await options[0].callback();
+            const copy = options.find((o) => o?.content === "Copy original image #1");
+            await copy.callback();
             await new Promise((resolve) => setTimeout(resolve, 200));
             const toast = window.__toasts[0];
             let decoded = null;
@@ -414,7 +415,7 @@ describe("copy original image", () => {
                     decoded = { w: bitmap.width, h: bitmap.height, pixel: [...ctx.getImageData(0, 0, 1, 1).data].slice(0, 3), magic };
                 }
             } catch (error) { decoded = { error: String(error) }; }
-            return { entry: options[0].content, toast: toast && `${toast.severity}/${toast.summary}`, detail: toast?.detail, decoded };
+            return { entry: copy.content, toast: toast && `${toast.severity}/${toast.summary}`, detail: toast?.detail, decoded };
         }, filename);
     }
 

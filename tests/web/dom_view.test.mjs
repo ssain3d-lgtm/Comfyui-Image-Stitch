@@ -86,7 +86,8 @@ const part = (root, className) => root.children.find((child) => child.className 
 const buttons = (root) => part(root, "toolbar").children;
 const press = (root, label) => buttons(root).find((b) => b.textContent.startsWith(label))?.handlers?.click?.[0]?.({ stopPropagation() {} });
 const cards = (root) => part(root, "cards").children;
-const cardButton = (card, className) => card.children.find((child) => child.className === className);
+const menuEvent = () => ({ clientX: 30, clientY: 40, preventDefault() {}, stopPropagation() {} });
+const dragEvent = () => ({ preventDefault() {}, stopPropagation() {}, dataTransfer: {} });
 
 beforeEach(() => {
     dom.overlays.length = 0;
@@ -135,29 +136,45 @@ describe("dom view", () => {
         press(handle.root, "Options");
         press(handle.root, "📐");
         const card = cards(handle.root)[1];
-        cardButton(card, "btn duplicate").handlers.click[0]({ stopPropagation() {} });
-        cardButton(card, "btn remove").handlers.click[0]({ stopPropagation() {} });
-        cardButton(card, "btn prev").handlers.click[0]({ stopPropagation() {} });
-        cardButton(card, "btn next").handlers.click[0]({ stopPropagation() {} });
+        // The card's own controls are its right-click menu now.
+        card.handlers.contextmenu[0](menuEvent());
+        const entries = dom.overlays.at(-1).children;
+        assert.deepEqual(entries.map((e) => e.textContent), ["Edit image…", "Duplicate image", "Remove image"]);
+        for (const entry of entries) entry.handlers.click[0]({ stopPropagation() {} });
         card.children.find((c) => c.className === "thumb").handlers.click[0]();
         assert.deepEqual(spy.calls.filter(([name]) => name !== "drawThumb" && name !== "drawPreview" && name !== "resized"), [
             ["add"], ["clear"], ["copy"], ["undo"], ["redo"], ["openGallery"],
             ["togglePreview"], ["toggleOptions"], ["toggleSizePanel"],
-            ["duplicate", 1], ["remove", 1], ["move", 1, -1], ["move", 1, 1], ["edit", 1],
+            ["edit", 1], ["duplicate", 1], ["remove", 1], ["edit", 1],
         ]);
         handle.destroy();
     });
 
-    it("offers duplicate and remove on a single image, but no reorder steps", () => {
-        const one = view.installDomView(fakeNode([item("a.png")]), actionSpy().actions);
-        const only = cards(one.root)[0].children.map((c) => c.className);
-        assert.ok(only.includes("btn duplicate") && only.includes("btn remove"));
-        assert.ok(!only.includes("btn prev") && !only.includes("btn next"), "nothing to reorder");
-        one.destroy();
-        const two = view.installDomView(fakeNode([item("a.png"), item("b.png")]), actionSpy().actions);
-        const both = cards(two.root)[0].children.map((c) => c.className);
-        assert.ok(both.includes("btn prev") && both.includes("btn next"));
-        two.destroy();
+    it("keeps the picture clear of buttons and reorders by dragging a card", () => {
+        const spy = actionSpy();
+        const handle = view.installDomView(fakeNode([item("a.png"), item("b.png"), item("c.png")]), spy.actions);
+        const [first, , third] = cards(handle.root);
+        assert.deepEqual(first.children.map((c) => c.className).filter((c) => c.startsWith("btn")), [],
+            "no duplicate, remove or step buttons over the image");
+        assert.equal(first.draggable, true);
+
+        first.handlers.dragstart[0]({ dataTransfer: {} });
+        assert.ok(first.classList.contains("dragging"));
+        third.handlers.dragover[0](dragEvent());
+        assert.ok(third.classList.contains("drop-after"), "the bar shows on the side it would land");
+        third.handlers.drop[0](dragEvent());
+        assert.deepEqual(spy.calls.filter(([name]) => name === "move"), [["move", 0, 2]]);
+        assert.ok(!third.classList.contains("drop-after"), "and the mark is cleared");
+        handle.destroy();
+    });
+
+    it("closes its card menu with the view", () => {
+        const handle = view.installDomView(fakeNode([item("a.png")]), actionSpy().actions);
+        cards(handle.root)[0].handlers.contextmenu[0](menuEvent());
+        const menu = dom.overlays.at(-1);
+        assert.equal(menu.attached, true);
+        handle.destroy();
+        assert.equal(menu.attached, false);
     });
 
     it("follows the state its actions report", () => {

@@ -63,8 +63,29 @@ async function waitForThumbs(node) {
 const click = (node, [x, y]) => nodeType.prototype.onMouseDown.call(node, pointer(x, y), [x, y], {});
 // A click in the middle of one toolbar pill, wherever toolbarControls puts it.
 const clickControl = (node, name) => click(node, centre(ms.toolbarControls(node)[name]));
-const clickCardAction = (node, index, action) =>
-    click(node, centre(ms.thumbActionRects(card(node, index), node._msImages.length)[action]));
+// A card carries no buttons any more: its controls are on the right-click
+// menu, so a test runs one the way a user would — through getExtraMenuOptions.
+const cardMenu = (node, index) => {
+    const options = [];
+    const r = card(node, index);
+    nodeType.prototype.getExtraMenuOptions.call(node, { graph_mouse: [node.pos[0] + r.x + 10, node.pos[1] + r.y + 10] }, options);
+    return options.filter(Boolean);
+};
+const clickCardAction = (node, index, action) => {
+    const label = { duplicate: "Duplicate", remove: "Remove", edit: "Edit" }[action];
+    const entry = cardMenu(node, index).find((o) => o.content === `${label} image #${index + 1}${action === "edit" ? "…" : ""}`);
+    assert.ok(entry, `no ${action} entry for card ${index + 1}: ${cardMenu(node, index).map((o) => o.content).join(", ")}`);
+    entry.callback();
+    return true;
+};
+// A plain click on a card: pressed and released without moving.
+const clickCard = async (node, index) => {
+    const [x, y] = centre(card(node, index));
+    const consumed = nodeType.prototype.onMouseDown.call(node, pointer(x, y, [100, 200]), [x, y], {});
+    dom.fire("pointerup", {});
+    await tick(5);
+    return consumed;
+};
 const until = async (condition, ms = 2000) => {
     const start = Date.now();
     while (!condition()) {
@@ -168,23 +189,24 @@ describe("paste and upload", () => {
 });
 
 describe("reorder", () => {
-    it("moves a card by its ≡ handle through window events only, then releases every listener", async () => {
+    it("moves a card by dragging it through window events only, then releases every listener", async () => {
         const node = plainNode(nodeType);
         let captureCalls = 0;
         node.captureInput = () => { captureCalls += 1; };
         setImages(node, imageFiles(4).map((f) => item(f.name)));
 
-        const [hx, hy] = centre(ms.thumbActionRects(card(node, 0)).drag);
+        const [hx, hy] = centre(card(node, 0));
         const consumed = nodeType.prototype.onMouseDown.call(node, pointer(hx, hy, [100, 200]), [hx, hy], {});
         assert.equal(consumed, true);
         assert.ok(node._msThumbPress, "a press is recorded");
         assert.equal(dom.listenerCount("pointermove"), 1);
 
         // The pointer leaves the node: only window sees the move.
-        const target = { x: card(node, 2).x + 65, y: card(node, 2).y + 46 };
-        dom.fire("pointermove", pointer(target.x, target.y, [400, 400]));
+        const [tx, ty] = centre(card(node, 2));
+        dom.fire("pointermove", pointer(tx, ty, [400, 400]));
         assert.equal(node._msThumbPress.dragging, true);
-        assert.equal(node._msThumbPress.target, 2);
+        assert.equal(node._msThumbPress.drop, 3, "the slot past card 3, drawn as a bar there");
+        assert.deepEqual(ms.dropBarRect(node, 3), { x: card(node, 3).x - 4, y: card(node, 3).y, w: 3, h: card(node, 3).h });
 
         dom.fire("pointerup", {});
         await tick(5);
@@ -193,6 +215,31 @@ describe("reorder", () => {
         assert.equal(dom.listenerCount("pointermove"), 0);
         assert.equal(dom.listenerCount("pointerup"), 0);
         assert.equal(captureCalls, 0, "the deprecated captureInput is no longer used");
+    });
+
+    it("opens the editor when a press over a card is released without moving", async () => {
+        const node = plainNode(nodeType);
+        dom.imageSizes.set("a.png", [40, 20]);
+        dom.imageSizes.set("b.png", [40, 20]);
+        setImages(node, [item("a.png"), item("b.png")]);
+        assert.equal(await clickCard(node, 1), true);
+        await until(() => !!node._msEditor);
+        assert.deepEqual(node._msImages.map((i) => i.filename), ["a.png", "b.png"], "and nothing was reordered");
+        // Which card it opened on: the edit it applies lands on that one.
+        node._msEditor.overlay.parts[".rotate-right"].onclick();
+        node._msEditor.overlay.parts[".apply"].onclick();
+        assert.deepEqual(node._msImages.map((i) => i.rotation ?? 0), [0, 90], "the card that was pressed");
+    });
+
+    it("shows the drop bar past the end when the held card is dragged beyond the last one", () => {
+        const node = plainNode(nodeType);
+        setImages(node, imageFiles(3).map((f) => item(f.name)));
+        const last = card(node, 2);
+        assert.equal(ms.dropIndexAt(node, last.x + last.w - 4, last.y + 10), 3);
+        assert.deepEqual(ms.dropBarRect(node, 3), { x: last.x + last.w + 1, y: last.y, w: 3, h: last.h });
+        assert.equal(ms.dropIndexAt(node, card(node, 0).x + 2, card(node, 0).y + 10), 0, "and before the first one");
+        assert.equal(ms.dropBarRect(node, 0).x, card(node, 0).x - 4);
+        assert.equal(ms.dropBarRect(plainNode(nodeType), 0), null, "with no cards there is no bar");
     });
 
     it("lets a right-click through to the context menu instead of treating it as a click", () => {
@@ -467,18 +514,17 @@ describe("duplicating an image", () => {
         assert.deepEqual(node._msImages.map((i) => i.filename), ["a.png", "b.png", "b.png"]);
     });
 
-    it("leaves out the reorder controls while there is only one image", () => {
+    it("keeps the picture clear of buttons and offers every card control on the menu", () => {
         const node = makeNode(nodeType);
-        setImages(node, [item("a.png")]);
-        const rects = ms.thumbActionRects(card(node, 0), 1);
-        assert.deepEqual(Object.keys(rects), ["duplicate", "remove"], "no ≡ handle and no ‹ › steps");
-        const painted = paintedText(nodeType, node);
-        assert.ok(painted.includes("⧉"));
-        assert.ok(!painted.includes("≡"), "the handle a single image cannot use is not drawn");
-        // Two images bring them back.
         setImages(node, [item("a.png"), item("b.png")]);
-        assert.deepEqual(Object.keys(ms.thumbActionRects(card(node, 0), 2)).sort(), ["drag", "duplicate", "next", "prev", "remove"]);
-        assert.ok(paintedText(nodeType, node).includes("≡"));
+        const painted = paintedText(nodeType, node);
+        for (const glyph of ["⧉", "×", "≡", "‹", "›"]) {
+            assert.ok(!painted.includes(glyph), `${glyph} no longer sits over the picture`);
+        }
+        assert.deepEqual(Object.keys(ms.thumbActionRects(card(node, 0))), ["remove"], "only a video card keeps a button");
+        assert.deepEqual(cardMenu(node, 1).filter((o) => / image #2/.test(o.content)).map((o) => o.content), [
+            "Edit image #2…", "Duplicate image #2", "Copy original image #2", "Replace image #2…", "Remove image #2",
+        ]);
     });
 });
 
@@ -487,7 +533,8 @@ describe("empty box", () => {
     // image items, so the hint promises images for a paste and a video only by
     // drop or through Add.
     const HINT_1 = "Paste images · Drop or Add images or a video";
-    const HINT_2 = "Click to edit · Drag ≡ to reorder";
+    const HINT_2 = "Click to edit · Drag to reorder";
+    const HINT_3 = "Right-click a card for more";
     const inBox = (node, calls) => {
         const box = ms.emptyBoxRect(node);
         return calls.filter((c) => c.y >= box.y && c.y <= box.y + box.h);
@@ -513,7 +560,7 @@ describe("empty box", () => {
             const { calls, balanced } = textCalls(node, 7);
             const box = ms.emptyBoxRect(node);
             const hints = inBox(node, calls);
-            assert.deepEqual(hints.map((c) => c.text), [HINT_1, HINT_2], `one line each at node width ${width}`);
+            assert.deepEqual(hints.map((c) => c.text), [HINT_1, HINT_2, HINT_3], `one line each at node width ${width}`);
             for (const c of hints) {
                 const measured = c.text.length * 7;
                 assert.ok(measured <= box.w - 16, `fits at node width ${width}: ${c.text}`);
@@ -521,7 +568,7 @@ describe("empty box", () => {
                 assert.ok(c.x - measured / 2 >= box.x && c.x + measured / 2 <= box.x + box.w, "inside the box sideways");
                 assert.ok(c.y - 12 >= box.y && c.y + 3 <= box.y + box.h, "inside the box vertically");
             }
-            assert.deepEqual(hints.map((c) => c.y), [box.y + 42, box.y + 58], "the usual two lines");
+            assert.deepEqual(hints.map((c) => c.y), [box.y + 34, box.y + 50, box.y + 66], "the usual three lines");
             assert.ok(balanced, "canvas state is restored");
         }
     });
@@ -531,8 +578,8 @@ describe("empty box", () => {
         const box = ms.emptyBoxRect(node);
         // 11px per character: the first hint measures 473px against 388px of room.
         const hints = inBox(node, textCalls(node, 11).calls);
-        assert.deepEqual(hints.map((c) => c.text), ["Paste images · Drop or Add images", "or a video", HINT_2]);
-        assert.deepEqual(hints.map((c) => c.y), [box.y + 34, box.y + 50, box.y + 66], "stacked around the centre");
+        assert.deepEqual(hints.map((c) => c.text), ["Paste images · Drop or Add images", "or a video", HINT_2, HINT_3]);
+        assert.deepEqual(hints.map((c) => c.y), [box.y + 26, box.y + 42, box.y + 58, box.y + 74], "stacked around the centre");
         for (const c of hints) assert.ok(c.text.length * 11 <= 388 && c.maxWidth === 388);
     });
 
@@ -709,9 +756,9 @@ describe("undo and redo", () => {
         const node = plainNode(nodeType);
         setImages(node, imageFiles(3).map((f) => item(f.name)));
         node._msCommitted = JSON.stringify(node._msImages);
-        const [hx, hy] = centre(ms.thumbActionRects(card(node, 0)).drag);
+        const [hx, hy] = centre(card(node, 0));
         nodeType.prototype.onMouseDown.call(node, pointer(hx, hy, [100, 200]), [hx, hy], {});
-        dom.fire("pointermove", pointer(card(node, 2).x + 65, card(node, 2).y + 46, [400, 400]));
+        dom.fire("pointermove", pointer(...centre(card(node, 2)), [400, 400]));
         dom.fire("pointerup", {});
         await tick(5);
         assert.deepEqual(node._msImages.map((i) => i.filename), ["img1.png", "img2.png", "img0.png"]);
@@ -743,7 +790,7 @@ describe("list height", () => {
         assert.equal(node.size[1], rowsTall(node, 4), "four rows tall");
 
         // Card 9 opens row 3, which a three-row list used to keep off-screen:
-        // its × sits at the top right of its cell.
+        // the menu only finds it because the row is laid out and visible.
         assert.equal(clickCardAction(node, 9, "remove"), true);
         assert.equal(node._msImages.length, 11);
         assert.equal(node._msImages.some((i) => i.filename === "img9.png"), false);
@@ -783,7 +830,7 @@ describe("relink a missing image", () => {
 
         // Clicking the failed card offers a file instead of the editor.
         dom.inputs.length = 0;
-        assert.equal(click(node, [card(node, 1).x + 60, card(node, 1).y + 50]), true);
+        assert.equal(await clickCard(node, 1), true);
         assert.equal(node._msEditorOpening, undefined, "the editor was not opened");
         const input = dom.inputs.at(-1);
         assert.ok(input?.attached, "a file picker was opened");
@@ -819,9 +866,9 @@ describe("copy original image", () => {
 
         const options = [];
         nodeType.prototype.getExtraMenuOptions.call(node, { graph_mouse: [card(node, 0).x + 65, card(node, 0).y + 46] }, options);
-        assert.deepEqual(options.slice(0, 3).map((o) => o.content),
-            ["Copy original image #1", "Duplicate image #1", "Replace image #1…"]);
-        await options[0].callback();
+        assert.deepEqual(options.slice(0, 5).map((o) => o.content),
+            ["Edit image #1…", "Duplicate image #1", "Copy original image #1", "Replace image #1…", "Remove image #1"]);
+        await options.find((o) => o.content === "Copy original image #1").callback();
         assert.equal(written.length, 1);
         assert.equal(written[0].type, "image/png", "a JPEG source is re-encoded");
         assert.deepEqual(toasts(), ["success/Copied"]);
@@ -833,7 +880,7 @@ describe("copy original image", () => {
         define("fetch", async () => ({ ok: false, status: 404, statusText: "Not Found" }));
         const options = [];
         nodeType.prototype.getExtraMenuOptions.call(node, { graph_mouse: [card(node, 0).x + 65, card(node, 0).y + 46] }, options);
-        await options[0].callback();
+        await options.find((o) => o.content === "Copy original image #1").callback();
         assert.deepEqual(toasts(), ["error/Copy failed"]);
     });
 });
@@ -1068,8 +1115,9 @@ describe("video frames", () => {
         node._msPicker.close(false);
         await node.captureVideoFrame(entry, frame(), 1);
         api.calls.length = 0;
-        // The video card follows the one image: card 1, × top-right.
-        assert.equal(clickCardAction(node, 1, "remove"), true);
+        // The video card follows the one image: card 1, × top-right. It keeps
+        // that button because a click on it captures frames instead of editing.
+        assert.equal(click(node, centre(ms.thumbActionRects(card(node, 1)).remove)), true);
         assert.equal(node._msVideos.length, 0);
         assert.equal(node._msImages.length, 1, "the captured frame stays");
         await tick(2);
@@ -1436,7 +1484,7 @@ describe("modal keyboard isolation", () => {
         setImages(node, [item("edit.png")]);
         paintedCalls(nodeType, node);
         await waitForThumbs(node);
-        click(node, centre(card(node, 0)));
+        await clickCard(node, 0);
         await until(() => !!node._msEditor);
         const editor = node._msEditor;
         assert.equal(editor.overlay.tabIndex, -1);
@@ -1463,7 +1511,7 @@ describe("modal keyboard isolation", () => {
         assert.equal(node._msImages[0].rotation, 0, "and the rotation was discarded, as asked");
 
         // Removing the node takes the editor with it.
-        click(node, centre(card(node, 0)));
+        await clickCard(node, 0);
         await until(() => !!node._msEditor);
         const second = node._msEditor;
         nodeType.prototype.onRemoved.call(node);
@@ -1480,7 +1528,7 @@ describe("modal keyboard isolation", () => {
         // The thumbnail is cached, but the file is gone by the time the editor
         // asks for the original.
         dom.imageSizes.delete("vanishes.png");
-        click(node, centre(card(node, 0)));
+        await clickCard(node, 0);
         await until(() => toasts().length > 0);
         assert.deepEqual(toasts(), ["error/Cannot edit this image"]);
         assert.equal(node._msEditor, undefined);
@@ -1667,13 +1715,13 @@ describe("a thumbnail that cannot be shown", () => {
             assert.ok(paintedText(nodeType, node).includes(first.message), "and the card says so");
 
             dom.inputs.length = 0;
-            click(node, centre(card(node, 0)));
+            await clickCard(node, 0);
             assert.equal(dom.inputs.length, 0, "the first click retries instead of asking for another file");
             const second = [...node._msThumbCache.values()][0];
             assert.notEqual(second, first, "a fresh load was started");
             await until(() => second.failed);
             assert.equal(second.message, "Timed out twice · click to relink");
-            click(node, centre(card(node, 0)));
+            await clickCard(node, 0);
             assert.equal(dom.inputs.length, 1, "the second click offers a new file");
             for (const input of dom.inputs) input.remove();
         } finally {
@@ -1811,13 +1859,13 @@ describe("pointer events as the browser delivers them", () => {
         // frontend takes, and the one every canvasX-carrying test skips.
         const graphCanvas = graphCanvasStub({ origin: [40, 60] });
         const page = ([x, y]) => ({ clientX: x + 40, clientY: y + 60, preventDefault() {}, stopPropagation() {} });
-        const handle = centre(ms.thumbActionRects(card(node, 0)).drag);
-        assert.equal(nodeType.prototype.onMouseDown.call(node, { button: 0, ...page(handle) }, null, graphCanvas), true);
+        const held = centre(card(node, 0));
+        assert.equal(nodeType.prototype.onMouseDown.call(node, { button: 0, ...page(held) }, null, graphCanvas), true);
         assert.ok(node._msThumbPress, "the press was placed from the converted coordinates");
 
         dom.fire("pointermove", page(centre(card(node, 2))));
         assert.equal(node._msThumbPress.dragging, true);
-        assert.equal(node._msThumbPress.target, 2);
+        assert.equal(node._msThumbPress.drop, 3);
         dom.fire("pointerup", {});
         await tick(5);
         assert.deepEqual(node._msImages.map((i) => i.filename), ["img1.png", "img2.png", "img0.png", "img3.png"]);

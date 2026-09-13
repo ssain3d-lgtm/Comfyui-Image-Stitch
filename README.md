@@ -1,6 +1,6 @@
 # Comfyui-Image-Stitch
 
-**Multi Stitch Images** for ComfyUI — paste many images into one node, crop / rotate / flip each image, click an image to edit it, drag its dedicated `≡` handle to reorder, then output a classic stitched strip or a configurable grid.
+**Multi Stitch Images** for ComfyUI — paste many images into one node, crop / rotate / flip each image, click an image to edit it, drag a card to reorder, then output a classic stitched strip or a configurable grid.
 
 **[한국어](#-한국어) · [English](#-english)**
 
@@ -14,9 +14,9 @@
 
 - **Ctrl+V 다중 이미지 붙여넣기**
 - 이미지 클릭 → **즉시 Edit**
-- 전용 **`≡` Drag Handle**로 이미지 순서 변경(이미지가 하나뿐이면 나오지 않습니다)
-- 카드의 **`⧉`** 버튼으로 같은 이미지 한 장 더 넣기 — 사본은 따로 Crop·회전할 수 있습니다
-- 썸네일 **우클릭 → 원본 이미지 클립보드 복사**
+- **카드를 그냥 끌어서** 순서 변경 — 놓일 자리는 파란 막대로 표시
+- 카드 **우클릭 → Edit · Duplicate · Copy original · Replace · Remove** — 사진 위에 버튼이 없어 썸네일이 가려지지 않습니다
+- **Duplicate**로 같은 이미지 한 장 더 넣기 — 사본은 따로 Crop·회전할 수 있습니다
 - **`⧉ Copy` 버튼 → 합성 결과를 Queue 없이 바로 클립보드 복사**
 - **동영상에서 장면 캡처** — 프레임 단위로 찾아 원본 해상도 PNG로 목록에 추가, 동영상은 저장 공간을 차지하지 않음. 브라우저가 못 여는 코덱은 서버(PyAV)가 디코딩
 - **기준 이미지 크기 출력** — `width`/`height` 출력 단자와 크기 패널: 기준 이미지 크기를 MP 목표로 조정하고 배수(기본 32)로 맞춤
@@ -130,9 +130,9 @@ git pull
    - 파일로 추가하려면 툴바의 **`+ Add`**(또는 비어 있는 점선 상자 클릭)를 씁니다. 업로드 중에는 노드 제목에 진행률(`uploading 2/5…`)이 표시되고 `+ Add`가 **`Cancel 2/5`**로 바뀝니다. 취소하면 이미 올라간 이미지는 남고 나머지만 중단됩니다. 업로드 중 `Clear`는 업로드까지 함께 취소합니다.
    - 한 노드에 최대 **256장**입니다. 넘치는 파일은 업로드 전에 건너뛰고 알려줍니다.
    - 썸네일은 긴 변 **512px**로 축소한 사본만 유지하므로 고해상도 이미지를 많이 넣어도 브라우저 메모리가 원본 크기만큼 늘지 않습니다. 편집기와 실제 합성은 항상 원본을 사용합니다.
-4. 편집할 이미지는 **썸네일 이미지 영역을 한 번 클릭**합니다.
-5. 순서를 바꾸려면 썸네일 하단 중앙의 **`≡` 핸들만 잡고 드래그**합니다.
-   - 썸네일을 **우클릭**하면 `Copy original image #N` 메뉴가 나옵니다. 클릭하면 **편집 전 원본 이미지 전체**가 클립보드에 복사됩니다.
+4. 편집할 이미지는 **썸네일을 한 번 클릭**합니다.
+5. 순서를 바꾸려면 **카드를 그대로 끌어다 놓습니다**. 끄는 동안 놓일 자리가 **파란 막대**로 표시됩니다.
+   - 썸네일을 **우클릭**하면 `Edit · Duplicate · Copy original · Replace · Remove` 메뉴가 나옵니다. `Copy original image #N`은 **편집 전 원본 이미지 전체**를 클립보드에 복사합니다.
    - 툴바의 **`⧉ Copy`** 버튼(또는 우클릭 → `Copy stitched result`)은 지금 설정대로 **합성된 결과**를 원본 해상도로 브라우저에서 만들어 PNG로 클립보드에 넣습니다 — Queue를 돌리지 않아도 됩니다.
 6. `layout_mode`를 선택합니다.
    - `strip` → 기존 Stitch Images처럼 한 줄/한 열로 연결
@@ -166,17 +166,13 @@ Crop / 회전 / 반전 정보만 workflow에 저장하는 **비파괴 방식**�
 
 ## Drag Reorder
 
-Edit 클릭과 Reorder 제스처를 서로 분리했습니다.
+카드 위에는 버튼이 하나도 없습니다. 사진 전체가 클릭·드래그 영역이고, 나머지는 우클릭 메뉴입니다.
 
-- **이미지 영역 클릭** → Edit 즉시 열기
-- 썸네일 하단 중앙의 **`≡`만 드래그** → 순서 변경
-- 썸네일 **우클릭** → `Copy original image #N` → **원본 이미지 복사**
+- **카드 클릭**(누르고 그 자리에서 떼기) → Edit 즉시 열기
+- **카드를 끌기** → 순서 변경. 놓일 자리가 **파란 막대**로 카드 사이에 표시되고, 끌리는 카드는 반투명해집니다.
+- **카드 우클릭** → `Edit · Duplicate · Copy original · Replace · Remove`
 - 툴바 **`⧉ Copy`** → 합성 결과 복사
-- Drag 판정 거리는 ComfyUI Canvas 좌표가 아닌 **실제 화면 픽셀 기준**이라 Zoom 배율에 영향을 덜 받습니다.
-- 현재 드롭 대상 → 파란 테두리 표시
-- `‹ / ›` 버튼으로 한 칸씩 이동도 가능
-
-이 방식은 이미지 클릭이 Drag로 잘못 판정되어 편집기가 안 열리는 문제를 줄이기 위한 설계입니다.
+- Drag 판정 거리는 ComfyUI Canvas 좌표가 아닌 **실제 화면 픽셀 기준**이라 Zoom 배율에 영향을 덜 받습니다. 그 거리를 넘지 않고 떼면 클릭으로 처리되어 편집기가 열립니다.
 
 ## Strip / Grid
 
@@ -218,7 +214,7 @@ grid_columns = 3
 
 ## 동영상에서 장면 캡처
 
-`+ Add`나 드래그 앤 드롭으로 **동영상 파일**(mp4·webm·mov 등 브라우저가 재생할 수 있는 형식)을 넣으면 목록 끝에 🎞 카드가 생기고 **프레임 선택기**가 열립니다. 재생·스크러버·프레임 단위 이동(←/→, Shift를 누르면 10프레임)으로 장면을 찾고 **Capture**(Enter)를 누르면, 그 순간 화면에 보이는 프레임이 **원본 해상도 PNG**로 업로드되어 보통 이미지처럼 목록에 들어갑니다. Crop·회전·순서 변경·미리보기·복사·실행이 모두 같고, 카드에는 🎞와 캡처 시각이 표시됩니다. 한 번 열어 여러 장을 캡처할 수 있고, 카드를 다시 클릭하면 선택기가 다시 열립니다.
+`+ Add`나 드래그 앤 드롭으로 **동영상 파일**(mp4·webm·mov 등 브라우저가 재생할 수 있는 형식)을 넣으면 목록 끝에 🎞 카드가 생기고 **프레임 선택기**가 열립니다. 재생·스크러버·프레임 단위 이동(←/→, Shift를 누르면 10프레임)으로 장면을 찾고 **Capture**(Enter)를 누르면, 그 순간 화면에 보이는 프레임이 **원본 해상도 PNG**로 업로드되어 보통 이미지처럼 목록에 들어갑니다. Crop·회전·순서 변경·미리보기·복사·실행이 모두 같습니다. 한 번 열어 여러 장을 캡처할 수 있고, 동영상 카드를 다시 클릭하면 선택기가 다시 열립니다.
 
 동영상은 **저장 공간을 차지하지 않습니다.** ComfyUI의 temp 폴더(`temp/multi_stitch_video/`)에만 올라가고 워크플로우에는 저장되지 않으며, 선택기의 **Done**, 카드의 **×**, `Clear`, 페이지를 닫을 때 서버에서 지워집니다(캡처한 PNG는 남습니다). 노드를 지워도 몇 초 뒤 지워집니다 — 실행 취소로 그래프가 다시 만들어지면 같은 노드가 동영상과 함께 돌아오기 때문입니다. 브라우저가 비정상 종료돼 남은 파일은 ComfyUI가 다음 시작 때 temp 폴더를 비우면서 정리됩니다. 실행 시에는 캡처된 PNG만 합쳐지고 동영상은 무시됩니다.
 
@@ -250,9 +246,9 @@ grid_columns = 3
 - 머리글에 `input/multi_stitch` 용량과 **어떤 항목에도 안 쓰이는 파일**의 용량이 나오고, **`Clean up unused files…`** 로 그만큼만 지웁니다. 열려 있는 노드가 쓰는 파일은 절대 지우지 않지만, **디스크에 저장된 워크플로우가 참조하는 파일은 알 수 없으므로** 확인 창에서 그 점을 알려 줍니다.
 - 항목 삭제는 기본적으로 이미지 파일을 남기고, **`Delete + files`** 는 다른 항목과 열린 노드가 안 쓰는 파일만 함께 지웁니다.
 
-**카드 버튼** — 각 카드의 오른쪽 위에 **`⧉` 복제**와 **`×` 삭제**가 있고, 아래쪽에 **`‹` `≡` `›`** 가 있습니다. `≡`는 **눌러서 끄는 손잡이**라 클릭에는 반응하지 않고 드래그로 순서를 바꿉니다. 이미지가 하나뿐이면 바꿀 순서가 없으므로 아래쪽 세 개는 아예 나오지 않습니다.
+**카드 조작** — 이미지 카드에는 버튼이 없고 **번호**(그리고 Crop·회전 표시)만 올라갑니다. 사진이 버튼에 가리지 않도록 한 것으로, **클릭 = Edit**, **드래그 = 순서 변경**, **우클릭 = 나머지 전부**입니다. 우클릭 메뉴는 `Edit image #N…`, `Duplicate image #N`, `Copy original image #N`, `Replace image #N…`, `Remove image #N` 순서로 나옵니다. (동영상 카드는 클릭이 프레임 선택기를 여는 자리라 `×` 버튼을 그대로 둡니다.)
 
-**`⧉` 복제** — 같은 이미지를 바로 뒤에 한 장 더 넣습니다. 이미 업로드된 파일을 가리키기만 하므로 다시 올리지 않고, 사본의 Crop·회전·반전은 원본과 따로 편집됩니다. 우클릭 메뉴의 **`Duplicate image #N`** 도 같은 동작이고, 실행 취소도 됩니다. (썸네일을 클립보드로 복사하려면 우클릭 → **`Copy original image #N`** 입니다.)
+**Duplicate** — 같은 이미지를 바로 뒤에 한 장 더 넣습니다. 이미 업로드된 파일을 가리키기만 하므로 다시 올리지 않고, 사본의 Crop·회전·반전은 원본과 따로 편집됩니다. 실행 취소도 됩니다.
 
 **Vue 노드 모드** — ComfyUI 설정의 **Vue Nodes**(Nodes 2.0)를 켜면 노드 본문이 Vue 컴포넌트로 그려져 캔버스에 직접 그리던 상태 줄·툴바·미리보기·썸네일·크기 패널이 보이지 않았습니다. 이제 그 모드에서는 같은 화면을 DOM으로 그리며, 버튼과 카드는 캔버스와 **동일한 함수**를 호출합니다. 이 표시용 위젯은 워크플로우에 저장되지 않습니다.
 
@@ -383,12 +379,12 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 
 - **Paste multiple images with Ctrl+V**
 - Click an image → **open Edit immediately**
-- Dedicated **`≡` drag handle** for reordering
-- **Right-click a thumbnail to copy the original image** to the clipboard
+- **Drag a card** to reorder it — a blue bar shows where it would land
+- **Right-click a card** for `Edit · Duplicate · Copy original · Replace · Remove` — no buttons sit over the picture
 - **`⧉ Copy` button → the stitched result on the clipboard without queueing**
 - **Capture frames from a video** — find the moment frame by frame, add it as a native-resolution PNG; the video takes no storage, and the server (PyAV) decodes codecs the browser cannot
 - **Gallery** — every composition a run stitches is recorded with a preview and can be loaded back into a node; it also shows what the image folder holds and clears what nothing uses
-- **Duplicate an image** — `⧉` on a card adds the same file once more, right after it, croppable and rotatable on its own
+- **Duplicate an image** — the card menu adds the same file once more, right after it, croppable and rotatable on its own
 - **Reference-image size outputs** — `width`/`height` outputs and a size panel: the reference image's size rescaled to a megapixel target and snapped to a multiple (32 by default)
 - One toolbar row `+ Add · Clear · ⧉ Copy · ↶ ↷ · Preview · Options` — advanced options stay **folded**, only non-default ones show
 - Per-image **Crop / 90° Rotate / Flip H / Flip V**
@@ -416,8 +412,8 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 - **`match_image_size` defaults to `true`** — a new node lines images up by height (width in a vertical strip) from the start. Saved workflows keep their own value.
 - **`match_reference`** — choose the image `match_image_size` matches to: first, largest or smallest (under `Options ▸`). The default, `smallest`, lines images up without upscaling and without reordering; a workflow saved before the option existed opens with `first`, as it behaved then.
 - **Gallery** — `🖼` in the title bar (left of the `?`, beside `📐 Size`) lists every composition this node type has stitched, each with a preview. A run records the image list, its crops, the order and the settings as one entry; stitching the same composition again keeps one entry and counts the use. `Load` puts a composition back into the node, images and settings together; `Add` appends only its images. Names are editable, 200 entries are kept and the least recently used go first. `save every run` turns the recording off, leaving `＋ Save current`; that setting lives with the gallery on the server, so no node widget is added and no saved workflow shifts. The header says how much `input/multi_stitch` holds and how much of it no entry references, and `Clean up unused files…` deletes exactly that: never a file an open node uses, though a workflow saved on disk cannot be detected, which the confirmation says. Deleting an entry keeps its files unless you choose `Delete + files`.
-- **Card controls** — `⧉` duplicate and `×` remove sit at the top right of a card, `‹ ≡ ›` at the bottom. `≡` is a **drag handle**, so it does nothing on a click; drag it to reorder. With a single image there is nothing to reorder, so the bottom three are not drawn at all.
-- **Duplicate** — `⧉` adds the same image once more, right after it. It points at the file already uploaded, so nothing is uploaded again, and the copy's crop, rotation and flips are edited independently of the original. The context menu offers `Duplicate image #N` as well, and the step is undoable. (To put a thumbnail on the clipboard instead, right-click → `Copy original image #N`.)
+- **Card controls** — an image card carries no buttons at all, only its number (and the crop / rotation marks), so nothing covers the picture. **Click to edit, drag to reorder, right-click for the rest**: `Edit image #N…`, `Duplicate image #N`, `Copy original image #N`, `Replace image #N…`, `Remove image #N`. While a card is dragged a blue bar marks the slot it would drop into. (A video card keeps its `×`, since clicking it opens the frame picker.)
+- **Duplicate** — adds the same image once more, right after it. It points at the file already uploaded, so nothing is uploaded again, and the copy's crop, rotation and flips are edited independently of the original. The step is undoable.
 - **Vue node mode** — with ComfyUI's **Vue Nodes** (Nodes 2.0) setting on, the node body is a Vue component, so the canvas-drawn status line, toolbar, preview band, thumbnails and size panel did not appear. They are now rendered as DOM in that mode, with the buttons and cards calling exactly the same functions as the canvas. The widget that carries them is never saved with the workflow.
 - **Frames from a video** — adding a video opens a frame picker; captured frames are edited and stitched like any image, and the video lives only in the temp folder until the captures are done. A codec the browser cannot play is decoded by PyAV on the server, and "server capture" gives a decoder-exact frame for playable videos too.
 - **`width` / `height` outputs and a size panel** — the reference image's size (the first by default), rescaled to `size_megapixels` and snapped to a multiple of `size_divisible_by` (32 by default). The **`📐 Size`** button in the title bar adds a panel under the node with a box of that aspect and a readout such as `672 x 1184 | 9:16 | 0.80 MP | divisible by 32`.
@@ -501,9 +497,9 @@ Then fully restart ComfyUI. If frontend changes are still cached, refresh the br
    - To add files, use **`+ Add`** in the toolbar (or click the empty dashed box). While uploading, the node title shows progress (`uploading 2/5…`) and `+ Add` becomes **`Cancel 2/5`**. Cancelling keeps what has already landed and stops the rest. `Clear` during an upload cancels it too.
    - A node holds at most **256** images; files beyond that are skipped before upload, with a notice.
    - Thumbnails keep only a copy scaled to **512px** on the long edge, so many high-resolution images do not grow browser memory by their full size. The editor and the actual stitch always use the original.
-4. **Single-click the image area** of a thumbnail to Crop / Rotate / Flip it.
-5. To reorder, drag only the **`≡` handle** at the bottom center of the thumbnail.
-   - **Right-click** a thumbnail for `Copy original image #N`. It copies the **whole original image, before any edits**, to the clipboard.
+4. **Single-click a thumbnail** to Crop / Rotate / Flip it.
+5. To reorder, **drag the card itself**; a blue bar shows the slot it would drop into.
+   - **Right-click** a card for `Edit · Duplicate · Copy original · Replace · Remove`. `Copy original image #N` copies the **whole original image, before any edits**, to the clipboard.
    - The **`⧉ Copy`** button in the toolbar (or right-click → `Copy stitched result`) renders the **stitched result** with the current settings, at full resolution, in the browser and puts it on the clipboard as PNG — no queue needed.
 6. Choose `layout_mode`.
    - `strip` → classic one-row / one-column stitching
@@ -537,15 +533,13 @@ Crop / rotation / flip settings are stored **non-destructively** in the workflow
 
 ## Drag Reorder
 
-Editing and reordering use separate gestures.
+A card carries no buttons: the whole picture is the target, and everything else is on the right-click menu.
 
-- **Click image area** → open editor immediately
-- Drag the bottom-center **`≡` handle** → reorder
-- **Right-click** a thumbnail → `Copy original image #N` → copies the original image
+- **Click a card** (press and release without moving) → open the editor immediately
+- **Drag a card** → reorder. A **blue bar** between the cards marks the slot it would drop into, and the card in hand goes translucent.
+- **Right-click a card** → `Edit · Duplicate · Copy original · Replace · Remove`
 - **`⧉ Copy`** in the toolbar → copies the stitched result
-- Drag threshold is measured in **real browser pixels**, not ComfyUI graph coordinates, so canvas zoom does not make normal clicks behave like drags.
-- Current drop target → blue border
-- `‹ / ›` buttons remain available for one-step movement
+- Drag threshold is measured in **real browser pixels**, not ComfyUI graph coordinates, so canvas zoom does not make normal clicks behave like drags. Release inside that threshold and it counts as a click, opening the editor.
 
 ## Strip / Grid
 
@@ -587,7 +581,7 @@ The reference keeps its own size, and on a tie the earlier image wins. No reorde
 
 ## Capturing frames from a video
 
-Add a **video file** (mp4, webm, mov — anything the browser can play) with `+ Add` or drag and drop: a 🎞 card appears at the end of the list and the **frame picker** opens. Find the moment with play, the scrubber and frame steps (←/→, Shift for 10 frames), then press **Capture** (Enter): the frame on screen is uploaded as a **native-resolution PNG** and joins the list as an ordinary image — crop, rotation, reordering, the preview, copy and the run all work the same, and the card shows 🎞 with the capture time. Capture as many frames as you like in one session; clicking the card reopens the picker.
+Add a **video file** (mp4, webm, mov — anything the browser can play) with `+ Add` or drag and drop: a 🎞 card appears at the end of the list and the **frame picker** opens. Find the moment with play, the scrubber and frame steps (←/→, Shift for 10 frames), then press **Capture** (Enter): the frame on screen is uploaded as a **native-resolution PNG** and joins the list as an ordinary image — crop, rotation, reordering, the preview, copy and the run all work the same. Capture as many frames as you like in one session; clicking the video card reopens the picker.
 
 The video **takes no storage**. It is uploaded only to ComfyUI's temp folder (`temp/multi_stitch_video/`), is never saved with the workflow, and is deleted from the server on the picker's **Done**, the card's **×**, `Clear`, or leaving the page (the captured PNGs stay). Removing the node deletes it too, after a couple of seconds: an undo that rebuilds the graph puts the same node back, and its video comes with it. Anything a crashed browser leaves behind goes when ComfyUI empties its temp folder on the next start. At run time only the captured PNGs are stitched; the video is ignored.
 
@@ -738,7 +732,7 @@ If you move the workflow to another machine, copy the referenced input images as
 - Backend limit: **256 images per node**.
 - Output safety limit: **134.2 MP (128 MiPixels) / 131,072 px per side**, and the same per-image cap on any original before its crop. Sources stream through one at a time.
 - GitHub Actions, backend job (Python 3.10 and 3.12): a package-import smoke test (so a node that would not load in ComfyUI fails CI), `INPUT_TYPES` widget order against the `stitch()` signature, per-pixel rotation/flip checks across all 16 transform combinations, EXIF orientation 1–8 against Pillow, a spy proving the measurement pass never decodes pixels, streaming composition (each source loaded once, never two resident), Strip directions, Grid placement with no unused row or column, spacing-colour fill in both layouts, transparency compositing, rejected enum values, unsafe paths, the image-count cap and the size guards. A parity test runs the browser maths (`normalizeCrop`, `gridShape`, crop↔transform mapping) under Node and compares it with Python. `tests/test_reference_quality.py` adds the 1.1 behaviour: the native-size default, `cells_resolution = source`, the cells memory check and `minimum_image_side` both rejecting before any decode, PNG EXIF after the pixel data read without decoding, a malformed EXIF chunk degrading to "no orientation" instead of an error, TIFF orientation, cache invalidation when a file changes, and lazy IMAGE frames.
-- GitHub Actions, frontend job (Node 22): `tests/web/logic.test.mjs` drives the real `web/*.js` against a stub ComfyUI — paste, the 256 cap, cancel and Clear during upload, ≡ reorder through window events, save → reopen round-trip, an unreadable list kept verbatim, bounded thumbnails, a failed thumbnail not hiding the estimate, conditional widgets, and the copy action. `tests/web/browser.test.mjs` runs the crop editor (corner handles, rotate, apply, cancel), the clipboard copy of an original (PNG, JPEG re-encode, missing file) and the stitched-result copy (two originals with a blue separator, read back from the clipboard pixel by pixel) in real Chromium via Playwright. Run locally with `npm ci && npx playwright install chromium && npm test`.
+- GitHub Actions, frontend job (Node 22): `tests/web/logic.test.mjs` drives the real `web/*.js` against a stub ComfyUI — paste, the 256 cap, cancel and Clear during upload, drag reorder through window events, save → reopen round-trip, an unreadable list kept verbatim, bounded thumbnails, a failed thumbnail not hiding the estimate, conditional widgets, and the copy action. `tests/web/browser.test.mjs` runs the crop editor (corner handles, rotate, apply, cancel), the clipboard copy of an original (PNG, JPEG re-encode, missing file) and the stitched-result copy (two originals with a blue separator, read back from the clipboard pixel by pixel) in real Chromium via Playwright. Run locally with `npm ci && npx playwright install chromium && npm test`.
 - The frontend suite also covers the preview band (draw calls and the final-size caption), the toolbar undo/redo controls (adds, a drag reorder, Clear, history reset on load), the list growing with its rows (natural height, every card clickable, a user resize snapping back), the new conditional widgets, relinking a missing file, the stitched-result copy (final size after the cap, both originals drawn, a missing image left blank, the browser size limit, the context-menu entry), and the toolbar with folded options (all advanced widgets hidden by default, a non-default value staying visible and counted on the pill, no button widgets left, the empty-state box opening the picker). The parity test compares `layoutPlacements` / `limitedSize` with `_layout` / `_limited_size` over 700 cases and `cropPixelBox` with `_crop_box` over 500, including sizes that land on exact halves where Python's half-even rounding differs from `Math.round`. Three further logic tests cover the native-size default surviving a reopen, crop-edge and quarter-turn rounding, and the two-at-a-time thumbnail queue releasing everything when a node is removed.
 - `tests/test_video_temp.py` covers the temporary-video helpers behind the frame picker: only a plain video name inside `temp/multi_stitch_video` can ever be deleted, and the delete route's response. The logic suite covers uploading a video to the temp folder as a session-only entry, the picker opening, captures becoming ordinary images with their source time, and deletion on ×, Done, Clear and node removal; the browser suite records a two-colour WebM in Chromium and captures frames from it through the real picker.
 - `tests/test_video_frames.py` (skipped without PyAV) encodes a two-colour clip with PyAV and checks the server-side probe, the frame displayed at a time, the JPEG preview and the PNG capture route; the logic suite covers the picker's server mode (fallback on a decode error, the unavailable case, on-demand server capture, a server-rendered poster). The parity test compares `referenceSize` with `_reference_size`, and the logic suite covers the size panel (title-bar toggle, readout, reference and step choices, context menu).
