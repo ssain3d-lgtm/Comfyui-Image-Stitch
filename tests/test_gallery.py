@@ -133,13 +133,27 @@ class GalleryTests(unittest.TestCase):
                          ["a.png", "b.png", "gallery", "sub"], "kept: referenced, in keep, folders")
 
     def test_gallery_is_capped_at_max_entries(self):
-        with patch.object(gallery, "_MAX_ENTRIES", 3):
+        # A clock that never advances: time.time() moves in ~16 ms steps on
+        # Windows, so four records can share one stamp and the least recently
+        # used must still be the one recorded first, not whichever the folder
+        # happened to list.
+        with patch.object(gallery, "_MAX_ENTRIES", 3), patch.object(gallery.time, "time", lambda: 1_700_000_000.0):
             ids = [gallery.record([_item("a.png", rotation=r)], {}, None)["id"] for r in (0, 90, 180, 270)]
             # Every id must differ even within the same second.
             self.assertEqual(len(set(ids)), 4)
             remaining = [e["id"] for e in gallery.list_entries()]
         self.assertEqual(len(remaining), 3)
         self.assertNotIn(ids[0], remaining, "the least recently used entry was evicted")
+        self.assertEqual(remaining, ids[:0:-1], "and the rest are most recently used first")
+
+    def test_reuse_moves_an_entry_to_the_front_within_one_clock_step(self):
+        with patch.object(gallery.time, "time", lambda: 1_700_000_000.0):
+            first = gallery.record([_item("a.png")], {}, None)["id"]
+            second = gallery.record([_item("b.png")], {}, None)["id"]
+            self.assertEqual([e["id"] for e in gallery.list_entries()], [second, first])
+            # Stitching the first composition again makes it the newest.
+            gallery.record([_item("a.png")], {}, None)
+            self.assertEqual([e["id"] for e in gallery.list_entries()], [first, second])
 
     def test_preview_from_tensor_reduces_with_area_averaging(self):
         import torch

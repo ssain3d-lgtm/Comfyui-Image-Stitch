@@ -73,6 +73,7 @@ function actionSpy(overrides = {}) {
             edit: (node, index) => calls.push(["edit", index]),
             remove: (node, index) => calls.push(["remove", index]),
             duplicate: (node, index) => calls.push(["duplicate", index]),
+            copyOriginal: (node, index) => calls.push(["copyOriginal", index]),
             move: (node, index, delta) => calls.push(["move", index, delta]),
             openVideo: (node, entry) => calls.push(["openVideo", entry.filename]),
             removeVideo: (node, entry) => calls.push(["removeVideo", entry.filename]),
@@ -139,13 +140,14 @@ describe("dom view", () => {
         // The card's own controls are its right-click menu now.
         card.handlers.contextmenu[0](menuEvent());
         const entries = dom.overlays.at(-1).children;
-        assert.deepEqual(entries.map((e) => e.textContent), ["Edit image…", "Duplicate image", "Remove image"]);
+        assert.deepEqual(entries.map((e) => e.textContent),
+            ["Edit image…", "Duplicate image", "Copy image to clipboard", "Remove image"]);
         for (const entry of entries) entry.handlers.click[0]({ stopPropagation() {} });
         card.children.find((c) => c.className === "thumb").handlers.click[0]();
         assert.deepEqual(spy.calls.filter(([name]) => name !== "drawThumb" && name !== "drawPreview" && name !== "resized"), [
             ["add"], ["clear"], ["copy"], ["undo"], ["redo"], ["openGallery"],
             ["togglePreview"], ["toggleOptions"], ["toggleSizePanel"],
-            ["edit", 1], ["duplicate", 1], ["remove", 1], ["edit", 1],
+            ["edit", 1], ["duplicate", 1], ["copyOriginal", 1], ["remove", 1], ["edit", 1],
         ]);
         handle.destroy();
     });

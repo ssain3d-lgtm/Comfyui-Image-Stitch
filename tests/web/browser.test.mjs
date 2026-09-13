@@ -396,7 +396,7 @@ describe("copy original image", () => {
             const options = [];
             // graph_mouse over card 0: the list starts 148px down (toolbar row included), 130px cells.
             window.__nodeType.prototype.getExtraMenuOptions.call(node, { graph_mouse: [73, 194] }, options);
-            const copy = options.find((o) => o?.content === "Copy original image #1");
+            const copy = options.find((o) => o?.content === "Copy image #1 to clipboard");
             await copy.callback();
             await new Promise((resolve) => setTimeout(resolve, 200));
             const toast = window.__toasts[0];
@@ -422,7 +422,7 @@ describe("copy original image", () => {
     it("puts a PNG source on the clipboard unchanged", async () => {
         const { page } = await openPage();
         const r = await copyThroughMenu(page, "green.png");
-        assert.equal(r.entry, "Copy original image #1");
+        assert.equal(r.entry, "Copy image #1 to clipboard");
         assert.equal(r.toast, "success/Copied");
         assert.deepEqual(r.decoded.magic, [0x89, 0x50, 0x4e, 0x47]);
         assert.deepEqual([r.decoded.w, r.decoded.h], [6, 4]);

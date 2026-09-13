@@ -15,7 +15,7 @@
 - **Ctrl+V 다중 이미지 붙여넣기**
 - 이미지 클릭 → **즉시 Edit**
 - **카드를 그냥 끌어서** 순서 변경 — 놓일 자리는 파란 막대로 표시
-- 카드 **우클릭 → Edit · Duplicate · Copy original · Replace · Remove** — 사진 위에 버튼이 없어 썸네일이 가려지지 않습니다
+- 카드 **우클릭 → Edit · Duplicate · Copy to clipboard · Replace · Remove** — 사진 위에 버튼이 없어 썸네일이 가려지지 않습니다
 - **Duplicate**로 같은 이미지 한 장 더 넣기 — 사본은 따로 Crop·회전할 수 있습니다
 - **`⧉ Copy` 버튼 → 합성 결과를 Queue 없이 바로 클립보드 복사**
 - **동영상에서 장면 캡처** — 프레임 단위로 찾아 원본 해상도 PNG로 목록에 추가, 동영상은 저장 공간을 차지하지 않음. 브라우저가 못 여는 코덱은 서버(PyAV)가 디코딩
@@ -132,7 +132,7 @@ git pull
    - 썸네일은 긴 변 **512px**로 축소한 사본만 유지하므로 고해상도 이미지를 많이 넣어도 브라우저 메모리가 원본 크기만큼 늘지 않습니다. 편집기와 실제 합성은 항상 원본을 사용합니다.
 4. 편집할 이미지는 **썸네일을 한 번 클릭**합니다.
 5. 순서를 바꾸려면 **카드를 그대로 끌어다 놓습니다**. 끄는 동안 놓일 자리가 **파란 막대**로 표시됩니다.
-   - 썸네일을 **우클릭**하면 `Edit · Duplicate · Copy original · Replace · Remove` 메뉴가 나옵니다. `Copy original image #N`은 **편집 전 원본 이미지 전체**를 클립보드에 복사합니다.
+   - 썸네일을 **우클릭**하면 `Edit · Duplicate · Copy to clipboard · Replace · Remove` 메뉴가 나옵니다. `Copy image #N to clipboard`는 **편집 전 원본 이미지 전체**를 클립보드에 넣습니다 — 그대로 **Ctrl+V**로 다시 붙여 넣거나 다른 프로그램에 붙일 수 있습니다.
    - 툴바의 **`⧉ Copy`** 버튼(또는 우클릭 → `Copy stitched result`)은 지금 설정대로 **합성된 결과**를 원본 해상도로 브라우저에서 만들어 PNG로 클립보드에 넣습니다 — Queue를 돌리지 않아도 됩니다.
 6. `layout_mode`를 선택합니다.
    - `strip` → 기존 Stitch Images처럼 한 줄/한 열로 연결
@@ -170,7 +170,7 @@ Crop / 회전 / 반전 정보만 workflow에 저장하는 **비파괴 방식**�
 
 - **카드 클릭**(누르고 그 자리에서 떼기) → Edit 즉시 열기
 - **카드를 끌기** → 순서 변경. 놓일 자리가 **파란 막대**로 카드 사이에 표시되고, 끌리는 카드는 반투명해집니다.
-- **카드 우클릭** → `Edit · Duplicate · Copy original · Replace · Remove`
+- **카드 우클릭** → `Edit · Duplicate · Copy to clipboard · Replace · Remove`
 - 툴바 **`⧉ Copy`** → 합성 결과 복사
 - Drag 판정 거리는 ComfyUI Canvas 좌표가 아닌 **실제 화면 픽셀 기준**이라 Zoom 배율에 영향을 덜 받습니다. 그 거리를 넘지 않고 떼면 클릭으로 처리되어 편집기가 열립니다.
 
@@ -246,7 +246,7 @@ grid_columns = 3
 - 머리글에 `input/multi_stitch` 용량과 **어떤 항목에도 안 쓰이는 파일**의 용량이 나오고, **`Clean up unused files…`** 로 그만큼만 지웁니다. 열려 있는 노드가 쓰는 파일은 절대 지우지 않지만, **디스크에 저장된 워크플로우가 참조하는 파일은 알 수 없으므로** 확인 창에서 그 점을 알려 줍니다.
 - 항목 삭제는 기본적으로 이미지 파일을 남기고, **`Delete + files`** 는 다른 항목과 열린 노드가 안 쓰는 파일만 함께 지웁니다.
 
-**카드 조작** — 이미지 카드에는 버튼이 없고 **번호**(그리고 Crop·회전 표시)만 올라갑니다. 사진이 버튼에 가리지 않도록 한 것으로, **클릭 = Edit**, **드래그 = 순서 변경**, **우클릭 = 나머지 전부**입니다. 우클릭 메뉴는 `Edit image #N…`, `Duplicate image #N`, `Copy original image #N`, `Replace image #N…`, `Remove image #N` 순서로 나옵니다. (동영상 카드는 클릭이 프레임 선택기를 여는 자리라 `×` 버튼을 그대로 둡니다.)
+**카드 조작** — 이미지 카드에는 버튼이 없고 **번호**(그리고 Crop·회전 표시)만 올라갑니다. 사진이 버튼에 가리지 않도록 한 것으로, **클릭 = Edit**, **드래그 = 순서 변경**, **우클릭 = 나머지 전부**입니다. 우클릭 메뉴는 `Edit image #N…`, `Duplicate image #N`, `Copy image #N to clipboard`, `Replace image #N…`, `Remove image #N` 순서로 나옵니다. **Duplicate**는 노드 안에 바로 한 장 더 넣고, **Copy to clipboard**는 **클립보드**로 복사해 Ctrl+V나 다른 프로그램에 쓸 수 있게 합니다. (동영상 카드는 클릭이 프레임 선택기를 여는 자리라 `×` 버튼을 그대로 둡니다.)
 
 **Duplicate** — 같은 이미지를 바로 뒤에 한 장 더 넣습니다. 이미 업로드된 파일을 가리키기만 하므로 다시 올리지 않고, 사본의 Crop·회전·반전은 원본과 따로 편집됩니다. 실행 취소도 됩니다.
 
@@ -380,7 +380,7 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 - **Paste multiple images with Ctrl+V**
 - Click an image → **open Edit immediately**
 - **Drag a card** to reorder it — a blue bar shows where it would land
-- **Right-click a card** for `Edit · Duplicate · Copy original · Replace · Remove` — no buttons sit over the picture
+- **Right-click a card** for `Edit · Duplicate · Copy to clipboard · Replace · Remove` — no buttons sit over the picture
 - **`⧉ Copy` button → the stitched result on the clipboard without queueing**
 - **Capture frames from a video** — find the moment frame by frame, add it as a native-resolution PNG; the video takes no storage, and the server (PyAV) decodes codecs the browser cannot
 - **Gallery** — every composition a run stitches is recorded with a preview and can be loaded back into a node; it also shows what the image folder holds and clears what nothing uses
@@ -412,7 +412,7 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 - **`match_image_size` defaults to `true`** — a new node lines images up by height (width in a vertical strip) from the start. Saved workflows keep their own value.
 - **`match_reference`** — choose the image `match_image_size` matches to: first, largest or smallest (under `Options ▸`). The default, `smallest`, lines images up without upscaling and without reordering; a workflow saved before the option existed opens with `first`, as it behaved then.
 - **Gallery** — `🖼` in the title bar (left of the `?`, beside `📐 Size`) lists every composition this node type has stitched, each with a preview. A run records the image list, its crops, the order and the settings as one entry; stitching the same composition again keeps one entry and counts the use. `Load` puts a composition back into the node, images and settings together; `Add` appends only its images. Names are editable, 200 entries are kept and the least recently used go first. `save every run` turns the recording off, leaving `＋ Save current`; that setting lives with the gallery on the server, so no node widget is added and no saved workflow shifts. The header says how much `input/multi_stitch` holds and how much of it no entry references, and `Clean up unused files…` deletes exactly that: never a file an open node uses, though a workflow saved on disk cannot be detected, which the confirmation says. Deleting an entry keeps its files unless you choose `Delete + files`.
-- **Card controls** — an image card carries no buttons at all, only its number (and the crop / rotation marks), so nothing covers the picture. **Click to edit, drag to reorder, right-click for the rest**: `Edit image #N…`, `Duplicate image #N`, `Copy original image #N`, `Replace image #N…`, `Remove image #N`. While a card is dragged a blue bar marks the slot it would drop into. (A video card keeps its `×`, since clicking it opens the frame picker.)
+- **Card controls** — an image card carries no buttons at all, only its number (and the crop / rotation marks), so nothing covers the picture. **Click to edit, drag to reorder, right-click for the rest**: `Edit image #N…`, `Duplicate image #N`, `Copy image #N to clipboard`, `Replace image #N…`, `Remove image #N` — `Duplicate` adds another card here, `Copy … to clipboard` puts the image on the clipboard for Ctrl+V or another program. While a card is dragged a blue bar marks the slot it would drop into. (A video card keeps its `×`, since clicking it opens the frame picker.)
 - **Duplicate** — adds the same image once more, right after it. It points at the file already uploaded, so nothing is uploaded again, and the copy's crop, rotation and flips are edited independently of the original. The step is undoable.
 - **Vue node mode** — with ComfyUI's **Vue Nodes** (Nodes 2.0) setting on, the node body is a Vue component, so the canvas-drawn status line, toolbar, preview band, thumbnails and size panel did not appear. They are now rendered as DOM in that mode, with the buttons and cards calling exactly the same functions as the canvas. The widget that carries them is never saved with the workflow.
 - **Frames from a video** — adding a video opens a frame picker; captured frames are edited and stitched like any image, and the video lives only in the temp folder until the captures are done. A codec the browser cannot play is decoded by PyAV on the server, and "server capture" gives a decoder-exact frame for playable videos too.
@@ -499,7 +499,7 @@ Then fully restart ComfyUI. If frontend changes are still cached, refresh the br
    - Thumbnails keep only a copy scaled to **512px** on the long edge, so many high-resolution images do not grow browser memory by their full size. The editor and the actual stitch always use the original.
 4. **Single-click a thumbnail** to Crop / Rotate / Flip it.
 5. To reorder, **drag the card itself**; a blue bar shows the slot it would drop into.
-   - **Right-click** a card for `Edit · Duplicate · Copy original · Replace · Remove`. `Copy original image #N` copies the **whole original image, before any edits**, to the clipboard.
+   - **Right-click** a card for `Edit · Duplicate · Copy to clipboard · Replace · Remove`. `Copy image #N to clipboard` puts the **whole original image, before any edits**, on the clipboard — paste it back with **Ctrl+V** or into another program.
    - The **`⧉ Copy`** button in the toolbar (or right-click → `Copy stitched result`) renders the **stitched result** with the current settings, at full resolution, in the browser and puts it on the clipboard as PNG — no queue needed.
 6. Choose `layout_mode`.
    - `strip` → classic one-row / one-column stitching
@@ -537,7 +537,7 @@ A card carries no buttons: the whole picture is the target, and everything else 
 
 - **Click a card** (press and release without moving) → open the editor immediately
 - **Drag a card** → reorder. A **blue bar** between the cards marks the slot it would drop into, and the card in hand goes translucent.
-- **Right-click a card** → `Edit · Duplicate · Copy original · Replace · Remove`
+- **Right-click a card** → `Edit · Duplicate · Copy to clipboard · Replace · Remove`
 - **`⧉ Copy`** in the toolbar → copies the stitched result
 - Drag threshold is measured in **real browser pixels**, not ComfyUI graph coordinates, so canvas zoom does not make normal clicks behave like drags. Release inside that threshold and it counts as a click, opening the editor.
 

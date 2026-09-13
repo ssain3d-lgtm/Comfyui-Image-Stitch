@@ -286,6 +286,7 @@ export function installDomView(node, actions) {
         el.addEventListener("contextmenu", (event) => openMenu(event, [
             ["Edit image…", () => actions.edit(node, index)],
             ["Duplicate image", () => actions.duplicate(node, index)],
+            ["Copy image to clipboard", () => actions.copyOriginal(node, index)],
             ["Remove image", () => actions.remove(node, index)],
         ]));
         return el;

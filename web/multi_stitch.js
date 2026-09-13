@@ -904,6 +904,7 @@ const DOM_VIEW_ACTIONS = () => (domViewActions ||= {
     remove: removeImageAt,
     move: moveItem,
     duplicate: duplicateImage,
+    copyOriginal: copyOriginalImage,
     openVideo: openVideoPicker,
     removeVideo,
     resized: (node) => node.graph?.setDirtyCanvas(true, true),
@@ -1144,7 +1145,7 @@ async function copyOriginalImage(node, index) {
             const blob = await originalPngBlob(item);
             await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
         }
-        notify("Copied", `Original image #${index + 1} copied to the clipboard.`);
+        notify("Copied", `Image #${index + 1} copied to the clipboard, as uploaded. Ctrl+V pastes it back as another image.`);
     } catch (error) {
         notify("Copy failed", String(error?.message || error), "error");
     }
@@ -2579,7 +2580,7 @@ app.registerExtension({
                         callback: () => duplicateImage(this, index),
                     },
                     {
-                        content: `Copy original image #${index + 1}`,
+                        content: `Copy image #${index + 1} to clipboard`,
                         callback: () => copyOriginalImage(this, index),
                     },
                     {

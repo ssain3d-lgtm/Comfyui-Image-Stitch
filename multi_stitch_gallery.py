@@ -163,8 +163,30 @@ def list_entries() -> list[dict]:
         entry = _read_entry(path)
         if entry is not None:
             entries.append(entry)
-    entries.sort(key=lambda entry: (entry.get("used") or entry.get("created") or 0), reverse=True)
+    entries.sort(key=_recency, reverse=True)
     return entries
+
+
+def _recency(entry: dict) -> tuple[float, str]:
+    """How recently an entry was used, as a total order.
+
+    The id is the tie-break: an entry written by an older version can share a
+    stamp with another, and the folder listing that produced the list is in no
+    particular order, so without it the two swap places between runs.
+    """
+    return (entry.get("used") or entry.get("created") or 0, str(entry.get("id") or ""))
+
+
+def _next_stamp(entries: list[dict], now: float) -> float:
+    """A `used` stamp strictly after every entry's.
+
+    ``time.time()`` advances in ~16 ms steps on Windows, so several records
+    made inside one step shared a stamp and "least recently used" became a tie
+    broken by whatever order the folder listed. Nudging past the newest keeps
+    the order the calls were actually made in.
+    """
+    newest = max((_recency(entry)[0] for entry in entries), default=0)
+    return now if now > newest else math.nextafter(newest, math.inf)
 
 
 def _write_entry(entry: dict) -> None:
@@ -200,7 +222,7 @@ def _evict_oldest(entries: list[dict]) -> list[str]:
     removed = []
     if len(entries) <= _MAX_ENTRIES:
         return removed
-    for entry in sorted(entries, key=lambda e: (e.get("used") or e.get("created") or 0))[: len(entries) - _MAX_ENTRIES]:
+    for entry in sorted(entries, key=_recency)[: len(entries) - _MAX_ENTRIES]:
         _remove_entry_files(entry["id"])
         removed.append(entry["id"])
     return removed
@@ -216,8 +238,8 @@ def record(images: object, settings: object, preview=None, *, name: str | None =
     images = normalize_images(images)
     settings = normalize_settings(settings)
     key = composition_key(images, settings)
-    now = time.time()
     entries = list_entries()
+    now = _next_stamp(entries, time.time())
     existing = next((entry for entry in entries if entry.get("key") == key), None)
     if existing is not None:
         existing["used"] = now

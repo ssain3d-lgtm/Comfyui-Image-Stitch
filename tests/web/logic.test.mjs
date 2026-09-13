@@ -523,7 +523,7 @@ describe("duplicating an image", () => {
         }
         assert.deepEqual(Object.keys(ms.thumbActionRects(card(node, 0))), ["remove"], "only a video card keeps a button");
         assert.deepEqual(cardMenu(node, 1).filter((o) => / image #2/.test(o.content)).map((o) => o.content), [
-            "Edit image #2…", "Duplicate image #2", "Copy original image #2", "Replace image #2…", "Remove image #2",
+            "Edit image #2…", "Duplicate image #2", "Copy image #2 to clipboard", "Replace image #2…", "Remove image #2",
         ]);
     });
 });
@@ -867,8 +867,8 @@ describe("copy original image", () => {
         const options = [];
         nodeType.prototype.getExtraMenuOptions.call(node, { graph_mouse: [card(node, 0).x + 65, card(node, 0).y + 46] }, options);
         assert.deepEqual(options.slice(0, 5).map((o) => o.content),
-            ["Edit image #1…", "Duplicate image #1", "Copy original image #1", "Replace image #1…", "Remove image #1"]);
-        await options.find((o) => o.content === "Copy original image #1").callback();
+            ["Edit image #1…", "Duplicate image #1", "Copy image #1 to clipboard", "Replace image #1…", "Remove image #1"]);
+        await options.find((o) => o.content === "Copy image #1 to clipboard").callback();
         assert.equal(written.length, 1);
         assert.equal(written[0].type, "image/png", "a JPEG source is re-encoded");
         assert.deepEqual(toasts(), ["success/Copied"]);
@@ -880,7 +880,7 @@ describe("copy original image", () => {
         define("fetch", async () => ({ ok: false, status: 404, statusText: "Not Found" }));
         const options = [];
         nodeType.prototype.getExtraMenuOptions.call(node, { graph_mouse: [card(node, 0).x + 65, card(node, 0).y + 46] }, options);
-        await options.find((o) => o.content === "Copy original image #1").callback();
+        await options.find((o) => o.content === "Copy image #1 to clipboard").callback();
         assert.deepEqual(toasts(), ["error/Copy failed"]);
     });
 });
