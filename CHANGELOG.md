@@ -2,6 +2,11 @@
 
 All notable changes to **Multi Stitch Images**. The version is the one in `pyproject.toml`; each release is tagged `v<version>` on `main`.
 
+## 1.2.3 — 2026-09-13
+
+### Fixed
+- **Loading a composition from the gallery now counts as using it.** The 200-entry cap drops the least recently used entry, but "used" was only written when a composition was *stitched* — so an entry someone reached for often and loaded back into a node, without ever running it again, kept ageing and could be evicted while untouched ones stayed. `Load` and `Add` mark the entry as used through a new `/multi_stitch/gallery/touch` route, which moves it to the front of the list. A server that cannot record the visit is logged and ignored: the composition is already in the node by then, so it must not turn into an error.
+
 ## 1.2.2 — 2026-09-13
 
 ### Fixed

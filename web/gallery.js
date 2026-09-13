@@ -11,6 +11,7 @@ export const GALLERY_ROUTES = {
     delete: "/multi_stitch/gallery/delete",
     cleanup: "/multi_stitch/gallery/cleanup",
     settings: "/multi_stitch/gallery/settings",
+    touch: "/multi_stitch/gallery/touch",
 };
 const PREVIEW_SUBFOLDER = "multi_stitch/gallery";
 
@@ -121,6 +122,17 @@ function postJson(route, body) {
     return request(route, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 }
 
+// Using an entry moves it to the front, so a full gallery drops what nobody
+// reaches for. The composition is already in the node by the time this runs,
+// so a server that cannot record the visit must not turn that into an error.
+async function markUsed(entry) {
+    try {
+        await postJson(GALLERY_ROUTES.touch, { id: entry.id });
+    } catch (error) {
+        console.warn("[Multi Stitch Images] could not mark the gallery entry as used", error);
+    }
+}
+
 // Opens the gallery for a node. Hooks:
 //   load(entry)    → replace the node's images and settings with the entry's
 //   append(entry)  → add the entry's images after the current ones
@@ -207,11 +219,13 @@ export function openGallery(node, hooks = {}) {
           </div>`;
         el.querySelector(".load")?.addEventListener("click", () => run(async () => {
             await hooks.load?.(entry);
+            await markUsed(entry);
             say(`Loaded "${entry.name || entry.id}".`);
             close();
         }));
         el.querySelector(".append")?.addEventListener("click", () => run(async () => {
             await hooks.append?.(entry);
+            await markUsed(entry);
             say(`Added the images of "${entry.name || entry.id}".`);
         }));
         el.querySelector(".delete")?.addEventListener("click", () => run(async () => {

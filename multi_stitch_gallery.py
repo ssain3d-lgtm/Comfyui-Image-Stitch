@@ -284,6 +284,26 @@ def rename(entry_id: object, name: object) -> tuple[int, dict]:
     return 200, {"entry": entry}
 
 
+def touch(entry_id: object) -> tuple[int, dict]:
+    """Marks an entry as used again, without changing what it holds.
+
+    Loading a composition back into a node is using it, so it belongs at the
+    front of the list — otherwise an entry someone reaches for often but never
+    stitches again ages out of a full gallery while untouched ones stay.
+    """
+    try:
+        entry_id = _valid_id(entry_id)
+    except ValueError as exc:
+        return 400, {"error": str(exc)}
+    json_path, _ = _entry_paths(entry_id)
+    entry = _read_entry(json_path) if json_path.is_file() else None
+    if entry is None:
+        return 404, {"error": "gallery entry not found"}
+    entry["used"] = _next_stamp(list_entries(), time.time())
+    _write_entry(entry)
+    return 200, {"entry": entry}
+
+
 def _remove_entry_files(entry_id: str) -> None:
     for path in _entry_paths(entry_id):
         try:

@@ -92,6 +92,30 @@ class GalleryTests(unittest.TestCase):
         self.assertEqual(gallery.rename("../etc", "x")[0], 400)
         self.assertEqual(gallery.rename("20990101-000000-abcdef", "x")[0], 404)
 
+    def test_loading_an_entry_marks_it_used_so_it_is_not_the_one_evicted(self):
+        with patch.object(gallery.time, "time", lambda: 1_700_000_000.0):
+            first = gallery.record([_item("a.png")], {}, None)["id"]
+            second = gallery.record([_item("b.png")], {}, None)["id"]
+            self.assertEqual([e["id"] for e in gallery.list_entries()], [second, first])
+
+            # Loading the older one is using it: it goes to the front.
+            status, body = gallery.touch(first)
+            self.assertEqual(status, 200)
+            self.assertEqual([e["id"] for e in gallery.list_entries()], [first, second])
+            self.assertGreater(body["entry"]["used"], body["entry"]["created"])
+
+            # So a third entry pushes out the one nobody reached for.
+            with patch.object(gallery, "_MAX_ENTRIES", 2):
+                gallery.record([_item("c.png")], {}, None)
+            remaining = [e["id"] for e in gallery.list_entries()]
+        self.assertIn(first, remaining, "the entry that was loaded stayed")
+        self.assertNotIn(second, remaining)
+
+    def test_touch_rejects_a_bad_id_and_reports_a_missing_one(self):
+        self.assertEqual(gallery.touch("../etc")[0], 400)
+        self.assertEqual(gallery.touch(None)[0], 400)
+        self.assertEqual(gallery.touch("20990101-000000-abcdef")[0], 404)
+
     def test_rejects_junk_input(self):
         with self.assertRaises(ValueError):
             gallery.record("nope", {}, None)

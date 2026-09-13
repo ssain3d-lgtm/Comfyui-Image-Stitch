@@ -37,6 +37,12 @@ before(async () => {
             server.entries = [saved, ...server.entries];
             return ok({ entry: saved, storage: server.storage });
         }
+        if (path === "/multi_stitch/gallery/touch") {
+            const target = server.entries.find((e) => e.id === body.id);
+            if (!target) return { ok: false, status: 404, json: async () => ({ error: "gallery entry not found" }) };
+            target.used = 1_700_000_100;
+            return ok({ entry: target });
+        }
         if (path === "/multi_stitch/gallery/rename") {
             const target = server.entries.find((e) => e.id === body.id);
             if (!target) return { ok: false, status: 404, json: async () => ({ error: "gallery entry not found" }) };
@@ -120,11 +126,14 @@ describe("gallery modal", () => {
         fire(part(cards(handles)[1], ".append"), "click");
         await settle();
         assert.deepEqual(appended, ["1"]);
+        assert.deepEqual(server.posts.filter((p) => p.path.endsWith("/touch")).map((p) => p.body.id), ["1"],
+            "using an entry marks it used, so a full gallery drops what nobody reaches for");
         assert.equal(handles.overlay.attached, true, "Add keeps the gallery open");
         assert.match(part(handles.overlay, ".ms-gallery-status").textContent, /Added the images of "Set 1"/);
         fire(part(cards(handles)[0], ".load"), "click");
         await settle();
         assert.deepEqual(loaded, ["2"]);
+        assert.deepEqual(server.posts.filter((p) => p.path.endsWith("/touch")).map((p) => p.body.id), ["1", "2"]);
         assert.equal(handles.overlay.attached, false, "Load closes the gallery");
         handles = await open({ load: () => { throw new Error("no such file"); } });
         fire(part(cards(handles)[0], ".load"), "click");
@@ -132,6 +141,23 @@ describe("gallery modal", () => {
         assert.equal(part(handles.overlay, ".ms-gallery-status").textContent, "no such file");
         assert.equal(part(handles.overlay, ".ms-gallery-status").className, "ms-gallery-status error");
         handles.close();
+    });
+
+    it("still loads when the server cannot record the visit", async () => {
+        const loaded = [];
+        const original = api.fetchApi;
+        api.fetchApi = async (path, options) => (path.endsWith("/touch")
+            ? { ok: false, status: 500, json: async () => ({ error: "disk on fire" }) }
+            : original(path, options));
+        try {
+            const handles = await open({ load: (e) => loaded.push(e.id) });
+            fire(part(cards(handles)[0], ".load"), "click");
+            await settle();
+            assert.deepEqual(loaded, ["2"], "the composition is in the node either way");
+            assert.equal(handles.overlay.attached, false, "and the gallery closed as usual");
+        } finally {
+            api.fetchApi = original;
+        }
     });
 
     it("deletes an entry with or without its files, sending the files the workflow still uses", async () => {
