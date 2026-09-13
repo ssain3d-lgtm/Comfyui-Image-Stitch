@@ -433,10 +433,11 @@ function toggleAdvanced(node) {
     node.graph?.setDirtyCanvas(true, true);
 }
 
-// Only the video card carries a button. A click on it captures frames, so
-// removing it needs a corner of its own. Image cards have none: dragging one
-// reorders it, a click opens the editor and the rest is the right-click menu,
-// which leaves the whole card for the picture.
+// One button per card, in the same corner on both kinds: removing an image is
+// frequent enough to be worth a click, and a video card needs it because a
+// click anywhere else on it captures frames. Everything else an image card can
+// do is a gesture (click to edit, drag to reorder) or the right-click menu, so
+// the picture keeps the rest of the card.
 function thumbActionRects(r) {
     return { remove: { x: r.x + r.w - 23, y: r.y + 3, w: 20, h: 19 } };
 }
@@ -788,6 +789,11 @@ function drawCard(ctx, node, item, index, r) {
         ctx.fillStyle = "#f6b73c";
         ctx.fillText(`${t.rotation}°${t.flip_h ? "H" : ""}${t.flip_v ? "V" : ""}`, badgeX + 4, r.y + 17);
     }
+    const remove = thumbActionRects(r).remove;
+    ctx.fillStyle = "rgba(0,0,0,.76)";
+    ctx.fillRect(remove.x, remove.y, remove.w, remove.h);
+    ctx.fillStyle = "#fff";
+    ctx.fillText("×", remove.x + 5, remove.y + 14);
     ctx.textAlign = "left";
     ctx.restore();
 }
@@ -2676,11 +2682,12 @@ app.registerExtension({
                     const r = thumbLayout(this, i);
                     if (!r.visible || !inRect(x, y, r)) continue;
 
-                    // The card is picked up as it is pressed: moving it shows
-                    // where it would land, releasing without moving opens the
-                    // editor. Duplicating and removing are on the right-click
-                    // menu, so no button sits over the picture.
-                    startThumbnailDrag(this, i, x, y, event, graphCanvas);
+                    // The × is a button, so it must not become a drag: it is
+                    // answered before the card is picked up. Everywhere else the
+                    // card is picked up as it is pressed — moving it shows where
+                    // it would land, releasing without moving opens the editor.
+                    if (inRect(x, y, thumbActionRects(r).remove)) removeImageAt(this, i);
+                    else startThumbnailDrag(this, i, x, y, event, graphCanvas);
                     stopEvent(event);
                     return true;
                 }

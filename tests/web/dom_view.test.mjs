@@ -153,12 +153,16 @@ describe("dom view", () => {
         handle.destroy();
     });
 
-    it("keeps the picture clear of buttons and reorders by dragging a card", () => {
+    it("keeps only the remove button on the picture and reorders by dragging a card", () => {
         const spy = actionSpy();
         const handle = view.installDomView(fakeNode([item("a.png"), item("b.png"), item("c.png")]), spy.actions);
         const [first, , third] = cards(handle.root);
-        assert.deepEqual(first.children.map((c) => c.className).filter((c) => c.startsWith("btn")), [],
-            "no duplicate, remove or step buttons over the image");
+        assert.deepEqual(first.children.map((c) => c.className).filter((c) => c.startsWith("btn")), ["btn remove"],
+            "the × stays; duplicate and the step buttons do not");
+        const remove = first.children.find((c) => c.className === "btn remove");
+        remove.handlers.click[0]({ stopPropagation() {} });
+        assert.deepEqual(spy.calls.filter(([name]) => name === "remove"), [["remove", 0]]);
+        assert.equal(remove.draggable, false, "pressing it never becomes a drag");
         assert.equal(first.draggable, true);
 
         first.handlers.dragstart[0]({ dataTransfer: {} });

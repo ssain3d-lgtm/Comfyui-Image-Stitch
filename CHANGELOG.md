@@ -2,6 +2,11 @@
 
 All notable changes to **Multi Stitch Images**. The version is the one in `pyproject.toml`; each release is tagged `v<version>` on `main`.
 
+## 1.2.4 — 2026-09-13
+
+### Changed
+- **The `×` is back on every image card.** Clearing the cards in 1.2.0 took removing with it, and reaching for the right-click menu every time turned the most frequent thing you do to a card into the slowest. It sits in the same corner as the video card's, and is answered before the card is picked up, so pressing it never becomes a drag. The other buttons stay gone — duplicating, copying, replacing and reordering are still the menu and the drag. `Remove image #N` remains on the menu as well, and the step is undoable either way.
+
 ## 1.2.3 — 2026-09-13
 
 ### Fixed

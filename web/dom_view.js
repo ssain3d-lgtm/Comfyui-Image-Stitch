@@ -253,6 +253,12 @@ export function installDomView(node, actions) {
             badge(`${t.rotation}°${t.flip_h ? "H" : ""}${t.flip_v ? "V" : ""}`, "edit");
         }
         el.appendChild(badges);
+        // The one button an image card keeps, in the same corner as the video
+        // card's. It must not become a drag, so it never starts one.
+        const remove = button("×", "Remove this image", () => actions.remove(node, index));
+        remove.className = "btn remove";
+        remove.draggable = false;
+        el.appendChild(remove);
         el.title = "Click to edit · drag to reorder · right-click for more";
         // Reordering is the card itself, so no handle covers the picture. The
         // card the pointer is over shows on which side the held one would land.

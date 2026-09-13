@@ -231,6 +231,20 @@ describe("reorder", () => {
         assert.deepEqual(node._msImages.map((i) => i.rotation ?? 0), [0, 90], "the card that was pressed");
     });
 
+    it("removes an image from its × without ever starting a drag", () => {
+        const node = plainNode(nodeType);
+        // Through applyImages, so the history holds the starting list — as it
+        // does when the images arrive from a paste or the gallery.
+        ms.applyImages(node, imageFiles(3).map((f) => item(f.name)), { pushHistory: false });
+        const x = centre(ms.thumbActionRects(card(node, 1)).remove);
+        assert.equal(click(node, x), true);
+        assert.deepEqual(node._msImages.map((i) => i.filename), ["img0.png", "img2.png"]);
+        assert.ok(!node._msThumbPress, "a button press is not a card press");
+        assert.equal(dom.listenerCount("pointermove"), 0, "so nothing is listening for a drag");
+        assert.equal(ms.undo(node), true, "and it is undoable like any other edit");
+        assert.equal(node._msImages.length, 3);
+    });
+
     it("shows the drop bar past the end when the held card is dragged beyond the last one", () => {
         const node = plainNode(nodeType);
         setImages(node, imageFiles(3).map((f) => item(f.name)));
@@ -680,14 +694,15 @@ describe("duplicating an image", () => {
         assert.deepEqual(node._msImages.map((i) => i.filename), ["a.png", "b.png", "b.png"]);
     });
 
-    it("keeps the picture clear of buttons and offers every card control on the menu", () => {
+    it("keeps one button on the picture and offers every card control on the menu", () => {
         const node = makeNode(nodeType);
         setImages(node, [item("a.png"), item("b.png")]);
         const painted = paintedText(nodeType, node);
-        for (const glyph of ["⧉", "×", "≡", "‹", "›"]) {
+        for (const glyph of ["⧉", "≡", "‹", "›"]) {
             assert.ok(!painted.includes(glyph), `${glyph} no longer sits over the picture`);
         }
-        assert.deepEqual(Object.keys(ms.thumbActionRects(card(node, 0))), ["remove"], "only a video card keeps a button");
+        assert.ok(painted.includes("×"), "removing is frequent enough to keep its button");
+        assert.deepEqual(Object.keys(ms.thumbActionRects(card(node, 0))), ["remove"]);
         assert.deepEqual(cardMenu(node, 1).filter((o) => / image #2/.test(o.content)).map((o) => o.content), [
             "Edit image #2…", "Duplicate image #2", "Copy image #2 to clipboard", "Replace image #2…", "Remove image #2",
         ]);
