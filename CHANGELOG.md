@@ -2,7 +2,7 @@
 
 All notable changes to **Multi Stitch Images**. The version is the one in `pyproject.toml`; each release is tagged `v<version>` on `main`.
 
-## 1.2.0 — 2026-09-12
+## 1.2.0 — 2026-09-13
 
 ### Added
 - **Gallery of compositions** (`🖼` in the title bar, left of the `?`): every composition a run stitches — the image list with its crops, order and settings — is recorded with a preview, and any of them can be loaded back into a node or appended to it. Entries are named, renamable, deduplicated (the same composition twice is one entry with a use count) and capped at 200, the least recently used dropped first. `Save current` records without running, and `save every run` can be turned off; the setting lives with the gallery on the server, not in a node widget, so no saved workflow shifts.
