@@ -2,6 +2,16 @@
 
 All notable changes to **Multi Stitch Images**. The version is the one in `pyproject.toml`; each release is tagged `v<version>` on `main`.
 
+## 1.4.0 — 2026-09-14
+
+### Added
+- **Several cards at once.** A card's **number is its checkbox**: click it to pick that image out, click it again to drop it. Selected cards are outlined and the status line counts them; the node's own menu offers `Select all images` and `Deselect …`. Right-clicking any selected card gives a menu about the whole group — `Crop … to` a shape, `Rotate 90°`, `Flip horizontally` / `vertically`, `Reset the crop`, `Duplicate`, `Move to the front` / `to the end` and `Remove` — and each runs as **one undo step**, not one per image. Dragging one of several selected cards carries the whole group to where it lands, keeping their order.
+- `Crop N images to 9:16` (and the other presets) puts the largest centred crop of that shape on each selected image, measured against the image as it is currently rotated. An image whose pixels have not arrived yet is left alone and counted in the notice rather than cropped against a size nobody knows.
+
+### Notes
+- Selection is by the number badge because **modifier keys cannot be used here**: the frontend hands a node's `onMouseDown` an event with `ctrlKey`, `shiftKey` and `altKey` all false whichever key is held, and Ctrl-drag is already the canvas's own multi-node selection. Measured in a running ComfyUI before the badge was chosen.
+- The selection is dropped whenever the list changes underneath it — a removal, a reorder, an undo, a gallery load — since its indices would then name other cards. The batch edits remap it themselves.
+
 ## 1.3.1 — 2026-09-14
 
 ### Changed

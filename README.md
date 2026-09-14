@@ -40,6 +40,12 @@
 - 일반 `IMAGE` 출력 → `Preview Image`, `Save Image`, `VAE Encode` 등에 바로 연결
 - 추가 Python 패키지 불필요 — 동영상 서버 디코딩에만 PyAV가 쓰이고 최신 ComfyUI에는 이미 포함되어 있습니다(ComfyUI-Manager용 `requirements.txt`에도 적어 두었습니다)
 
+### 1.4에서 달라진 점
+
+- **여러 장 한 번에 편집** — 카드의 **번호를 클릭하면 선택**됩니다(다시 누르면 해제). 선택된 카드는 테두리로 표시되고 상태 줄이 개수를 알려 줍니다. 선택된 카드를 우클릭하면 **그룹 전용 메뉴**가 열려 `Crop … to`(비율 일괄 적용)·회전·반전·Crop 초기화·복제·맨 앞/뒤로 이동·삭제를 **한 번의 실행 취소 단위로** 처리합니다. 선택된 카드 하나를 끌면 **그룹 전체가 함께 이동**합니다.
+- 노드 우클릭 메뉴에 `Select all images` / `Deselect …` 가 추가됐습니다.
+- 수식키(Ctrl·Shift)를 쓰지 않는 이유: ComfyUI가 노드의 `onMouseDown`에 넘기는 이벤트는 **어떤 키를 눌러도 수식키가 모두 false**로 오고, Ctrl+드래그는 캔버스의 다중 노드 선택이 이미 쓰고 있습니다. 실제 ComfyUI에서 측정한 뒤 번호 배지 방식을 택했습니다.
+
 ### 1.3에서 달라진 점
 
 - **`size_aspect`** — `width`/`height` 출력의 **비율**을 고를 수 있습니다. `reference`(기본)는 예전과 똑같이 기준 이미지의 비율을 따르고, `9:16`처럼 지정하면 그 비율로 바꾸되 **픽셀 수는 그대로** 유지합니다. 원본이 3:4인데 모델에는 9:16으로 넣어야 할 때 노드를 더 붙이지 않아도 됩니다.
@@ -253,7 +259,7 @@ grid_columns = 3
 - 머리글에 `input/multi_stitch` 용량과 **어떤 항목에도 안 쓰이는 파일**의 용량이 나오고, **`Clean up unused files…`** 로 그만큼만 지웁니다. 열려 있는 노드가 쓰는 파일은 절대 지우지 않지만, **디스크에 저장된 워크플로우가 참조하는 파일은 알 수 없으므로** 확인 창에서 그 점을 알려 줍니다.
 - 항목 삭제는 기본적으로 이미지 파일을 남기고, **`Delete + files`** 는 다른 항목과 열린 노드가 안 쓰는 파일만 함께 지웁니다.
 
-**카드 조작** — 이미지 카드에는 오른쪽 위 **`×` 삭제** 하나만 있고, 나머지는 **번호**(그리고 Crop·회전 표시)뿐입니다. `×`는 카드를 집어 드는 것보다 먼저 처리되므로 눌러도 드래그가 시작되지 않습니다. 사진이 버튼에 가리지 않도록 한 것으로, **클릭 = Edit**, **드래그 = 순서 변경**, **우클릭 = 나머지 전부**입니다. 카드를 우클릭하면 **그 카드 전용 메뉴**(제목 `Image #N`)가 열리고 `Edit image #N…`, `Duplicate image #N`, `Copy image #N to clipboard`, `Replace image #N…`, `Remove image #N` 다섯 개만 나옵니다 — 노드 메뉴(Bypass·Colors·Clone·Remove…)에 섞이지 않습니다. 노드의 제목·위젯·빈 공간을 우클릭하면 평소의 노드 메뉴가 그대로 열리고, 거기에는 노드 전체에 대한 `Copy stitched result`·크기 패널·갤러리만 들어 있습니다. **Duplicate**는 노드 안에 바로 한 장 더 넣고, **Copy to clipboard**는 **클립보드**로 복사해 Ctrl+V나 다른 프로그램에 쓸 수 있게 합니다. (동영상 카드는 클릭이 프레임 선택기를 여는 자리라 `×` 버튼을 그대로 둡니다.) 노드를 **넓히면 한 줄에 들어가는 카드 수가 늘어납니다**(기본 420px에서 3장, 1200px에서 8장) — 카드가 늘어나는 대신 장수가 늘어 목록이 짧아집니다. 카드에 마우스를 올리면 상태 줄이 **`Click to edit · drag to reorder · right-click for more`** 로 바뀌고 커서가 손가락 모양이 되므로, 버튼이 없어도 무엇을 할 수 있는지 그 자리에서 알 수 있습니다.
+**카드 조작** — 이미지 카드에는 오른쪽 위 **`×` 삭제** 하나와 왼쪽 위 **번호**(클릭하면 선택), 그리고 Crop·회전 표시뿐입니다. `×`는 카드를 집어 드는 것보다 먼저 처리되므로 눌러도 드래그가 시작되지 않습니다. 사진이 버튼에 가리지 않도록 한 것으로, **클릭 = Edit**, **드래그 = 순서 변경**, **우클릭 = 나머지 전부**입니다. 카드를 우클릭하면 **그 카드 전용 메뉴**(제목 `Image #N`)가 열리고 `Edit image #N…`, `Duplicate image #N`, `Copy image #N to clipboard`, `Replace image #N…`, `Remove image #N` 다섯 개만 나옵니다 — 노드 메뉴(Bypass·Colors·Clone·Remove…)에 섞이지 않습니다. 노드의 제목·위젯·빈 공간을 우클릭하면 평소의 노드 메뉴가 그대로 열리고, 거기에는 노드 전체에 대한 `Copy stitched result`·크기 패널·갤러리만 들어 있습니다. **Duplicate**는 노드 안에 바로 한 장 더 넣고, **Copy to clipboard**는 **클립보드**로 복사해 Ctrl+V나 다른 프로그램에 쓸 수 있게 합니다. (동영상 카드는 클릭이 프레임 선택기를 여는 자리라 `×` 버튼을 그대로 둡니다.) 노드를 **넓히면 한 줄에 들어가는 카드 수가 늘어납니다**(기본 420px에서 3장, 1200px에서 8장) — 카드가 늘어나는 대신 장수가 늘어 목록이 짧아집니다. 카드에 마우스를 올리면 상태 줄이 **`Click to edit · drag to reorder · right-click for more`** 로 바뀌고 커서가 손가락 모양이 되므로, 버튼이 없어도 무엇을 할 수 있는지 그 자리에서 알 수 있습니다.
 
 **Duplicate** — 같은 이미지를 바로 뒤에 한 장 더 넣습니다. 이미 업로드된 파일을 가리키기만 하므로 다시 올리지 않고, 사본의 Crop·회전·반전은 원본과 따로 편집됩니다. 실행 취소도 됩니다.
 
@@ -412,6 +418,12 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 - **Output Size Safety Guard** before giant tensors are allocated
 - Standard `IMAGE` output → `Preview Image`, `Save Image`, `VAE Encode`, etc.
 - No extra Python packages required — only server-side video decoding uses PyAV, which current ComfyUI already installs (and `requirements.txt` lists it for ComfyUI-Manager)
+
+### What changed in 1.4
+
+- **Edit several images at once** — a card's **number is its checkbox**: click to pick it out, click again to drop it. Selected cards are outlined and counted in the status line, and right-clicking one gives a menu about the whole group: crop them all to a shape, rotate, flip, reset the crop, duplicate, move to either end, remove — each **one undo step**. Dragging one selected card carries the whole group.
+- `Select all images` / `Deselect …` are on the node's own menu.
+- No modifier keys: the frontend hands a node's `onMouseDown` an event with every modifier false whichever key is held, and Ctrl-drag is the canvas's own multi-node selection. Measured in a running ComfyUI before the badge was chosen.
 
 ### What changed in 1.3
 

@@ -3,6 +3,23 @@ import { api } from "../../scripts/api.js";
 import { openCropEditor } from "./crop_editor.js";
 import { openGallery } from "./gallery.js";
 import { installDomView, refreshDomView, removeDomView, vueNodesEnabled } from "./dom_view.js";
+import {
+    clearSelection,
+    cropSelectedTo,
+    duplicateSelected,
+    flipSelected,
+    isSelected,
+    moveSelectedTo,
+    removeSelected,
+    reorderSelectionTo,
+    resetCropSelected,
+    rotateSelected,
+    selectedIndices,
+    selectAll,
+    selectionSize,
+    targetsFor,
+    toggleSelection,
+} from "./selection.js";
 import { canvasToPngFile, captureFileName, formatTime, openFramePicker } from "./frame_picker.js";
 import {
     commitImages,
@@ -507,6 +524,14 @@ function thumbActionRects(r) {
     return { remove: { x: r.x + r.w - 23, y: r.y + 3, w: 20, h: 19 } };
 }
 
+// The number a card wears is also its checkbox. Modifier keys are not an
+// option: the frontend hands a node's onMouseDown an event with every modifier
+// flag false, whichever key is held, so Ctrl- and Shift-click cannot be told
+// apart from a plain one here.
+function thumbNumberRect(r) {
+    return { x: r.x + 3, y: r.y + 3, w: 27, h: 19 };
+}
+
 // Where a card being dragged would land: a slot between cards, 0 to length.
 // The nearest card decides the row, its middle decides which side.
 function dropIndexAt(node, x, y) {
@@ -801,9 +826,14 @@ function drawCard(ctx, node, item, index, r) {
     if (isSource) ctx.globalAlpha = 0.55;
     ctx.fillStyle = "#171717";
     ctx.fillRect(r.x, r.y, r.w, r.h);
-    ctx.strokeStyle = isCropped(item.crop) || isTransformed(item) ? "#f6b73c" : "#555";
-    ctx.lineWidth = 1;
-    ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+    const selected = isSelected(node, index);
+    ctx.strokeStyle = selected ? "#8ab4f8" : (isCropped(item.crop) || isTransformed(item) ? "#f6b73c" : "#555");
+    ctx.lineWidth = selected ? 2 : 1;
+    ctx.strokeRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2);
+    if (selected) {
+        ctx.fillStyle = "rgba(138,180,248,.14)";
+        ctx.fillRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2);
+    }
 
     const state = loadTransformedThumb(node, item);
     const imageRect = { x: r.x + 3, y: r.y + 3, w: r.w - 6, h: r.h - 6 };
@@ -1056,8 +1086,11 @@ function statusText(node, measure = null, room = 0) {
     const inputNote = imageInputConnected(node) ? "  + IMAGE input" : "";
     const videos = node._msVideos?.length || 0;
     const videoNote = videos ? `  •  ${videos} video${videos === 1 ? "" : "s"} to capture from` : "";
+    const picked = selectionSize(node);
+    const pickedNote = picked > 1 ? `  •  ${picked} selected` : "";
     const candidates = count
-        ? [`${noun}${estimate}${inputNote}${videoNote}`, `${noun}${estimate}${videoNote}`, `${noun}${estimate}`, noun]
+        ? [`${noun}${estimate}${inputNote}${videoNote}${pickedNote}`, `${noun}${estimate}${pickedNote}`,
+            `${noun}${estimate}${videoNote}`, `${noun}${estimate}`, noun]
         : [videos
             ? `${videos} video${videos === 1 ? "" : "s"} — click the card to capture frames`
             : node._msUnreadable
@@ -1662,6 +1695,9 @@ const canRedo = (node) => historyOf(node).future.length > 0;
 // list without making the change undoable (loading a workflow, adopting a
 // stash).
 function applyImages(node, items, { pushHistory = true } = {}) {
+    // A wholesale replacement — undo, redo, a gallery load — means the cards a
+    // selection named are gone.
+    clearSelection(node);
     const next = normalizeItems(items);
     // Only the entries that are gone lose their cached pixels; a file still in
     // the list keeps its decode.
@@ -1675,6 +1711,7 @@ function applyImages(node, items, { pushHistory = true } = {}) {
 }
 
 function removeImageAt(node, index) {
+    clearSelection(node);
     const list = node._msImages || [];
     if (!(index >= 0 && index < list.length)) return false;
     const [removed] = list.splice(index, 1);
@@ -1684,6 +1721,7 @@ function removeImageAt(node, index) {
 }
 
 function clearAllImages(node) {
+    clearSelection(node);
     const count = node._msImages?.length || 0;
     const videos = node._msVideos?.length || 0;
     const what = [count ? `${count} image${count === 1 ? "" : "s"}` : "", videos ? `${videos} video${videos === 1 ? "" : "s"}` : ""]
@@ -1737,6 +1775,7 @@ function replaceImage(node, index) {
 }
 
 function moveItem(node, index, delta) {
+    clearSelection(node);
     const target = index + delta;
     if (target < 0 || target >= node._msImages.length) return false;
     const [item] = node._msImages.splice(index, 1);
@@ -1749,6 +1788,7 @@ function moveItem(node, index, delta) {
 // of a file already in the input folder needs no upload, and its crop and
 // transform can then be edited on its own.
 function duplicateImage(node, index) {
+    clearSelection(node);
     const items = node._msImages || [];
     const item = items[index];
     if (!item) return false;
@@ -1764,6 +1804,7 @@ function duplicateImage(node, index) {
 }
 
 function reorderItem(node, from, to) {
+    clearSelection(node);
     if (from === to || from < 0 || to < 0 || from >= node._msImages.length || to >= node._msImages.length) return;
     const [item] = node._msImages.splice(from, 1);
     node._msImages.splice(to, 0, item);
@@ -2244,6 +2285,8 @@ function openVideoPicker(node, entry) {
 // and is about the node; these are about one picture, so they are their own
 // short menu over the card and are only folded into the node's menu when that
 // cannot be installed.
+// One image's own entries. A selection of several replaces most of them with
+// the batch below, so these stay about the single card they name.
 function imageCardEntries(node, index) {
     return [
         { content: `Edit image #${index + 1}…`, callback: () => openEditor(node, index) },
@@ -2251,6 +2294,58 @@ function imageCardEntries(node, index) {
         { content: `Copy image #${index + 1} to clipboard`, callback: () => copyOriginalImage(node, index) },
         { content: `Replace image #${index + 1}…`, callback: () => replaceImage(node, index) },
         { content: `Remove image #${index + 1}`, callback: () => removeImageAt(node, index) },
+    ];
+}
+
+// Runs one batch edit and commits it as a single step, so undo takes the whole
+// thing back rather than one image at a time.
+function runBatch(node, count, message) {
+    if (!count) return;
+    if (count < 0) {
+        notify("Cannot duplicate", `A node holds at most ${MAX_IMAGES} images.`, "warn");
+        return;
+    }
+    changed(node);
+    node.graph?.setDirtyCanvas(true, true);
+    if (message) notify("Images edited", message);
+}
+
+// The transformed size of an image, or null while it is still loading: a crop
+// measured against a size nobody knows yet would be wrong.
+function transformedDims(node, item) {
+    const state = loadTransformedThumb(node, item);
+    return state?.ready && state.width && state.height ? { w: state.width, h: state.height } : null;
+}
+
+function selectionCardEntries(node, targets) {
+    const n = targets.length;
+    const many = `${n} images`;
+    const crops = SIZE_ASPECTS.filter((name) => name !== "reference").map((name) => ({
+        content: name,
+        callback: () => {
+            const { changed: done, skipped } = cropSelectedTo(node, targets, aspectRatio(name), (item) => transformedDims(node, item));
+            runBatch(node, done, `${done} of ${many} cropped to ${name}${skipped ? `; ${skipped} still loading` : ""}`);
+        },
+    }));
+    return [
+        { content: `Edit the first of ${many}…`, callback: () => openEditor(node, targets[0]) },
+        {
+            content: `Crop ${many} to…`,
+            has_submenu: true,
+            callback: (value, options, event, parent) => {
+                const ContextMenu = globalThis.LiteGraph?.ContextMenu;
+                if (ContextMenu) new ContextMenu(crops, { event, title: `Crop ${many} to`, parentMenu: parent });
+            },
+        },
+        { content: `Rotate ${many} 90°`, callback: () => runBatch(node, rotateSelected(node, targets, 90), `${many} turned 90°`) },
+        { content: `Flip ${many} horizontally`, callback: () => runBatch(node, flipSelected(node, targets, "h"), `${many} flipped`) },
+        { content: `Flip ${many} vertically`, callback: () => runBatch(node, flipSelected(node, targets, "v"), `${many} flipped`) },
+        { content: `Reset the crop on ${many}`, callback: () => runBatch(node, resetCropSelected(node, targets), `${many} back to the full frame`) },
+        { content: `Duplicate ${many}`, callback: () => runBatch(node, duplicateSelected(node, targets), `${many} duplicated`) },
+        { content: `Move ${many} to the front`, callback: () => runBatch(node, moveSelectedTo(node, targets, "start"), `${many} moved to the front`) },
+        { content: `Move ${many} to the end`, callback: () => runBatch(node, moveSelectedTo(node, targets, "end"), `${many} moved to the end`) },
+        { content: `Remove ${many}`, callback: () => runBatch(node, removeSelected(node, targets), `${many} removed`) },
+        { content: `Deselect ${many}`, callback: () => { clearSelection(node); node.graph?.setDirtyCanvas(true, false); } },
     ];
 }
 
@@ -2307,6 +2402,11 @@ function cardEntriesUnder(node, graphCanvas) {
     }
     const index = thumbIndexAt(node, graphCanvas);
     if (index < 0) return null;
+    // Right-clicking one of several selected cards is about all of them.
+    const targets = targetsFor(node, index);
+    if (targets.length > 1) {
+        return { title: `${targets.length} images selected`, values: selectionCardEntries(node, targets) };
+    }
     return { title: `Image #${index + 1}`, values: imageCardEntries(node, index) };
 }
 
@@ -2465,11 +2565,20 @@ function finishThumbnailDrag(node) {
     node._msThumbPress = null;
 
     // A slot is between cards, so landing after its own place shifts by one.
-    // Releasing without having moved was a plain click: open the editor.
+    // Releasing without having moved was a plain click: it opens the editor,
+    // and a click outside the selection drops it.
     if (press.dragging) {
         const slot = press.drop ?? press.index;
-        reorderItem(node, press.index, slot > press.index ? slot - 1 : slot);
-    } else openEditor(node, press.index);
+        const selection = selectedIndices(node);
+        if (selection.length > 1 && selection.includes(press.index)) {
+            if (reorderSelectionTo(node, selection, slot)) changed(node);
+        } else {
+            reorderItem(node, press.index, slot > press.index ? slot - 1 : slot);
+        }
+    } else {
+        if (!isSelected(node, press.index) && clearSelection(node)) node.graph?.setDirtyCanvas(true, false);
+        openEditor(node, press.index);
+    }
 
     node.graph?.setDirtyCanvas(true, false);
     return true;
@@ -2762,11 +2871,20 @@ app.registerExtension({
                     if (!r.visible || !inRect(x, y, r)) continue;
 
                     // The × is a button, so it must not become a drag: it is
-                    // answered before the card is picked up. Everywhere else the
-                    // card is picked up as it is pressed — moving it shows where
-                    // it would land, releasing without moving opens the editor.
-                    if (inRect(x, y, thumbActionRects(r).remove)) removeImageAt(this, i);
-                    else startThumbnailDrag(this, i, x, y, event, graphCanvas);
+                    // answered before the card is picked up.
+                    if (inRect(x, y, thumbActionRects(r).remove)) {
+                        removeImageAt(this, i);
+                    } else if (inRect(x, y, thumbNumberRect(r))) {
+                        // Its number picks the card out for a batch edit. Neither
+                        // opens the editor nor moves anything.
+                        toggleSelection(this, i);
+                        this.graph?.setDirtyCanvas(true, false);
+                    } else {
+                        // Everywhere else the card is picked up as it is pressed:
+                        // moving it shows where it would land, releasing without
+                        // moving opens the editor.
+                        startThumbnailDrag(this, i, x, y, event, graphCanvas);
+                    }
                     stopEvent(event);
                     return true;
                 }
@@ -2791,6 +2909,18 @@ app.registerExtension({
                     content: "Copy stitched result",
                     callback: () => copyStitchedResult(this),
                 });
+            }
+            if (this._msImages?.length > 1) {
+                const picked = selectionSize(this);
+                extra.push(picked
+                    ? {
+                        content: `Deselect ${picked} image${picked === 1 ? "" : "s"}`,
+                        callback: () => { clearSelection(this); this.graph?.setDirtyCanvas(true, false); },
+                    }
+                    : {
+                        content: "Select all images (or click a card's number)",
+                        callback: () => { selectAll(this); this.graph?.setDirtyCanvas(true, false); },
+                    });
             }
             extra.push({
                 content: sizePanelEnabled(this) ? "Hide size panel" : "Show size panel (width / height outputs)",
@@ -2935,6 +3065,8 @@ export {
     thumbActionRects,
     columnsOf,
     SIZE_ASPECTS,
+    selectionCardEntries,
+    thumbNumberRect,
     sizePanelRect,
     sizePresetRects,
     sizePresetAt,

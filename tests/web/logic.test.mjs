@@ -352,6 +352,130 @@ describe("what the pointer is over", () => {
     });
 });
 
+describe("picking out several cards on the node", () => {
+    const press = (node, index, mods = {}) => {
+        const [x, y] = centre(card(node, index));
+        return nodeType.prototype.onMouseDown.call(node, { ...pointer(x, y, [100, 200]), ...mods }, [x, y], {});
+    };
+    const selected = (node) => [...(node._msSelected || [])].sort((a, b) => a - b);
+    // Registering the sizes keeps these tests' thumbnails out of the shared
+    // load queue, where unresolvable ones would starve another test's.
+    const files = (count) => {
+        const made = imageFiles(count);
+        for (const file of made) dom.imageSizes.set(file.name, [40, 20]);
+        return made.map((f) => item(f.name));
+    };
+
+    it("picks a card out by its number, without opening the editor or moving it", async () => {
+        const node = plainNode(nodeType);
+        setImages(node, files(5));
+        const number = (index) => centre(ms.thumbNumberRect(card(node, index)));
+        assert.equal(click(node, number(1)), true);
+        assert.equal(click(node, number(3)), true);
+        assert.deepEqual(selected(node), [1, 3]);
+        assert.ok(!node._msThumbPress, "a number is a checkbox, not a grip");
+
+        click(node, number(3));
+        assert.deepEqual(selected(node), [1], "clicking it again drops that card");
+        click(node, number(0));
+        assert.match(paintedText(nodeType, node)[0], /2 selected/, "and the status line says how many");
+        await waitForThumbs(node);
+    });
+
+    it("selects everything and deselects it from the node's own menu", () => {
+        const node = plainNode(nodeType);
+        setImages(node, files(4));
+        const menu = () => {
+            const options = [];
+            nodeType.prototype.getExtraMenuOptions.call(node, { graph_mouse: [node.pos[0] + 4, node.pos[1] - 8] }, options);
+            return options.filter(Boolean).map((o) => o.content);
+        };
+        const all = menu().find((c) => /^Select all images/.test(c));
+        assert.ok(all, menu().join(" | "));
+        const options = [];
+        nodeType.prototype.getExtraMenuOptions.call(node, { graph_mouse: [node.pos[0] + 4, node.pos[1] - 8] }, options);
+        options.find((o) => o && /^Select all images/.test(o.content)).callback();
+        assert.deepEqual(selected(node), [0, 1, 2, 3]);
+        assert.ok(menu().includes("Deselect 4 images"), "and the entry turns into its opposite");
+    });
+
+    it("drops the selection on a plain click, and keeps it on a click inside", async () => {
+        const node = plainNode(nodeType);
+        for (const name of ["a.png", "b.png", "c.png"]) dom.imageSizes.set(name, [40, 20]);
+        setImages(node, [item("a.png"), item("b.png"), item("c.png")]);
+        click(node, centre(ms.thumbNumberRect(card(node, 0))));
+        click(node, centre(ms.thumbNumberRect(card(node, 1))));
+        assert.deepEqual(selected(node), [0, 1]);
+
+        press(node, 1);
+        dom.fire("pointerup", {});
+        await tick(5);
+        assert.deepEqual(selected(node), [0, 1], "a click on one of them leaves the selection alone");
+        node._msEditor?.close?.();
+
+        press(node, 2);
+        dom.fire("pointerup", {});
+        await tick(5);
+        assert.deepEqual(selected(node), [], "a click outside it starts over");
+        node._msEditor?.close?.();
+    });
+
+    it("carries the whole selection when one of them is dragged", async () => {
+        const node = plainNode(nodeType);
+        ms.applyImages(node, files(5), { pushHistory: false });
+        click(node, centre(ms.thumbNumberRect(card(node, 0))));
+        click(node, centre(ms.thumbNumberRect(card(node, 1))));
+        press(node, 1);
+        dom.fire("pointermove", pointer(...centre(card(node, 4)), [400, 400]));
+        dom.fire("pointerup", {});
+        await tick(5);
+        assert.deepEqual(node._msImages.map((i) => i.filename),
+            ["img2.png", "img3.png", "img4.png", "img0.png", "img1.png"], "both moved, in the order they were in");
+        assert.deepEqual(selected(node), [3, 4], "and the selection followed them");
+        assert.equal(ms.undo(node), true);
+        assert.deepEqual(node._msImages.map((i) => i.filename),
+            ["img0.png", "img1.png", "img2.png", "img3.png", "img4.png"], "one step, not two");
+    });
+
+    it("offers the batch menu for the selection, and the single menu outside it", async () => {
+        const node = plainNode(nodeType);
+        ms.applyImages(node, files(4), { pushHistory: false });
+        click(node, centre(ms.thumbNumberRect(card(node, 0))));
+        click(node, centre(ms.thumbNumberRect(card(node, 2))));
+        const over = (index) => {
+            const r = card(node, index);
+            return { graph_mouse: [node.pos[0] + r.x + 10, node.pos[1] + r.y + 10] };
+        };
+        const batch = ms.cardEntriesUnder(node, over(2));
+        assert.equal(batch.title, "2 images selected");
+        assert.deepEqual(batch.values.map((v) => v.content), [
+            "Edit the first of 2 images…", "Crop 2 images to…", "Rotate 2 images 90°",
+            "Flip 2 images horizontally", "Flip 2 images vertically", "Reset the crop on 2 images",
+            "Duplicate 2 images", "Move 2 images to the front", "Move 2 images to the end",
+            "Remove 2 images", "Deselect 2 images",
+        ]);
+        assert.equal(ms.cardEntriesUnder(node, over(1)).title, "Image #2", "a card outside the selection is its own");
+
+        batch.values.find((v) => v.content === "Rotate 2 images 90°").callback();
+        assert.deepEqual(node._msImages.map((i) => i.rotation ?? 0), [90, 0, 90, 0]);
+        assert.equal(ms.undo(node), true, "one step for the batch");
+        assert.deepEqual(node._msImages.map((i) => i.rotation ?? 0), [0, 0, 0, 0]);
+
+        ms.cardEntriesUnder(node, over(0)).values.find((v) => v.content === "Remove 2 images").callback();
+        assert.deepEqual(node._msImages.map((i) => i.filename), ["img1.png", "img3.png"]);
+        assert.deepEqual(selected(node), [], "and the cards it named are gone");
+    });
+
+    it("forgets a selection the list no longer supports", () => {
+        const node = plainNode(nodeType);
+        setImages(node, files(4));
+        click(node, centre(ms.thumbNumberRect(card(node, 1))));
+        click(node, centre(ms.thumbNumberRect(card(node, 2))));
+        ms.removeImageAt(node, 0);
+        assert.deepEqual(selected(node), [], "the indices meant other cards after the shift");
+    });
+});
+
 describe("the card's own right-click menu", () => {
     // A LiteGraph-shaped canvas class and ContextMenu of the test's own, so the
     // override lands on a prototype nothing else shares.
@@ -414,6 +538,7 @@ describe("the card's own right-click menu", () => {
         const contents = cardMenu(node, 1).map((o) => o.content);
         assert.deepEqual(contents, [
             "Copy stitched result",
+            "Select all images (or click a card's number)",
             "Show size panel (width / height outputs)",
             "Gallery — compositions this node stitched…",
         ], "only what is about the node as a whole");
@@ -492,7 +617,9 @@ describe("thumbnails and the resolution estimate", () => {
         dom.imageSizes.set("big.png", [4000, 3000]);
         setImages(node, [item("big.png", { rotation: 90 })]);
         shared.loadTransformedThumb(node, node._msImages[0]);
-        await tick(2);
+        // Waiting for the load itself, not a fixed number of ticks: timers left
+        // by another test would otherwise decide whether this one sees pixels.
+        await waitForThumbs(node);
 
         const base = [...node._msThumbCache.values()][0];
         assert.deepEqual([base.width, base.height], [4000, 3000]);
