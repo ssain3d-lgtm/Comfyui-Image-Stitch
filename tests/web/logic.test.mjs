@@ -1709,6 +1709,18 @@ describe("native-reference refinements", () => {
         assert.equal(shared.normalizeTransform({ rotation: Infinity }).rotation, 0);
         assert.deepEqual(shared.normalizeCrop({ x: null, w: null }), shared.defaultCrop());
     });
+    it("says what an image measures, and what a crop leaves of it", () => {
+        assert.equal(shared.sizeText(1024, 768, null), "1024 × 768");
+        assert.equal(shared.sizeText(1024, 768, { x: 0, y: 0, w: 1, h: 1 }), "1024 × 768");
+        assert.equal(shared.sizeText(1024, 768, { x: .25, y: .25, w: .5, h: .5 }), "1024 × 768 → 512 × 384");
+        // A crop that rounds back onto every pixel took nothing away, so the
+        // arrow would be saying the same size twice.
+        assert.equal(shared.sizeText(10, 10, { x: 0, y: 0, w: 0.999, h: 1 }), "10 × 10");
+        // The second pair is cropPixelBox's, which is the server's own box.
+        const box = shared.cropPixelBox(300, 200, { x: .15, y: .15, w: .3, h: .3 });
+        assert.equal(shared.sizeText(300, 200, { x: .15, y: .15, w: .3, h: .3 }), `300 × 200 → ${box.w} × ${box.h}`);
+    });
+
     it("limits simultaneous thumbnail loads and releases a removed node", async () => {
         const OriginalImage = globalThis.Image;
         const pending = [];

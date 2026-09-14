@@ -8,6 +8,7 @@ import {
     normalizeCrop,
     normalizeTransform,
     renderTransformedImage,
+    sizeText,
     swallowKey,
     commitImages,
 } from "./shared.js";
@@ -177,7 +178,6 @@ export async function openCropEditor(node, index) {
         canvas.height = Math.max(1, Math.round(working.height * scale));
         view = { x: 0, y: 0, w: working.width, h: working.height };
         applyViewMetrics();
-        dimensions.textContent = `${working.width} × ${working.height}`;
     }
 
     // Grab areas are a constant number of screen pixels, so they are expressed
@@ -225,6 +225,16 @@ export async function openCropEditor(node, index) {
 
     function fullRect() {
         return { x: 0, y: 0, w: working.width, h: working.height };
+    }
+
+    // The crop as the item stores it: a fraction of the working image.
+    function cropFraction() {
+        return {
+            x: rect.x / working.width,
+            y: rect.y / working.height,
+            w: rect.w / working.width,
+            h: rect.h / working.height,
+        };
     }
 
     const initialCrop = normalizeCrop(item.crop);
@@ -303,6 +313,9 @@ export async function openCropEditor(node, index) {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(working, view.x, view.y, view.w, view.h, 0, 0, canvas.width, canvas.height);
         zoomLevel.textContent = `${Math.round(working.width / view.w * 100)}%`;
+        // The size the image is, and the size this crop makes it: the question
+        // the editor is open to answer, answered while the crop is dragged.
+        dimensions.textContent = sizeText(working.width, working.height, cropFraction());
 
         ctx.fillStyle = "rgba(0,0,0,.56)";
         ctx.fillRect(0, 0, canvas.width, y);
@@ -351,12 +364,7 @@ export async function openCropEditor(node, index) {
         // Carry the crop through the transform instead of discarding it: map it
         // back to the source image, then forward into the new view.
         const previous = transform;
-        const sourceCrop = cropViewToSource({
-            x: rect.x / working.width,
-            y: rect.y / working.height,
-            w: rect.w / working.width,
-            h: rect.h / working.height,
-        }, previous);
+        const sourceCrop = cropViewToSource(cropFraction(), previous);
 
         transform = normalizeTransform(next);
         working = renderTransformedImage(source, transform);
@@ -545,10 +553,7 @@ export async function openCropEditor(node, index) {
             return true;
         }
         const crop = normalizeCrop(item.crop);
-        const now = {
-            x: rect.x / working.width, y: rect.y / working.height,
-            w: rect.w / working.width, h: rect.h / working.height,
-        };
+        const now = cropFraction();
         return ["x", "y", "w", "h"].some((k) => Math.abs(crop[k] - now[k]) > CROPPED_EPSILON);
     };
 
@@ -586,11 +591,12 @@ export async function openCropEditor(node, index) {
         item.rotation = transform.rotation;
         item.flip_h = transform.flip_h;
         item.flip_v = transform.flip_v;
+        const fraction = cropFraction();
         item.crop = {
-            x: +(rect.x / working.width).toFixed(6),
-            y: +(rect.y / working.height).toFixed(6),
-            w: +(rect.w / working.width).toFixed(6),
-            h: +(rect.h / working.height).toFixed(6),
+            x: +fraction.x.toFixed(6),
+            y: +fraction.y.toFixed(6),
+            w: +fraction.w.toFixed(6),
+            h: +fraction.h.toFixed(6),
         };
         node._msTransformedCache?.clear();
         commitImages(node);

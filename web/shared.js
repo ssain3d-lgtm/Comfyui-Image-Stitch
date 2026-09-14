@@ -315,6 +315,16 @@ export function cropPixelBox(width, height, crop) {
     return { x, y, w: right - x, h: bottom - y };
 }
 
+// What an image measures, and what a crop leaves of it. The second number
+// comes out of cropPixelBox, so the size shown here is the size the server
+// cuts — the UI never reports a resolution the run would not produce.
+export function sizeText(width, height, crop) {
+    const w = Math.max(1, Math.trunc(width) || 1);
+    const h = Math.max(1, Math.trunc(height) || 1);
+    const box = cropPixelBox(w, h, crop);
+    return box.w === w && box.h === h ? `${w} × ${h}` : `${w} × ${h} → ${box.w} × ${box.h}`;
+}
+
 function rotateCrop(crop, rotation) {
     const { x, y, w, h } = crop;
     if (rotation === 90) return { x: 1 - y - h, y: x, w: h, h: w };

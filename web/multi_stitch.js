@@ -31,6 +31,7 @@ import {
     historyOf,
     imageUrl,
     isCropped,
+    sizeText,
     isTransformed,
     layoutPlacements,
     LEGACY_SIZE_REFERENCES,
@@ -893,6 +894,20 @@ function drawCard(ctx, node, item, index, r) {
         ctx.fillStyle = "#f6b73c";
         ctx.fillText(`${t.rotation}°${t.flip_h ? "H" : ""}${t.flip_v ? "V" : ""}`, badgeX + 4, r.y + 17);
     }
+    // What the image measures now — after a crop, what the crop left, in the
+    // colour the ✂ badge already uses for "this one was edited".
+    const dims = transformedCropDims(node, item);
+    if (dims) {
+        const label = `${dims.w}×${dims.h}`;
+        const barWidth = Math.min(r.w - 6, Math.max(46, (ctx.measureText?.(label)?.width ?? 0) + 12));
+        ctx.fillStyle = "rgba(0,0,0,.72)";
+        ctx.fillRect(r.x + (r.w - barWidth) / 2, r.y + r.h - 21, barWidth, 18);
+        ctx.fillStyle = isCropped(item.crop) ? "#f6b73c" : "#e8e8e8";
+        ctx.textAlign = "center";
+        ctx.fillText(label, r.x + r.w / 2, r.y + r.h - 8, barWidth - 6);
+        ctx.textAlign = "left";
+    }
+
     const remove = thumbActionRects(r).remove;
     ctx.fillStyle = "rgba(0,0,0,.76)";
     ctx.fillRect(remove.x, remove.y, remove.w, remove.h);
@@ -1122,7 +1137,7 @@ function drawThumbs(node, ctx) {
     const videos = node._msVideos?.length || 0;
     ctx.textAlign = "left";
     const fits = (text) => (ctx.measureText?.(text)?.width ?? 0) <= room;
-    const hint = node._msHoverCard >= 0 ? (CARD_HINTS.find(fits) ?? CARD_HINTS[CARD_HINTS.length - 1]) : null;
+    const hint = node._msHoverCard >= 0 ? cardHint(node, node._msHoverCard, fits) : null;
     if (hint) ctx.fillStyle = "#8ab4f8";
     ctx.fillText(hint ?? statusText(node, (text) => ctx.measureText?.(text)?.width ?? 0, room), 9, top + 12, room);
     ctx.fillStyle = "#b8b8b8";
@@ -1827,6 +1842,18 @@ const CARD_HINTS = [
     "Click to edit · drag to reorder · right-click",
     "Click · drag · right-click",
 ];
+
+// The card's own line: what the image measures, what the crop leaves of it,
+// then the gestures — trimmed from the right as the node narrows.
+function cardHint(node, index, fits) {
+    const item = node._msImages?.[index];
+    const state = item ? loadTransformedThumb(node, item) : null;
+    const size = state?.ready && !state.failed ? sizeText(state.width, state.height, item.crop) : "";
+    const candidates = size
+        ? [...CARD_HINTS.map((hint) => `${size}  ·  ${hint}`), size, ...CARD_HINTS]
+        : CARD_HINTS;
+    return candidates.find(fits) ?? candidates[candidates.length - 1];
+}
 
 function setCardHover(node, index, graphCanvas) {
     if (node._msHoverCard !== index) {

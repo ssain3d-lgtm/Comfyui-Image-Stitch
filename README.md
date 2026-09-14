@@ -17,6 +17,7 @@
 - **카드를 그냥 끌어서** 순서 변경 — 놓일 자리는 파란 막대로 표시
 - 카드 **우클릭 → Edit · Duplicate · Copy to clipboard · Replace · Remove** — 사진 위에 버튼이 없어 썸네일이 가려지지 않습니다
 - **Duplicate**로 같은 이미지 한 장 더 넣기 — 사본은 따로 Crop·회전할 수 있습니다
+- **카드마다 해상도 표시** — Crop한 이미지는 Crop 후 크기까지, 편집기 헤더는 드래그 중에도 실시간
 - **`⧉ Copy` 버튼 → 합성 결과를 Queue 없이 바로 클립보드 복사**
 - **동영상에서 장면 캡처** — 프레임 단위로 찾아 원본 해상도 PNG로 목록에 추가, 동영상은 저장 공간을 차지하지 않음. 브라우저가 못 여는 코덱은 서버(PyAV)가 디코딩
 - **기준 이미지 크기 출력** — `width`/`height` 출력 단자와 크기 패널: 기준 이미지 크기를 MP 목표로 조정하고 배수(기본 32)로 맞춤
@@ -39,6 +40,12 @@
 - 초대형 결과 생성 전 **Output Size Safety Guard**
 - 일반 `IMAGE` 출력 → `Preview Image`, `Save Image`, `VAE Encode` 등에 바로 연결
 - 추가 Python 패키지 불필요 — 동영상 서버 디코딩에만 PyAV가 쓰이고 최신 ComfyUI에는 이미 포함되어 있습니다(ComfyUI-Manager용 `requirements.txt`에도 적어 두었습니다)
+
+### 1.7에서 달라진 점
+
+- **해상도 표시** — 카드마다 그 이미지의 **픽셀 크기**가 표시됩니다. Crop한 이미지는 **Crop 후 크기**가 ✂ 배지와 같은 주황색으로 나오고, 카드에 마우스를 올리면 상태 줄에 `3000 × 2000 → 1400 × 2000`처럼 원본과 결과가 함께 표시됩니다.
+- **편집기 헤더가 Crop 크기를 실시간으로 셉니다** — 지금까지는 원본 크기만 보여 줘서 Crop 결과 해상도를 Apply 후에야 알 수 있었습니다. 이제 드래그하는 동안 `1080 × 1920 → 792 × 1411`이 계속 갱신되어 **원하는 픽셀 크기에 맞춰** Crop할 수 있습니다.
+- 이 숫자는 서버가 실제로 자를 때 쓰는 계산(`_crop_box`)과 같은 함수에서 나오므로, 화면에 보이는 해상도와 실행 결과가 어긋나지 않습니다.
 
 ### 1.6에서 달라진 점
 
@@ -181,6 +188,7 @@ git pull
 - `Flip H / Flip V`
 - `Reset crop`
 - `Reset all`
+- **크기 표시**: 헤더가 `1080 × 1920 → 792 × 1411`처럼 **원본 크기와 지금 Crop의 크기**를 드래그하는 동안 계속 보여 줍니다
 - **확대 / 이동**: 휠(포인터 기준 확대), `+ / − / Fit` 버튼, 키보드 `+ / - / 0`. 이동은 **휠 버튼 드래그** 또는 **Space + 좌클릭 드래그**. 최대 16배까지 확대되며, 확대하면 핸들이 잡는 범위와 최소 Crop 크기도 함께 작아져 픽셀 단위로 다듬을 수 있습니다.
 
 회전 / 반전은 **잡아둔 Crop 영역을 그대로 유지**합니다. Crop은 이미지 내용을 따라 함께 회전·반전되므로, 편집 순서에 상관없이 같은 영역이 선택된 상태로 남습니다. Crop을 전체로 되돌리려면 `Reset crop`을 사용하세요.
@@ -194,6 +202,7 @@ Crop / 회전 / 반전 정보만 workflow에 저장하는 **비파괴 방식**�
 - **카드 클릭**(누르고 그 자리에서 떼기) → Edit 즉시 열기
 - **카드를 끌기** → 순서 변경. 놓일 자리가 **파란 막대**로 카드 사이에 표시되고, 끌리는 카드는 반투명해집니다.
 - **카드 우클릭** → `Edit · Duplicate · Copy to clipboard · Replace · Remove`
+- 카드 아래쪽에 **그 이미지의 픽셀 크기**가 표시됩니다. Crop한 카드는 Crop 후 크기를 주황색으로 보여 주고, 마우스를 올리면 상태 줄에 원본 크기까지 함께 나옵니다.
 - 툴바 **`⧉ Copy`** → 합성 결과 복사
 - Drag 판정 거리는 ComfyUI Canvas 좌표가 아닌 **실제 화면 픽셀 기준**이라 Zoom 배율에 영향을 덜 받습니다. 그 거리를 넘지 않고 떼면 클릭으로 처리되어 편집기가 열립니다.
 
@@ -412,6 +421,7 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 - **Capture frames from a video** — find the moment frame by frame, add it as a native-resolution PNG; the video takes no storage, and the server (PyAV) decodes codecs the browser cannot
 - **Gallery** — every composition a run stitches is recorded with a preview and can be loaded back into a node; it also shows what the image folder holds and clears what nothing uses
 - **Duplicate an image** — the card menu adds the same file once more, right after it, croppable and rotatable on its own
+- **Pixel size on every card** — and what a crop leaves of it, counted live in the editor while you drag
 - **Reference-image size outputs** — `width`/`height` outputs and a size panel: the reference image's size rescaled to a megapixel target and snapped to a multiple (32 by default)
 - One toolbar row `+ Add · Clear · ⧉ Copy · ↶ ↷ · Preview · Options` — advanced options stay **folded**, only non-default ones show
 - Per-image **Crop / 90° Rotate / Flip H / Flip V**
@@ -431,6 +441,12 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 - **Output Size Safety Guard** before giant tensors are allocated
 - Standard `IMAGE` output → `Preview Image`, `Save Image`, `VAE Encode`, etc.
 - No extra Python packages required — only server-side video decoding uses PyAV, which current ComfyUI already installs (and `requirements.txt` lists it for ComfyUI-Manager)
+
+### What changed in 1.7
+
+- **Every image says what it measures.** A card carries its pixel size along the bottom, and a cropped one carries the size the crop leaves, in the amber its ✂ badge already uses. Hover a card and the status line shows both — `3000 × 2000 → 1400 × 2000`.
+- **The editor counts the crop while you drag it.** Its header showed the source size and nothing else, so the size a crop produced could only be found out after applying it; it now reads `1080 × 1920 → 792 × 1411` and follows the rectangle, which is what lets you crop *to* a size instead of towards one.
+- Both numbers come from the function the server crops with, rounding included, so the UI cannot report a resolution the run would not produce.
 
 ### What changed in 1.6
 
@@ -575,6 +591,7 @@ Single-click the thumbnail image area to open the editor.
 - `Flip H / Flip V`
 - `Reset crop`
 - `Reset all`
+- **The size, live**: the header shows the image's size and what the crop leaves of it — `1080 × 1920 → 792 × 1411` — updated while the crop is dragged
 - **Zoom and pan**: the wheel zooms around the pointer, `+ / − / Fit` and the keys `+ / - / 0` do the same from the keyboard. Pan with a **middle-button drag** or **space held with the left button**. Up to 16×, and zooming in shrinks the grab areas and the minimum crop with it, so a crop can be trimmed to the pixel.
 
 Rotating or flipping **keeps the crop you drew**. The crop travels with the image content, so the same region stays selected no matter what order you edit in. Use `Reset crop` to go back to the full frame.
@@ -588,6 +605,7 @@ A card carries no buttons: the whole picture is the target, and everything else 
 - **Click a card** (press and release without moving) → open the editor immediately
 - **Drag a card** → reorder. A **blue bar** between the cards marks the slot it would drop into, and the card in hand goes translucent.
 - **Right-click a card** → `Edit · Duplicate · Copy to clipboard · Replace · Remove`
+- Each card shows **its pixel size** along the bottom; a cropped card shows what the crop leaves, in amber. Hover it and the status line adds the size before the crop.
 - **`⧉ Copy`** in the toolbar → copies the stitched result
 - Drag threshold is measured in **real browser pixels**, not ComfyUI graph coordinates, so canvas zoom does not make normal clicks behave like drags. Release inside that threshold and it counts as a click, opening the editor.
 

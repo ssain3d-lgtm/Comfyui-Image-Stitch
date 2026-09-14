@@ -6,7 +6,7 @@
 // state through a DOM widget and routes every button to the same functions
 // the canvas UI calls; it is installed only while that mode is on, so the
 // classic canvas keeps its own drawing.
-import { columnsForWidth, isCropped, isTransformed, normalizeTransform, THUMB_GAP } from "./shared.js";
+import { columnsForWidth, cropPixelBox, isCropped, isTransformed, normalizeTransform, sizeText, THUMB_GAP } from "./shared.js";
 import { formatTime } from "./frame_picker.js";
 
 // The "$$" prefix marks a widget the frontend must treat as a pseudo widget:
@@ -62,6 +62,8 @@ function installStyles() {
 .ms-card-menu{position:fixed;z-index:10000;background:#2b2b2b;border:1px solid #4a4a4a;border-radius:4px;padding:3px;display:flex;flex-direction:column;min-width:150px;box-shadow:0 4px 14px rgba(0,0,0,.5);font:12px sans-serif}
 .ms-card-menu button{background:transparent;border:0;color:#e6e6e6;text-align:left;padding:5px 9px;border-radius:3px;cursor:pointer;font:inherit}
 .ms-card-menu button:hover{background:#3d5a80}
+.ms-dom-view .card .size{position:absolute;left:50%;transform:translateX(-50%);bottom:3px;background:rgba(0,0,0,.72);color:#e8e8e8;font-size:11px;padding:1px 5px;border-radius:2px;white-space:nowrap;pointer-events:none}
+.ms-dom-view .card .size.edited{color:#f6b73c}
 .ms-dom-view .card .label{position:absolute;left:24px;right:24px;bottom:3px;background:rgba(0,0,0,.6);color:#9ad0ff;font-size:11px;padding:2px 4px;border-radius:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;pointer-events:none}
 .ms-dom-view .empty{border:1px dashed #666;border-radius:3px;height:${CARD_H}px;display:flex;align-items:center;justify-content:center;text-align:center;color:#8f8f8f;cursor:pointer;padding:0 12px}
 .ms-dom-view .empty.over{border-color:#8ab4f8;color:#c8d8ff}
@@ -279,13 +281,24 @@ export function installDomView(node, actions) {
             badge(`${t.rotation}°${t.flip_h ? "H" : ""}${t.flip_v ? "V" : ""}`, "edit");
         }
         el.appendChild(badges);
+        // What the image measures, on the card itself — after a crop, what the
+        // crop leaves. The title carries both numbers, which do not fit here.
+        let sizeLine = "";
+        if (state.ready && !state.failed && state.width > 0 && state.height > 0) {
+            sizeLine = sizeText(state.width, state.height, item.crop);
+            const box = cropPixelBox(state.width, state.height, item.crop);
+            const size = document.createElement("div");
+            size.className = `size${isCropped(item.crop) ? " edited" : ""}`;
+            size.textContent = `${box.w}×${box.h}`;
+            el.appendChild(size);
+        }
         // The one button an image card keeps, in the same corner as the video
         // card's. It must not become a drag, so it never starts one.
         const remove = button("×", "Remove this image", () => actions.remove(node, index));
         remove.className = "btn remove";
         remove.draggable = false;
         el.appendChild(remove);
-        el.title = "Click to edit · drag to reorder · right-click for more";
+        el.title = `${sizeLine ? `${sizeLine}\n` : ""}Click to edit · drag to reorder · right-click for more`;
         // Reordering is the card itself, so no handle covers the picture. The
         // card the pointer is over shows on which side the held one would land.
         el.draggable = true;

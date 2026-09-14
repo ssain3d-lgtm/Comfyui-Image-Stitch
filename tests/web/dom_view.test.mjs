@@ -56,7 +56,10 @@ function actionSpy(overrides = {}) {
             optionsOn: () => state.options,
             optionsCount: () => 2,
             sizePanelOn: () => state.panel,
-            thumb: (node, entry) => ({ ready: !entry.pending && !entry.failed, failed: !!entry.failed, message: entry.message, image: { width: 4, height: 4 } }),
+            thumb: (node, entry) => ({
+                ready: !entry.pending && !entry.failed, failed: !!entry.failed, message: entry.message,
+                image: { width: 4, height: 4 }, width: 800, height: 600,
+            }),
             drawThumb: () => calls.push(["drawThumb"]),
             drawPreview: () => calls.push(["drawPreview"]),
             drawSizePanel: () => calls.push(["drawSizePanel"]),
@@ -117,6 +120,27 @@ describe("dom view", () => {
         assert.equal(part(handle.root, "empty").hidden, true, "no dashed box while there are images");
         assert.equal(part(handle.root, "preview").hidden, false);
         assert.equal(part(handle.root, "panel").hidden, true);
+        handle.destroy();
+    });
+
+    it("puts the pixel size on every card, and both numbers in its title", () => {
+        const node = fakeNode([item("a.png"), item("b.png", { crop: { x: 0.1, y: 0, w: 0.8, h: 1 } })]);
+        const handle = view.installDomView(node, actionSpy().actions);
+        const chip = (card) => card.children.find((child) => String(child.className).startsWith("size"));
+        assert.equal(chip(cards(handle.root)[0]).textContent, "800×600");
+        assert.equal(chip(cards(handle.root)[0]).className, "size");
+        // 0.8 of 800 is 640; the height is untouched.
+        assert.equal(chip(cards(handle.root)[1]).textContent, "640×600");
+        assert.equal(chip(cards(handle.root)[1]).className, "size edited", "a crop changed it");
+        assert.match(cards(handle.root)[1].title, /^800 × 600 → 640 × 600\n/);
+        assert.match(cards(handle.root)[0].title, /^800 × 600\nClick to edit/);
+        handle.destroy();
+    });
+
+    it("leaves the size off a card whose image has not loaded", () => {
+        const node = fakeNode([item("a.png", { pending: true })]);
+        const handle = view.installDomView(node, actionSpy().actions);
+        assert.equal(cards(handle.root)[0].children.find((child) => String(child.className).startsWith("size")), undefined);
         handle.destroy();
     });
 

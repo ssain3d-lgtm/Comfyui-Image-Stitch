@@ -2,6 +2,13 @@
 
 All notable changes to **Multi Stitch Images**. The version is the one in `pyproject.toml`; each release is tagged `v<version>` on `main`.
 
+## 1.7.0 — 2026-09-14
+
+### Added
+- **Every image says what it measures.** A card carries its pixel size along the bottom, and a cropped one carries the size the crop leaves — in the amber its ✂ badge already uses, so a number that is no longer the file's own size looks like it. Hovering a card puts both on the status line (`3000 × 2000 → 1400 × 2000`), and the Vue view carries the same pair in the card's tooltip.
+- **The editor counts the crop while it is dragged.** Its header was showing the source size and nothing else, so the size a crop produced could only be found out after applying it. It now reads `1080 × 1920 → 792 × 1411` and updates on every move of the rectangle, which is what makes cropping *to* a size possible instead of towards one.
+- Both numbers come out of `cropPixelBox`, the function the server crops with (`_crop_box`, rounding included), so the UI cannot report a resolution the run would not produce.
+
 ## 1.6.0 — 2026-09-14
 
 ### Added

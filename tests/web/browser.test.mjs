@@ -138,6 +138,39 @@ describe("crop editor", () => {
         await page.close();
     });
 
+    it("counts the crop in pixels while it is dragged, and agrees with what is applied", async () => {
+        const { page, errors } = await openPage();
+        await page.evaluate(() => {
+            window.__node = window.__makeNode("editor.png");
+            window.__openCropEditor(window.__node, 0);
+        });
+        const canvas = page.locator(".ms-crop-canvas");
+        await canvas.waitFor();
+        const box = await canvas.boundingBox();
+        const header = () => page.locator(".dimensions").textContent();
+        assert.equal(await header(), "300 × 200", "an uncropped image is one size, not two");
+
+        // The right edge bar, pulled in to 60% of the width.
+        await page.mouse.move(box.x + box.width - 3, box.y + box.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(box.x + box.width * 0.6, box.y + box.height / 2, { steps: 4 });
+        const during = await header();
+        assert.match(during, /^300 × 200 → \d+ × 200$/, `live while the edge is held: ${during}`);
+        await page.mouse.up();
+
+        const shown = await header();
+        const [, width, height] = shown.match(/→ (\d+) × (\d+)/);
+        assert.ok(Math.abs(Number(width) - 180) <= 6, `60% of 300 is about 180, not ${width}`);
+        await page.click(".apply");
+
+        // The number the header showed is the number the crop actually is.
+        const crop = await page.evaluate(() => window.__node._msImages[0].crop);
+        assert.equal(Number(width), Math.round(crop.w * 300));
+        assert.equal(Number(height), Math.round(crop.h * 200));
+        assert.deepEqual(errors, []);
+        await page.close();
+    });
+
     it("zooms around the pointer, and crops in the pixels the zoom shows", async () => {
         const { page, errors } = await openPage();
         await page.evaluate(() => {
