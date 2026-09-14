@@ -256,6 +256,34 @@ export function layoutPlacements(dimensions, layoutMode, direction, matchImageSi
     return { width, height, placements };
 }
 
+// Grid column counts worth trying: every one that changes the shape. Beyond
+// the image count the rows stop changing, so the search is bounded by it and
+// by what the widget allows.
+export const GRID_TARGET_ASPECTS = ["off", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"];
+export const MAX_GRID_COLUMNS = 16;
+
+// Mirrors _choose_grid_columns: the column count whose finished canvas comes
+// closest to `target`, measured on a log scale so 2x too wide and 2x too tall
+// count the same. A tie keeps the fewer columns, which is the first tried.
+export function chooseGridColumns(dimensions, target, direction, matchImageSize, spacingWidth, cellWidth = 0, cellHeight = 0, matchReference = "first") {
+    const ratio = aspectRatio(target);
+    const count = dimensions.length;
+    if (!(ratio > 0) || !count) return null;
+    let best = null;
+    let bestCost = Infinity;
+    for (let cols = 1; cols <= Math.min(count, MAX_GRID_COLUMNS); cols++) {
+        const { width, height } = layoutPlacements(dimensions, "grid", direction, matchImageSize, cols,
+            spacingWidth, cellWidth, cellHeight, matchReference);
+        if (!(width > 0) || !(height > 0)) continue;
+        const cost = Math.abs(Math.log((width / height) / ratio));
+        if (cost < bestCost - 1e-12) {
+            bestCost = cost;
+            best = cols;
+        }
+    }
+    return best;
+}
+
 // Mirrors _limited_size: the final size after the output cap, never larger.
 export function limitedSize(width, height, outputLimit, outputLimitPx) {
     requireChoice("output_limit", outputLimit, OUTPUT_LIMITS);

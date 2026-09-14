@@ -40,6 +40,11 @@
 - 일반 `IMAGE` 출력 → `Preview Image`, `Save Image`, `VAE Encode` 등에 바로 연결
 - 추가 Python 패키지 불필요 — 동영상 서버 디코딩에만 PyAV가 쓰이고 최신 ComfyUI에는 이미 포함되어 있습니다(ComfyUI-Manager용 `requirements.txt`에도 적어 두었습니다)
 
+### 1.5에서 달라진 점
+
+- **`grid_target_aspect`** — Grid 모드에서 열 수를 직접 정하는 대신 **완성될 캔버스의 비율**을 지정하면, 가능한 모든 열 수를 실제로 배치해 보고 그 비율에 가장 가까운 것을 고릅니다. 정사각 8장 기준 `16:9` → 4×2, `1:1` → 3×3, `9:16` → 2×4. 기본값 `off`는 지금까지처럼 `grid_columns`를 그대로 씁니다.
+- 열 수는 실행당 한 번 정해져서 **예상 크기·실제 합성·`cells` 출력이 모두 같은 그리드**를 씁니다. 노드 안 미리보기도 같은 계산을 mirror하므로 Queue 전에 결과 배치를 그대로 볼 수 있습니다.
+
 ### 1.4에서 달라진 점
 
 - **여러 장 한 번에 편집** — 카드의 **번호를 클릭하면 선택**됩니다(다시 누르면 해제). 선택된 카드는 테두리로 표시되고 상태 줄이 개수를 알려 줍니다. 선택된 카드를 우클릭하면 **그룹 전용 메뉴**가 열려 `Crop … to`(비율 일괄 적용)·회전·반전·Crop 초기화·복제·맨 앞/뒤로 이동·삭제를 **한 번의 실행 취소 단위로** 처리합니다. 선택된 카드 하나를 끌면 **그룹 전체가 함께 이동**합니다.
@@ -305,6 +310,8 @@ grid_columns = 3
 | `size_megapixels` | `0` = 기준 이미지 크기 그대로 / 최대 64 MP | `0` |
 | `size_divisible_by` | `1` – `512`, 각 변을 이 배수로 반올림 | `32` |
 | `size_aspect` | `reference` / `1:1` / `16:9` / `9:16` / `4:3` / `3:4` / `3:2` / `2:3` | `reference` |
+| `grid_target_aspect` | `off` / `1:1` / `16:9` / `9:16` / `4:3` / `3:4` / `3:2` / `2:3` — picks the grid's columns | `off` |
+| `grid_target_aspect` | `off` / `1:1` / `16:9` / `9:16` / `4:3` / `3:4` / `3:2` / `2:3` — Grid 열 수 자동 선택 | `off` |
 | `images` (입력) | 선택 IMAGE 배치 — 붙여넣은 이미지 뒤에 추가 | — |
 | `width` / `height` (출력) | 기준 이미지 크기 → `size_megapixels` → `size_divisible_by` 배수 | — |
 
@@ -418,6 +425,11 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 - **Output Size Safety Guard** before giant tensors are allocated
 - Standard `IMAGE` output → `Preview Image`, `Save Image`, `VAE Encode`, etc.
 - No extra Python packages required — only server-side video decoding uses PyAV, which current ComfyUI already installs (and `requirements.txt` lists it for ComfyUI-Manager)
+
+### What changed in 1.5
+
+- **`grid_target_aspect`** — in grid mode, name the shape the finished canvas should have instead of fixing the column count. Every count is laid out and the one landing closest wins: eight squares become 4x2 at `16:9`, 3x3 at `1:1`, 2x4 at `9:16`. `off` keeps `grid_columns`, as before.
+- The choice is made once per run, so the estimate, the composition and the `cells` output describe the same grid — and the in-node preview mirrors it, checked against the backend by the parity test.
 
 ### What changed in 1.4
 

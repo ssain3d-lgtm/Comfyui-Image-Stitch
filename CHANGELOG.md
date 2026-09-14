@@ -2,6 +2,12 @@
 
 All notable changes to **Multi Stitch Images**. The version is the one in `pyproject.toml`; each release is tagged `v<version>` on `main`.
 
+## 1.5.0 — 2026-09-14
+
+### Added
+- **`grid_target_aspect`: let the grid choose its own columns.** In grid mode, instead of fixing `grid_columns` by hand, name the shape the finished canvas should have — `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `3:2`, `2:3` — and every column count from one to the image count is laid out with the same function the run uses, with the one landing closest to that ratio winning. Eight squares become 4x2 at `16:9`, 3x3 at `1:1` and 2x4 at `9:16`. Closeness is measured on a log scale, so twice too wide and twice too tall cost the same, and a tie keeps the fewer columns. The default `off` keeps `grid_columns` exactly as before, the widget is last in the definition so no saved workflow shifts a slot, and a workflow carrying no value reads as `off`.
+- The choice is made once per run, before the estimate, the composition and the `cells` output read it, so all three describe the same grid. The frontend mirrors it (`chooseGridColumns` in `shared.js`) so the in-node preview shows the grid that will be produced, and the parity test compares the two over 250 random cases plus the worked examples.
+
 ## 1.4.0 — 2026-09-14
 
 ### Added

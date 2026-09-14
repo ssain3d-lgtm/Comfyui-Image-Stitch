@@ -32,6 +32,7 @@ NODE = shutil.which("node")
 RUNNER = """
 import {
     normalizeCrop, gridShape, cropSourceToView, cropViewToSource, layoutPlacements, limitedSize, cropPixelBox,
+    chooseGridColumns,
     referenceSize,
 } from "./pkg/web/shared.js";
 import { readFileSync } from "node:fs";
@@ -45,6 +46,8 @@ const out = {
         layoutPlacements(dims.map(([w, h]) => ({ w, h })), layout, direction, match, gc, sw, cw, ch, ref)),
     limit: (cases.limit || []).map(([w, h, mode, px]) => limitedSize(w, h, mode, px)),
     box: (cases.box || []).map(([w, h, c]) => cropPixelBox(w, h, c)),
+    autoGrid: (cases.autoGrid || []).map(([dims, target, dir, match, spacing, cw, ch, ref]) =>
+        chooseGridColumns(dims.map(([w, h]) => ({ w, h })), target, dir, match, spacing, cw, ch, ref)),
     size: (cases.size || []).map(([dims, ref, mp, d, aspect]) => referenceSize(dims.map(([w, h]) => ({ w, h })), ref, mp, d, aspect)),
 };
 process.stdout.write(JSON.stringify(out));
@@ -188,6 +191,28 @@ class FrontendParityTests(unittest.TestCase):
         for (w, h, mode, px), js in zip(limit_cases, got["limit"], strict=True):
             with self.subTest(limit=(w, h, mode, px)):
                 self.assertEqual((js["w"], js["h"]), ms._limited_size(w, h, mode, px))
+
+    def test_auto_grid_columns_match_python(self):
+        """The column count a target aspect picks, over the same layouts."""
+        rng = random.Random(4242)
+        cases = []
+        for _ in range(250):
+            dims = [(rng.randint(1, 3000), rng.randint(1, 3000)) for _ in range(rng.randint(1, 12))]
+            cases.append([dims, rng.choice(ms._GRID_TARGET_ASPECTS), rng.choice(list(ms._DIRECTIONS)),
+                          rng.choice([True, False]), rng.choice([0, 4, 37]),
+                          rng.choice([0, 256]), rng.choice([0, 256]), rng.choice(list(ms._MATCH_REFERENCES))])
+        # Eight squares: the shape each target should settle on.
+        squares = [(1000, 1000)] * 8
+        cases += [[squares, "1:1", "right", True, 0, 0, 0, "first"],
+                  [squares, "16:9", "right", True, 0, 0, 0, "first"],
+                  [squares, "9:16", "right", True, 0, 0, 0, "first"],
+                  [squares, "off", "right", True, 0, 0, 0, "first"],
+                  [[(1000, 1000)], "16:9", "down", True, 0, 0, 0, "first"]]
+        got = self.run_js({"autoGrid": cases})
+        for (dims, target, direction, match, spacing, cw, ch, ref), js in zip(cases, got["autoGrid"], strict=True):
+            with self.subTest(grid=(target, direction, match, spacing, cw, ch, ref, len(dims))):
+                expected = ms._choose_grid_columns(dims, target, direction, match, spacing, cw, ch, ref)
+                self.assertEqual(js if js is not None else None, expected)
 
     def test_reference_size_matches_python(self):
         """The width/height outputs: reference choice, megapixel rescale, half-even snapping."""

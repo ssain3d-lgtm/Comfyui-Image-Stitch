@@ -45,6 +45,7 @@ import {
     redoImages,
     referenceSize,
     aspectRatio,
+    chooseGridColumns,
     SIZE_ASPECTS,
     THUMB_GAP as SHARED_THUMB_GAP,
     renderTransformedImage,
@@ -645,6 +646,7 @@ function readSettings(node) {
         spacing: Math.max(0, Number(value("spacing_width", 0)) || 0),
         layout: value("layout_mode", "strip"),
         gridColumns: Math.max(1, Math.min(16, Number(value("grid_columns", 3)) || 3)),
+        gridTargetAspect: value("grid_target_aspect", "off"),
         cellWidth: Math.max(0, Number(value("grid_cell_width", 0)) || 0),
         cellHeight: Math.max(0, Number(value("grid_cell_height", 0)) || 0),
         outputLimit: value("output_limit", "none"),
@@ -680,9 +682,15 @@ function plannedLayout(node) {
     resolvePendingSizeReference(node, dims);
     let layout;
     try {
+        // A target shape decides the columns, exactly as the run does, so the
+        // preview and the estimate describe the grid that will be produced.
+        const columns = (settings.layout === "grid" && chooseGridColumns(
+            dims, settings.gridTargetAspect, settings.direction, settings.match, settings.spacing,
+            settings.cellWidth, settings.cellHeight, settings.matchReference,
+        )) || settings.gridColumns;
         layout = layoutPlacements(
             dims, settings.layout, settings.direction, settings.match,
-            settings.gridColumns, settings.spacing, settings.cellWidth, settings.cellHeight,
+            columns, settings.spacing, settings.cellWidth, settings.cellHeight,
             settings.matchReference,
         );
     } catch (_) {
@@ -2457,6 +2465,7 @@ function syncConditionalWidgets(node) {
     const layout = getWidget(node, "layout_mode")?.value || "strip";
     const spacingColor = getWidget(node, "spacing_color")?.value || "white";
     setWidgetVisible(getWidget(node, "grid_columns"), layout === "grid");
+    setWidgetVisible(getWidget(node, "grid_target_aspect"), layout === "grid");
     setWidgetVisible(getWidget(node, "custom_color_picker"), spacingColor === "custom");
 
     const { open, relevant, active } = advancedState(node);

@@ -106,6 +106,10 @@ _LAYOUT_MODES = ("strip", "grid")
 # image's own shape, which is what the outputs did before this existed, so a
 # saved workflow that has no value for it behaves exactly as it did.
 _SIZE_ASPECTS = ("reference", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3")
+# The same ratios for choosing a grid's columns, with "off" for "use the number
+# the widget says" — which is what every workflow saved before this did.
+_GRID_TARGET_ASPECTS = ("off", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3")
+_MAX_GRID_COLUMNS = 16
 _MATCH_REFERENCES = ("first", "largest", "smallest")
 # New nodes match to the smallest image, so nothing is ever upscaled. A prompt
 # that omits the value — one written before the option existed — keeps "first",
@@ -574,6 +578,46 @@ def _aspect_ratio(size_aspect: object) -> float:
         return 0.0
     w, h = name.split(":")
     return float(w) / float(h)
+
+
+def _choose_grid_columns(
+    dimensions: list[tuple[int, int]],
+    target: object,
+    direction: str,
+    match_image_size: bool,
+    spacing_width: int,
+    grid_cell_width: int = 0,
+    grid_cell_height: int = 0,
+    match_reference: str = "first",
+) -> int | None:
+    """The column count whose finished grid comes closest to `target`.
+
+    Every count from one to the image count is laid out with the same _layout
+    the run uses, and the canvas it produces is compared with the target on a
+    log scale, so twice too wide and twice too tall cost the same. A tie keeps
+    the fewer columns. None means "no target": the widget's own number stands.
+    """
+    if target is None:
+        return None
+    name = _require_choice("grid_target_aspect", target, _GRID_TARGET_ASPECTS)
+    if name == "off" or not dimensions:
+        return None
+    w, h = name.split(":")
+    ratio = float(w) / float(h)
+    best = None
+    best_cost = float("inf")
+    for cols in range(1, min(len(dimensions), _MAX_GRID_COLUMNS) + 1):
+        width, height, _ = _layout(
+            dimensions, "grid", direction, match_image_size, cols, spacing_width,
+            grid_cell_width, grid_cell_height, match_reference,
+        )
+        if width <= 0 or height <= 0:
+            continue
+        cost = abs(math.log((width / height) / ratio))
+        if cost < best_cost - 1e-12:
+            best_cost = cost
+            best = cols
+    return best
 
 
 def _reference_size(
@@ -1167,7 +1211,8 @@ class MultiStitchImages:
                                "pixels, never below one multiple. Latents need a multiple of 8; 32 or 64 "
                                "suits most models.",
                 }),
-                # Last again, for the same reason as size_reference above.
+                # Last again, for the same reason as size_reference above; each
+                # new one goes after the last, so no saved workflow shifts.
                 "size_aspect": (list(_SIZE_ASPECTS), {
                     "default": "reference",
                     "tooltip": "Shape of the width and height outputs. 'reference' keeps the reference "
@@ -1175,6 +1220,13 @@ class MultiStitchImages:
                                "size_megapixels (or the reference image's pixel count when that is 0), "
                                "still snapped to size_divisible_by. Useful when the source is 3:4 but the "
                                "model should be fed 9:16.",
+                }),
+                "grid_target_aspect": (list(_GRID_TARGET_ASPECTS), {
+                    "default": "off",
+                    "tooltip": "In grid mode, shape the finished canvas instead of fixing the column "
+                               "count: every column count is laid out and the one that lands closest to "
+                               "this ratio wins, so eight images at 16:9 become 4x2 by themselves. 'off' "
+                               "keeps grid_columns, which is what it has always done.",
                 }),
             },
         }
@@ -1220,6 +1272,7 @@ class MultiStitchImages:
         size_megapixels=0.0,
         size_divisible_by=32,
         size_aspect="reference",
+        grid_target_aspect="off",
     ):
         try:
             items = json.loads(images_json or "[]")
@@ -1252,6 +1305,16 @@ class MultiStitchImages:
             loader, size = _frame_loader(frame, background)
             loaders.append(loader)
             dimensions.append(size)
+
+        # A target shape decides the columns before anything else reads them,
+        # so the estimate, the composition and the cells all agree on one grid.
+        if layout_mode == "grid":
+            chosen = _choose_grid_columns(
+                dimensions, grid_target_aspect, direction, match_image_size, spacing_width,
+                grid_cell_width, grid_cell_height, match_reference,
+            )
+            if chosen:
+                grid_columns = chosen
 
         # The size outputs come from the same measurements the canvas is laid
         # out from, so they describe an image as it lands there. They cost
@@ -1295,7 +1358,7 @@ class MultiStitchImages:
                 "cells_resolution": cells_resolution, "minimum_image_side": minimum_image_side,
                 "match_reference": match_reference, "size_reference": size_reference,
                 "size_megapixels": size_megapixels, "size_divisible_by": size_divisible_by,
-                "size_aspect": size_aspect,
+                "size_aspect": size_aspect, "grid_target_aspect": grid_target_aspect,
             },
             image,
             input_frames=len(frames),

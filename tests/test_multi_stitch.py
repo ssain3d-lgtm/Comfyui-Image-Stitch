@@ -458,7 +458,7 @@ class MultiStitchTests(unittest.TestCase):
         self.assertEqual(
             list(optional),
             ["images", "cells_resolution", "minimum_image_side", "match_reference",
-             "size_reference", "size_megapixels", "size_divisible_by", "size_aspect"],
+             "size_reference", "size_megapixels", "size_divisible_by", "size_aspect", "grid_target_aspect"],
         )
         self.assertEqual(optional["images"][0], "IMAGE")
         self.assertEqual(optional["match_reference"][0], list(ms._MATCH_REFERENCES))
@@ -855,6 +855,36 @@ class MultiStitchTests(unittest.TestCase):
             ms._reference_size(dims, "biggest", 0, 1)
         with self.assertRaisesRegex(ValueError, "at least one image"):
             ms._reference_size([], 1, 0, 1)
+
+    def test_grid_target_aspect_picks_the_columns_that_land_closest(self):
+        """Every column count is laid out; the one nearest the target wins."""
+        squares = [(1000, 1000)] * 8
+        self.assertEqual(ms._choose_grid_columns(squares, "1:1", "right", True, 0), 3, "3x3 is square")
+        self.assertEqual(ms._choose_grid_columns(squares, "16:9", "right", True, 0), 4, "4x2 is 2:1")
+        self.assertEqual(ms._choose_grid_columns(squares, "9:16", "right", True, 0), 2, "2x4 is 1:2")
+        self.assertIsNone(ms._choose_grid_columns(squares, "off", "right", True, 0), "off leaves grid_columns alone")
+        self.assertIsNone(ms._choose_grid_columns(squares, None, "right", True, 0),
+                          "a workflow saved before this existed carries no value")
+        self.assertIsNone(ms._choose_grid_columns([], "1:1", "right", True, 0))
+        self.assertEqual(ms._choose_grid_columns([(1000, 1000)], "16:9", "right", True, 0), 1,
+                         "one image has only one grid")
+        with self.assertRaisesRegex(ValueError, "grid_target_aspect"):
+            ms._choose_grid_columns(squares, "21:9", "right", True, 0)
+
+    def test_grid_target_aspect_decides_the_run_and_the_outputs_agree(self):
+        """The chosen columns reach the composition, not just the estimate."""
+        node = ms.MultiStitchImages()
+        images = [self.write_png(f"g{i}.png", (255, 0, 0), (100, 100)) for i in range(8)]
+        run = lambda columns, target: node.stitch(
+            images_json=json.dumps(images), direction="right", match_image_size=True,
+            spacing_width=0, spacing_color="white", custom_spacing_color="#000000",
+            layout_mode="grid", grid_columns=columns, grid_target_aspect=target,
+        )[0].shape
+
+        self.assertEqual(run(3, "16:9"), run(4, "off"), "16:9 settled on the four columns asked for by hand")
+        self.assertNotEqual(run(3, "16:9"), run(3, "off"), "and it did not simply keep grid_columns")
+        self.assertEqual(run(4, "9:16"), run(2, "off"), "9:16 goes the other way")
+        self.assertEqual(run(5, "off"), run(5, "off"), "with no target the widget still decides")
 
     def test_size_aspect_reshapes_the_outputs_without_changing_their_area(self):
         """A preset replaces the shape; the pixel count stays the reference image's."""
