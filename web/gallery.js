@@ -12,6 +12,7 @@ export const GALLERY_ROUTES = {
     cleanup: "/multi_stitch/gallery/cleanup",
     settings: "/multi_stitch/gallery/settings",
     touch: "/multi_stitch/gallery/touch",
+    pin: "/multi_stitch/gallery/pin",
 };
 const PREVIEW_SUBFOLDER = "multi_stitch/gallery";
 
@@ -42,6 +43,10 @@ function installStyles() {
 .ms-gallery-card{background:#181818;border:1px solid #333;border-radius:6px;display:flex;flex-direction:column;overflow:hidden}
 .ms-gallery-card .thumb{height:132px;background:#0e0e0e;display:flex;align-items:center;justify-content:center;color:#666;font-size:12px;overflow:hidden}
 .ms-gallery-card .thumb img{max-width:100%;max-height:100%;object-fit:contain;display:block}
+.ms-gallery-card.pinned{border-color:#f6b73c}
+.ms-gallery-card .pin{position:absolute;right:6px;top:6px;background:rgba(0,0,0,.65);border:0;color:#8a8a8a;border-radius:4px;padding:2px 6px;font-size:13px;line-height:1;cursor:pointer}
+.ms-gallery-card .pin.on{color:#f6b73c}
+.ms-gallery-card .thumb{position:relative}
 .ms-gallery-card .name{padding:6px 8px 0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:text}
 .ms-gallery-card .name:hover{color:#fff;text-decoration:underline dotted}
 .ms-gallery-card .meta{padding:2px 8px 6px;color:#9a9a9a;font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -204,11 +209,11 @@ export function openGallery(node, hooks = {}) {
 
     const card = (entry) => {
         const el = document.createElement("div");
-        el.className = "ms-gallery-card";
+        el.className = `ms-gallery-card${entry.pinned ? " pinned" : ""}`;
         el.setAttribute("data-id", entry.id);
         const url = previewUrl(entry);
         el.innerHTML = `
-          <div class="thumb">${url ? `<img alt="" loading="lazy" src="${escapeHtml(url)}">` : "no preview"}</div>
+          <div class="thumb">${url ? `<img alt="" loading="lazy" src="${escapeHtml(url)}">` : "no preview"}<button class="pin${entry.pinned ? " on" : ""}" title="${entry.pinned ? "Kept: the 200-entry cap never drops this one" : "Keep this one: the 200-entry cap will never drop it"}">${entry.pinned ? "★" : "☆"}</button></div>
           <div class="name" title="Click to rename">${escapeHtml(entry.name || entry.id)}</div>
           <div class="meta">${escapeHtml(entryMeta(entry))}</div>
           <div class="actions">
@@ -217,6 +222,11 @@ export function openGallery(node, hooks = {}) {
             <button class="danger delete" title="Remove the entry (its image files stay)">Delete</button>
             <button class="danger delete-files" title="Remove the entry and delete its image files that no other entry or open node uses">Delete + files</button>
           </div>`;
+        el.querySelector(".pin")?.addEventListener("click", () => run(async () => {
+            const result = await postJson(GALLERY_ROUTES.pin, { id: entry.id, pinned: !entry.pinned });
+            say(result.entry?.pinned ? `"${entry.name || entry.id}" is kept.` : `"${entry.name || entry.id}" can age out again.`);
+            await refresh();
+        }));
         el.querySelector(".load")?.addEventListener("click", () => run(async () => {
             await hooks.load?.(entry);
             await markUsed(entry);

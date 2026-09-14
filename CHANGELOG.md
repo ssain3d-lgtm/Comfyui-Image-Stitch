@@ -2,6 +2,12 @@
 
 All notable changes to **Multi Stitch Images**. The version is the one in `pyproject.toml`; each release is tagged `v<version>` on `main`.
 
+## 1.5.1 — 2026-09-14
+
+### Added
+- **Pin a gallery entry (`☆` on its preview).** A pinned entry sorts to the front and the 200-entry cap never drops it, so a composition worth keeping cannot age out behind a hundred experiments. Pinning more than the cap allows lets the gallery grow past it, which is the honest reading of "keep this"; unpinning lets it age normally again.
+- The cap also stopped being able to evict **the entry it was just recording**: with everything else pinned it had nothing else to choose, and threw away the composition that triggered it.
+
 ## 1.5.0 — 2026-09-14
 
 ### Added

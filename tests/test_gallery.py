@@ -111,6 +111,40 @@ class GalleryTests(unittest.TestCase):
         self.assertIn(first, remaining, "the entry that was loaded stayed")
         self.assertNotIn(second, remaining)
 
+    def test_a_pinned_entry_sorts_first_and_the_cap_never_drops_it(self):
+        with patch.object(gallery.time, "time", lambda: 1_700_000_000.0):
+            first = gallery.record([_item("a.png")], {}, None)["id"]
+            gallery.record([_item("b.png")], {}, None)
+            status, body = gallery.pin(first, True)
+            self.assertEqual((status, body["entry"]["pinned"]), (200, True))
+            self.assertEqual([e["id"] for e in gallery.list_entries()][0], first, "a pin comes first")
+
+            # Two more with room for two: the unpinned one goes, the pin stays.
+            with patch.object(gallery, "_MAX_ENTRIES", 2):
+                gallery.record([_item("c.png")], {}, None)
+                gallery.record([_item("d.png")], {}, None)
+            ids = [e["id"] for e in gallery.list_entries()]
+        self.assertIn(first, ids, "the pinned entry survived the cap")
+        self.assertEqual(len(ids), 2)
+
+        status, body = gallery.pin(first, False)
+        self.assertEqual(status, 200)
+        self.assertNotIn("pinned", body["entry"], "unpinning lets it age out again")
+        self.assertEqual(gallery.pin("../etc", True)[0], 400)
+        self.assertEqual(gallery.pin("20990101-000000-abcdef", True)[0], 404)
+
+    def test_pinning_everything_keeps_everything(self):
+        """A pin means "keep this", so pins past the cap grow the gallery."""
+        with patch.object(gallery, "_MAX_ENTRIES", 2):
+            ids = [gallery.record([_item("a.png", rotation=r)], {}, None)["id"] for r in (0, 90)]
+            for entry_id in ids:
+                gallery.pin(entry_id, True)
+            gallery.record([_item("a.png", rotation=180)], {}, None)
+            remaining = [e["id"] for e in gallery.list_entries()]
+        self.assertEqual(len(remaining), 3, "nothing could be evicted, so nothing was")
+        for entry_id in ids:
+            self.assertIn(entry_id, remaining)
+
     def test_touch_rejects_a_bad_id_and_reports_a_missing_one(self):
         self.assertEqual(gallery.touch("../etc")[0], 400)
         self.assertEqual(gallery.touch(None)[0], 400)

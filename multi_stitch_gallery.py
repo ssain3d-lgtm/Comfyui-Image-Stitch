@@ -163,7 +163,9 @@ def list_entries() -> list[dict]:
         entry = _read_entry(path)
         if entry is not None:
             entries.append(entry)
-    entries.sort(key=_recency, reverse=True)
+    # Pinned first, then by how recently each was used: a pin is what someone
+    # keeps coming back to, so it belongs where they will find it.
+    entries.sort(key=lambda entry: (bool(entry.get("pinned")), *_recency(entry)), reverse=True)
     return entries
 
 
@@ -217,12 +219,21 @@ def _new_id() -> str:
     return f"{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(3)}"
 
 
-def _evict_oldest(entries: list[dict]) -> list[str]:
-    """Keeps the gallery at _MAX_ENTRIES by dropping the least recently used."""
+def _evict_oldest(entries: list[dict], keep: str | None = None) -> list[str]:
+    """Keeps the gallery at _MAX_ENTRIES by dropping the least recently used.
+
+    Two entries are never candidates: a pinned one, because the whole point of
+    a pin is that the cap cannot reach it, and `keep` — the entry that was just
+    recorded, since evicting it would undo the record that triggered this.
+    Pinning more than the cap therefore lets the gallery grow past it, which is
+    the honest reading of "keep this".
+    """
     removed = []
     if len(entries) <= _MAX_ENTRIES:
         return removed
-    for entry in sorted(entries, key=_recency)[: len(entries) - _MAX_ENTRIES]:
+    candidates = [entry for entry in entries if not entry.get("pinned") and entry.get("id") != keep]
+    surplus = min(len(entries) - _MAX_ENTRIES, len(candidates))
+    for entry in sorted(candidates, key=_recency)[:surplus]:
         _remove_entry_files(entry["id"])
         removed.append(entry["id"])
     return removed
@@ -266,7 +277,7 @@ def record(images: object, settings: object, preview=None, *, name: str | None =
         entry["width"], entry["height"] = int(size[0]), int(size[1])
     _write_entry(entry)
     _write_preview(entry["id"], preview)
-    _evict_oldest(entries + [entry])
+    _evict_oldest(entries + [entry], keep=entry["id"])
     return _read_entry(_entry_paths(entry["id"])[0]) or entry
 
 
@@ -280,6 +291,24 @@ def rename(entry_id: object, name: object) -> tuple[int, dict]:
     if entry is None:
         return 404, {"error": "gallery entry not found"}
     entry["name"] = clean_name(name, entry.get("name", ""))
+    _write_entry(entry)
+    return 200, {"entry": entry}
+
+
+def pin(entry_id: object, pinned: object) -> tuple[int, dict]:
+    """Marks an entry as kept, or lets it go back to ageing out."""
+    try:
+        entry_id = _valid_id(entry_id)
+    except ValueError as exc:
+        return 400, {"error": str(exc)}
+    json_path, _ = _entry_paths(entry_id)
+    entry = _read_entry(json_path) if json_path.is_file() else None
+    if entry is None:
+        return 404, {"error": "gallery entry not found"}
+    if pinned:
+        entry["pinned"] = True
+    else:
+        entry.pop("pinned", None)
     _write_entry(entry)
     return 200, {"entry": entry}
 

@@ -1822,6 +1822,12 @@ if _web is not None and getattr(_PromptServer, "instance", None) is not None:
         status, body = await _off_loop(gallery.rename, payload.get("id"), payload.get("name"))
         return _web.json_response(body, status=status)
 
+    @_PromptServer.instance.routes.post("/multi_stitch/gallery/pin")
+    async def _gallery_pin_route(request):
+        payload = await _json_body(request) or {}
+        status, body = await _off_loop(gallery.pin, payload.get("id"), bool(payload.get("pinned")))
+        return _web.json_response(body, status=status)
+
     @_PromptServer.instance.routes.post("/multi_stitch/gallery/touch")
     async def _gallery_touch_route(request):
         payload = await _json_body(request) or {}

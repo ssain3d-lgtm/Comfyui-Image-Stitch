@@ -37,6 +37,13 @@ before(async () => {
             server.entries = [saved, ...server.entries];
             return ok({ entry: saved, storage: server.storage });
         }
+        if (path === "/multi_stitch/gallery/pin") {
+            const target = server.entries.find((e) => e.id === body.id);
+            if (!target) return { ok: false, status: 404, json: async () => ({ error: "gallery entry not found" }) };
+            if (body.pinned) target.pinned = true;
+            else delete target.pinned;
+            return ok({ entry: target });
+        }
         if (path === "/multi_stitch/gallery/touch") {
             const target = server.entries.find((e) => e.id === body.id);
             if (!target) return { ok: false, status: 404, json: async () => ({ error: "gallery entry not found" }) };
@@ -69,7 +76,7 @@ beforeEach(() => {
 const settle = () => new Promise((resolve) => setTimeout(resolve, 5));
 const part = (element, selector) => element.parts?.[selector];
 const fire = (element, type) => element?.handlers?.[type]?.[0]?.();
-const cards = (handles) => part(handles.overlay, ".ms-gallery-grid").children.filter((c) => c.className === "ms-gallery-card");
+const cards = (handles) => part(handles.overlay, ".ms-gallery-grid").children.filter((c) => c.className.startsWith("ms-gallery-card"));
 const open = async (hooks = {}) => {
     const handles = gallery.openGallery({ id: 7 }, hooks);
     await settle();
@@ -140,6 +147,25 @@ describe("gallery modal", () => {
         await settle();
         assert.equal(part(handles.overlay, ".ms-gallery-status").textContent, "no such file");
         assert.equal(part(handles.overlay, ".ms-gallery-status").className, "ms-gallery-status error");
+        handles.close();
+    });
+
+    it("keeps an entry with its star, and lets it go again", async () => {
+        const handles = await open({});
+        // The fake DOM does not parse innerHTML, so this checks what the button
+        // does rather than which glyph it wears.
+        fire(part(cards(handles)[0], ".pin"), "click");
+        await settle();
+        assert.deepEqual(server.posts.filter((p) => p.path.endsWith("/pin")).map((p) => p.body), [{ id: "2", pinned: true }]);
+        assert.equal(server.entries.find((e) => e.id === "2").pinned, true);
+        assert.match(part(handles.overlay, ".ms-gallery-status").textContent, /is kept/);
+        assert.ok(cards(handles)[0].className.includes("pinned"), "and the card says so");
+
+        fire(part(cards(handles)[0], ".pin"), "click");
+        await settle();
+        assert.deepEqual(server.posts.filter((p) => p.path.endsWith("/pin")).at(-1).body, { id: "2", pinned: false });
+        assert.equal(server.entries.find((e) => e.id === "2").pinned, undefined);
+        assert.match(part(handles.overlay, ".ms-gallery-status").textContent, /can age out again/);
         handles.close();
     });
 

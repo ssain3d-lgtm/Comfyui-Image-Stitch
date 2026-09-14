@@ -166,6 +166,7 @@ class VideoRouteTests(unittest.IsolatedAsyncioTestCase):
             ("GET", "/multi_stitch/video/info"),
             ("POST", "/multi_stitch/gallery/cleanup"),
             ("POST", "/multi_stitch/gallery/delete"),
+            ("POST", "/multi_stitch/gallery/pin"),
             ("POST", "/multi_stitch/gallery/rename"),
             ("POST", "/multi_stitch/gallery/save"),
             ("POST", "/multi_stitch/gallery/settings"),
