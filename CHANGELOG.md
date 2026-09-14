@@ -10,6 +10,8 @@ All notable changes to **Multi Stitch Images**. The version is the one in `pypro
 - Both numbers come out of `cropPixelBox`, the function the server crops with (`_crop_box`, rounding included), so the UI cannot report a resolution the run would not produce.
 
 ### Changed
+- **The gallery counts images by content, so one picture is one entry.** Every upload is stored under a fresh unique name, so pasting the same photo a second time produced a composition the gallery could not recognise: a second entry beside the first, with the same preview and the same everything. Two files of the same size with the same hash are one image now, and the composition they make is one entry whose use count goes up. The duplicate files stop being referenced by anything, so `Clean up unused files…` can reclaim them — they are never deleted behind your back, and a file an open node uses is still off limits.
+- One picture used **twice in the same composition** is still two images: duplicating an image on purpose survives this. Entries recorded before the change carry a name-based key and are rehashed once each, then written back, rather than once per run; a file whose bytes cannot be read falls back to its name, as that is all that is known about it.
 - **An edited card is outlined like the rest.** A crop or a quarter turn used to turn the whole card border amber, which drew a frame around the picture to say what the ✂ / `90°` badge in its corner — and now the amber size beside it — already say. The border is back to meaning one thing: blue is a card you selected.
 
 ## 1.6.0 — 2026-09-14

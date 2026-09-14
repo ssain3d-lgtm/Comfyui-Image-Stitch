@@ -46,6 +46,15 @@ SETTING_KEYS = (
     "size_divisible_by", "size_aspect", "grid_target_aspect",
 )
 _ITEM_KEYS = ("filename", "subfolder", "type", "crop", "rotation", "flip_h", "flip_v", "source")
+# What makes one image in a composition itself: the picture, and the edits on
+# it. The name is not among them — see composition_key.
+_EDIT_KEYS = ("crop", "rotation", "flip_h", "flip_v")
+_KEY_VERSION = 2
+_HASH_CHUNK = 1 << 20
+_HASH_CACHE_LIMIT = 2048
+# path -> (size, mtime_ns, fingerprint). A stored image is never written twice
+# in practice, so a file is read once however often it is recorded.
+_fingerprints: dict[str, tuple[int, int, str]] = {}
 
 
 def _image_dir() -> Path:
@@ -127,10 +136,71 @@ def normalize_settings(settings: object) -> dict:
     return {key: settings[key] for key in SETTING_KEYS if key in settings}
 
 
+def file_fingerprint(item: object) -> str | None:
+    """What a stored image *is*: the size and content hash of its file.
+
+    None for anything this module cannot read — another subfolder, a file that
+    is gone — leaving the caller with the name, the only thing still known.
+    """
+    if not isinstance(item, dict) or item.get("subfolder", _IMAGE_SUBFOLDER) != _IMAGE_SUBFOLDER:
+        return None
+    path = _image_file(item.get("filename"))
+    if path is None:
+        return None
+    try:
+        stat = path.stat()
+        cached = _fingerprints.get(str(path))
+        if cached is not None and cached[:2] == (stat.st_size, stat.st_mtime_ns):
+            return cached[2]
+        digest = hashlib.sha1()
+        with open(path, "rb") as handle:
+            for block in iter(lambda: handle.read(_HASH_CHUNK), b""):
+                digest.update(block)
+    except OSError:
+        return None
+    fingerprint = f"{stat.st_size}:{digest.hexdigest()}"
+    if len(_fingerprints) >= _HASH_CACHE_LIMIT:
+        _fingerprints.clear()
+    _fingerprints[str(path)] = (stat.st_size, stat.st_mtime_ns, fingerprint)
+    return fingerprint
+
+
+def _image_identity(item: dict) -> dict:
+    """One image of a composition, as the key sees it."""
+    identity = {"image": file_fingerprint(item) or f"name:{item.get('filename')}"}
+    identity.update({key: item[key] for key in _EDIT_KEYS if key in item})
+    return identity
+
+
 def composition_key(images: list[dict], settings: dict) -> str:
-    """Identifies a composition: the same images, edits, order and settings."""
-    payload = json.dumps({"images": images, "settings": settings}, sort_keys=True, separators=(",", ":"))
+    """Identifies a composition: the same pictures, edits, order and settings.
+
+    The pictures count by content, not by file name. Every upload gets a fresh
+    unique name, so the same photo pasted a second time used to make a second
+    entry indistinguishable from the first — same preview, same everything —
+    and a gallery of a hundred could hold four copies of one composition. Two
+    files with the same size and the same hash are one picture here; the
+    duplicates they came from stop being referenced and `Clean up unused
+    files…` can reclaim them.
+    """
+    payload = json.dumps({"images": [_image_identity(item) for item in images], "settings": settings},
+                         sort_keys=True, separators=(",", ":"))
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()
+
+
+def _entry_key(entry: dict) -> str:
+    """A stored entry's composition key.
+
+    Entries written before the key counted images by content carry a key that
+    can never match one; theirs is recomputed from the files they name and
+    written back, so the hashing happens once per entry, not once per run.
+    """
+    if entry.get("key_v") == _KEY_VERSION and isinstance(entry.get("key"), str):
+        return entry["key"]
+    entry["key"] = composition_key(entry.get("images") or [], entry.get("settings") or {})
+    entry["key_v"] = _KEY_VERSION
+    _write_entry(entry)
+    return entry["key"]
 
 
 def _read_entry(path: Path) -> dict | None:
@@ -251,7 +321,7 @@ def record(images: object, settings: object, preview=None, *, name: str | None =
     key = composition_key(images, settings)
     entries = list_entries()
     now = _next_stamp(entries, time.time())
-    existing = next((entry for entry in entries if entry.get("key") == key), None)
+    existing = next((entry for entry in entries if _entry_key(entry) == key), None)
     if existing is not None:
         existing["used"] = now
         existing["uses"] = int(existing.get("uses") or 0) + 1
@@ -269,6 +339,7 @@ def record(images: object, settings: object, preview=None, *, name: str | None =
         "used": now,
         "uses": 1,
         "key": key,
+        "key_v": _KEY_VERSION,
         "images": images,
         "settings": settings,
         "input_frames": int(input_frames or 0),

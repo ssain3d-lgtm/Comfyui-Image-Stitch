@@ -37,8 +37,10 @@ class GalleryTests(unittest.TestCase):
         self.patch.start()
         self.addCleanup(self.patch.stop)
         self.addCleanup(self.temp.cleanup)
+        # Different pictures, same 100 bytes each: the gallery now tells images
+        # apart by content, so fixtures that differ only in name would be one.
         for name in ("a.png", "b.png", "c.png"):
-            (self.root / "multi_stitch" / name).write_bytes(b"x" * 100)
+            (self.root / "multi_stitch" / name).write_bytes(name[0].encode() * 100)
 
     def preview(self):
         from PIL import Image
@@ -69,6 +71,59 @@ class GalleryTests(unittest.TestCase):
         other = gallery.record([_item("a.png", rotation=90)], {"direction": "right"}, None)
         self.assertNotEqual(other["id"], first["id"])
         self.assertEqual(len(gallery.list_entries()), 2)
+
+    def test_the_same_picture_under_a_new_name_is_the_same_composition(self):
+        # Every upload gets a unique name, so pasting one photo a second time
+        # used to leave two entries nothing could tell apart.
+        (self.root / "multi_stitch" / "a_again.png").write_bytes(b"a" * 100)
+        first = gallery.record([_item("a.png")], {"direction": "right"}, self.preview())
+        again = gallery.record([_item("a_again.png")], {"direction": "right"}, None)
+        self.assertEqual(again["id"], first["id"])
+        self.assertEqual(again["uses"], 2)
+        self.assertEqual(len(gallery.list_entries()), 1)
+        # A different picture of the same size is still its own composition.
+        other = gallery.record([_item("b.png")], {"direction": "right"}, None)
+        self.assertNotEqual(other["id"], first["id"])
+        # And one picture used twice is a composition of two images, not one:
+        # duplicating an image on purpose has to survive this.
+        pair = gallery.record([_item("a.png"), _item("a_again.png")], {"direction": "right"}, None)
+        self.assertNotIn(pair["id"], (first["id"], other["id"]))
+        self.assertEqual(len(gallery.list_entries()), 3)
+
+    def test_an_entry_from_before_content_keys_is_matched_and_upgraded_once(self):
+        entry = gallery.record([_item("a.png")], {"direction": "right"}, None)
+        json_path, _ = gallery._entry_paths(entry["id"])
+        stored = json.loads(json_path.read_text(encoding="utf-8"))
+        stored.pop("key_v")
+        stored["key"] = "a key from an older version"
+        json_path.write_text(json.dumps(stored), encoding="utf-8")
+
+        again = gallery.record([_item("a.png")], {"direction": "right"}, None)
+        self.assertEqual(again["id"], entry["id"], "the old entry was recognised, not duplicated")
+        upgraded = json.loads(json_path.read_text(encoding="utf-8"))
+        self.assertEqual(upgraded["key_v"], gallery._KEY_VERSION, "rewritten, so it is hashed once and not per run")
+        self.assertNotEqual(upgraded["key"], "a key from an older version")
+
+    def test_an_image_that_cannot_be_read_falls_back_to_its_name(self):
+        gone = gallery.record([_item("gone.png")], {}, None)
+        other = gallery.record([_item("also-gone.png")], {}, None)
+        self.assertNotEqual(gone["id"], other["id"], "nothing is known about them but their names")
+        self.assertEqual(gallery.record([_item("gone.png")], {}, None)["id"], gone["id"])
+        self.assertIsNone(gallery.file_fingerprint(_item("gone.png")))
+        self.assertIsNone(gallery.file_fingerprint(_item("a.png", subfolder="elsewhere")), "not ours to hash")
+        self.assertIsNone(gallery.file_fingerprint("a.png"), "an item, not a name")
+
+    def test_a_file_is_hashed_once_and_again_when_it_moves(self):
+        item = _item("a.png")
+        path = self.root / "multi_stitch" / "a.png"
+        stat = path.stat()
+        before = gallery.file_fingerprint(item)
+        self.assertTrue(before.startswith("100:"), before)
+        path.write_bytes(b"z" * 100)
+        os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+        self.assertEqual(gallery.file_fingerprint(item), before, "same size and stamp: the cached hash stands")
+        os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
+        self.assertNotEqual(gallery.file_fingerprint(item), before, "the file moved, so it is read again")
 
     def test_listing_is_most_recently_used_first_and_skips_junk(self):
         old = gallery.record([_item("a.png")], {"direction": "right"}, None)
