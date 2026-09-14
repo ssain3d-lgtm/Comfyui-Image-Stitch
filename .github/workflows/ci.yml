@@ -233,12 +233,14 @@ jobs:
         # Chromium. The harness stages web/ under TMPDIR, so TMPDIR points
         # inside the workspace to get pkg/web/*.js into the coverage table.
         #
-        # Reported, not gated: the files the Chromium tests exercise
+        # Mostly reported, not gated: the files the Chromium tests exercise
         # (crop_editor.js) execute in the browser, where Node's coverage cannot
-        # see them, so a threshold over this table would measure the split
-        # between the two runners rather than the tests.
+        # see them, so a threshold over the whole table would measure the split
+        # between the two runners rather than the tests. scripts/coverage-gate
+        # puts a floor under the pure logic (shared.js) alone, reading the best
+        # row per file since the harness stages web/ once per test file.
         env:
           TMPDIR: ${{ github.workspace }}/.tmp
         run: |
           mkdir -p "$TMPDIR"
-          npm run test:coverage
+          npm run test:coverage:gate

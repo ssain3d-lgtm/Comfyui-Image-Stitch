@@ -79,6 +79,7 @@ function actionSpy(overrides = {}) {
             openVideo: (node, entry) => calls.push(["openVideo", entry.filename]),
             removeVideo: (node, entry) => calls.push(["removeVideo", entry.filename]),
             resized: record("resized"),
+            sizePanelClick: (node, point) => calls.push(["sizePanelClick", Math.round(point.x), Math.round(point.y)]),
             ...overrides,
         },
     };
@@ -288,6 +289,18 @@ describe("dom view", () => {
         handle.render();
         assert.equal(handle.height, 431, "what the view actually occupies wins over the guess");
         assert.deepEqual(spy.calls.filter(([name]) => name === "resized").length > 0, true);
+        handle.destroy();
+    });
+
+    it("hands a click on the size panel back in the panel's own coordinates", () => {
+        const node = fakeNode([item("a.png")]);
+        const spy = actionSpy();
+        spy.state.panel = true;
+        const handle = view.installDomView(node, spy.actions);
+        const panel = part(handle.root, "panel");
+        panel.getBoundingClientRect = () => ({ left: 40, top: 500, width: 404, height: 198 });
+        panel.handlers.click[0]({ clientX: 140, clientY: 660 });
+        assert.deepEqual(spy.calls.filter(([name]) => name === "sizePanelClick"), [["sizePanelClick", 100, 160]]);
         handle.destroy();
     });
 

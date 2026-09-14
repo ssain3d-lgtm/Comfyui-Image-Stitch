@@ -15,7 +15,7 @@ import { formatTime } from "./frame_picker.js";
 export const DOM_VIEW_WIDGET = "$$multi_stitch_view";
 const PREVIEW_H = 150;
 const CARD_H = 92;
-const PANEL_H = 176;
+const PANEL_H = 198;
 const TOOLBAR_ROW_H = 30;
 const REFRESH_MS = 300;
 
@@ -152,6 +152,20 @@ export function installDomView(node, actions) {
     empty.textContent = "Drop or add images or a video (paste images with Ctrl+V while the node is selected)";
     const panel = document.createElement("canvas");
     panel.className = "panel";
+    panel.title = "Click a shape to set the width / height outputs";
+    // The panel is drawn by the same function the canvas uses, so a click on it
+    // is answered from the same geometry: the point is converted into the
+    // panel's own coordinates and handed over.
+    panel.addEventListener("click", (event) => {
+        const box = panel.getBoundingClientRect?.();
+        if (!box) return;
+        actions.sizePanelClick?.(node, {
+            x: (event.clientX ?? 0) - box.left,
+            y: (event.clientY ?? 0) - box.top,
+            w: box.width,
+            h: box.height,
+        });
+    });
     root.append(status, toolbar, preview, cards, empty, panel);
 
     const view = { node, root, widget: null, timer: null, alive: true, height: 0 };

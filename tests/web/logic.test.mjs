@@ -42,7 +42,7 @@ const rowPitch = (node) => ms.thumbLayout(node, 3).y - ms.thumbLayout(node, 0).y
 // The padding the node keeps under the last row (heightForRows).
 const LIST_BOTTOM_PAD = 12;
 // The size panel's own height plus the gap above it (SIZE_PANEL_H + 8).
-const SIZE_PANEL_GROWTH = 176 + 8;
+const SIZE_PANEL_GROWTH = 198 + 8;
 const rowsTall = (node, rows) => {
     const pitch = rowPitch(node);
     return ms.listTop(node) + rows * pitch - (pitch - ms.thumbLayout(node, 0).h) + LIST_BOTTOM_PAD;
@@ -769,7 +769,9 @@ describe("empty box", () => {
         node.properties.multi_stitch_size_panel = true;
         const box = ms.emptyBoxRect(node);
         // 8.5px per character: the hint (57 characters) is wider than the 368px it has.
-        const panel = textCalls(node, 8.5).calls.filter((c) => c.y > box.y + box.h && c.text !== "width / height outputs");
+        // The preset chips share the panel; the hint is what this checks.
+        const chips = new Set([...ms.SIZE_ASPECTS.map((n) => (n === "reference" ? "auto" : n)), "width / height outputs"]);
+        const panel = textCalls(node, 8.5).calls.filter((c) => c.y > box.y + box.h && !chips.has(c.text));
         assert.deepEqual(panel.map((c) => c.text), ["Add an image: its size becomes the width /", "height outputs"]);
         for (const c of panel) assert.ok(c.text.length * 8.5 <= 368);
     });
@@ -1501,6 +1503,31 @@ describe("size panel", () => {
 
         widget(node, "size_aspect").value = "reference";
         assert.match(paintedText(nodeType, node).find((t) => / x .*divisible by /.test(t)), /^1216 x 1600/, "and back");
+    });
+
+    it("changes the shape from the panel's own chips", async () => {
+        const node = plainNode(nodeType);
+        dom.imageSizes.set("tall.png", [1200, 1600]);
+        setImages(node, [item("tall.png")]);
+        node.properties.multi_stitch_size_panel = true;
+        paintedCalls(nodeType, node);
+        await waitForThumbs(node);
+        const chips = ms.sizePresetRects(ms.sizePanelRect(node));
+        assert.deepEqual(chips.map((c) => c.name), ms.SIZE_ASPECTS, "one chip per preset");
+        assert.ok(paintedText(nodeType, node).includes("auto"), "'reference' reads as auto on its chip");
+
+        const chip = chips.find((c) => c.name === "9:16");
+        assert.equal(click(node, centre(chip)), true);
+        assert.equal(widget(node, "size_aspect").value, "9:16");
+        assert.match(paintedText(nodeType, node).find((t) => / x .*divisible by /.test(t)), /^1024 x 1856 {2}\| {2}9:16/);
+
+        // The chips sit inside the panel and nowhere else.
+        for (const c of chips) {
+            const panel = ms.sizePanelRect(node);
+            assert.ok(c.x >= panel.x && c.x + c.w <= panel.x + panel.w, `${c.name} is inside the panel`);
+            assert.ok(c.y >= panel.y && c.y + c.h <= panel.y + panel.h);
+        }
+        assert.equal(ms.sizePresetAt(node, 4, 4), null, "the toolbar is not a chip");
     });
 
     it("follows the reference choice and the step, and is offered in the context menu", async () => {

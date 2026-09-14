@@ -236,7 +236,7 @@ grid_columns = 3
 - `size_reference` — 기준 이미지의 **번호**: `1`(기본) = 목록의 첫 번째, `2` = 두 번째… IMAGE 입력의 프레임은 붙여 넣은 이미지 뒤에 이어서 세고, 끝을 넘는 번호는 마지막 이미지를 씁니다(패널에 표시).
 - `size_megapixels` — `0`(기본)이면 기준 이미지의 픽셀 수 그대로, 값을 주면 비율을 유지한 채 그 메가픽셀로 확대·축소합니다.
 - `size_divisible_by` — 각 변을 이 값의 배수로 반올림합니다(기본 `32`, 최소 이 값). 예: 1440×2560을 0.8 MP·32로 → **672×1184**.
-- `size_aspect` — 출력의 **비율**입니다. 기본 `reference`는 기준 이미지의 비율 그대로이고, `1:1`·`16:9`·`9:16`·`4:3`·`3:4`·`3:2`·`2:3` 중 하나를 고르면 그 비율로 바꿉니다. **픽셀 수는 기준 이미지 그대로 유지**하므로(=`size_megapixels`가 0보다 크면 그 값) 비율만 바뀌고 생성 부담은 그대로입니다. 예: 1200×1600(3:4)에 `9:16` → **1024×1856**. 원본은 3:4인데 모델에는 9:16으로 넣어야 할 때 노드를 하나 더 붙일 필요가 없습니다.
+- `size_aspect` — 출력의 **비율**입니다. 크기 패널을 켜면 상자 아래 **칩을 눌러 바로 바꿀 수 있습니다**(`auto`가 `reference`). 기본 `reference`는 기준 이미지의 비율 그대로이고, `1:1`·`16:9`·`9:16`·`4:3`·`3:4`·`3:2`·`2:3` 중 하나를 고르면 그 비율로 바꿉니다. **픽셀 수는 기준 이미지 그대로 유지**하므로(=`size_megapixels`가 0보다 크면 그 값) 비율만 바뀌고 생성 부담은 그대로입니다. 예: 1200×1600(3:4)에 `9:16` → **1024×1856**. 원본은 3:4인데 모델에는 9:16으로 넣어야 할 때 노드를 하나 더 붙일 필요가 없습니다.
 
 이 출력은 `Empty Latent Image`나 리사이즈 노드에 바로 연결해 쓰는 용도입니다. 제목줄 오른쪽의 **`📐 Size`** 버튼(또는 우클릭 → `Show size panel`)을 켜면 노드 아래에 그 크기의 비율 상자와 `672 x 1184 | 9:16 | 0.80 MP | divisible by 32` 읽기, 그리고 어느 이미지에서 나왔는지가 표시되고 위 세 위젯이 나타납니다. 끄면 위젯도 함께 숨겨지며(기본 위젯은 그대로 5개), 켜짐 여부는 워크플로우에 저장됩니다. 계산은 백엔드와 같은 식(`_reference_size` ↔ `referenceSize`)을 쓰고 CI에서 대조합니다.
 
@@ -415,7 +415,7 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 
 ### What changed in 1.3
 
-- **`size_aspect`** — the `width` / `height` outputs can take a **shape**. `reference` (the default) follows the reference image exactly as before; pick `9:16` and they take that ratio while **keeping the same pixel count**. No second node needed when the source is 3:4 but the model wants 9:16.
+- **`size_aspect`** — the `width` / `height` outputs can take a **shape**, from the widget or from the chips under the size panel's box. `reference` (the default) follows the reference image exactly as before; pick `9:16` and they take that ratio while **keeping the same pixel count**. No second node needed when the source is 3:4 but the model wants 9:16.
 - **Nodes 2.0 uses the same columns as the canvas** — the Vue mode was fixed at three columns whatever the node's width, so one node showed 8 columns on the canvas and 3 in Vue. Both call one function in `shared.js` now.
 - **The Vue view measures its own height** — its toolbar wraps to two rows at the default width but was counted as one, leaving it 15px short. It is read from the DOM now, with a `ResizeObserver` for resizes.
 

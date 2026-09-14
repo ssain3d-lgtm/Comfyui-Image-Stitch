@@ -2,6 +2,14 @@
 
 All notable changes to **Multi Stitch Images**. The version is the one in `pyproject.toml`; each release is tagged `v<version>` on `main`.
 
+## 1.3.1 — 2026-09-14
+
+### Changed
+- **The size panel sets the shape itself.** `size_aspect` arrived as a widget only, so the panel showed what a preset did without being able to pick one. A row of chips under the aspect box — `auto`, `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `3:2`, `2:3` — now sets it with a click, in both the canvas and Vue renderings: the panel is one drawing, so the chips are laid out from the same geometry in both and the DOM click is converted into the panel's own coordinates.
+
+### Tests
+- `shared.js` has a coverage floor of 85% (it is at 97%). The rest of the frontend table stays reported: the harness stages `web/` once per test file and the crop editor runs in Chromium, so a threshold over the whole table would measure the split between runners, not the tests. `scripts/coverage-gate.mjs` reads the best row per named file.
+
 ## 1.3.0 — 2026-09-14
 
 ### Added

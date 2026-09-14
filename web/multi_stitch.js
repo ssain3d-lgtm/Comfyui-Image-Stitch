@@ -28,6 +28,7 @@ import {
     redoImages,
     referenceSize,
     aspectRatio,
+    SIZE_ASPECTS,
     THUMB_GAP as SHARED_THUMB_GAP,
     renderTransformedImage,
     retryThumb,
@@ -81,8 +82,9 @@ const nodesWithVideos = new Set();
 // megapixel target and snapped to a multiple — as a box of that aspect with
 // a readout, like a resize node's. Toggled from the title bar; saved with the
 // workflow; its three widgets show only while it is on.
-const SIZE_PANEL_H = 176;
+const SIZE_PANEL_H = 198;
 const SIZE_PANEL_BOX_H = 132;
+const SIZE_PRESET_H = 20;
 const SIZE_WIDGETS = ["size_reference", "size_megapixels", "size_divisible_by", "size_aspect"];
 const titleHeight = () => globalThis.LiteGraph?.NODE_TITLE_HEIGHT || 30;
 // One toolbar row under the status line holds every action, so no widget
@@ -164,6 +166,57 @@ function sizePanelEnabled(node) {
 function sizePanelRect(node) {
     if (!sizePanelEnabled(node)) return null;
     return { x: 8, y: listTop(node) + rowsOf(node) * ROW_H - THUMB_GAP + 8, w: nodeWidth(node) - 16, h: SIZE_PANEL_H };
+}
+
+// The preset row under the aspect box: one chip per SIZE_ASPECTS value, laid
+// out from the panel's own rect so the canvas and the DOM rendering hit-test
+// exactly what is drawn.
+function sizePresetRects(rect) {
+    const inner = rect.w - 12;
+    const w = Math.max(28, Math.floor((inner - (SIZE_ASPECTS.length - 1) * 4) / SIZE_ASPECTS.length));
+    const total = w * SIZE_ASPECTS.length + 4 * (SIZE_ASPECTS.length - 1);
+    const left = rect.x + Math.max(6, (rect.w - total) / 2);
+    const y = rect.y + 8 + SIZE_PANEL_BOX_H + 5;
+    return SIZE_ASPECTS.map((name, i) => ({ name, x: left + i * (w + 4), y, w, h: SIZE_PRESET_H }));
+}
+
+function sizePresetAt(node, x, y) {
+    const rect = sizePanelRect(node);
+    if (!rect) return null;
+    return sizePresetRects(rect).find((chip) => inRect(x, y, chip)) || null;
+}
+
+function setSizeAspect(node, name) {
+    const widget = getWidget(node, "size_aspect");
+    if (!widget || widget.value === name) return false;
+    widget.value = name;
+    widget.callback?.(name);
+    refreshDomView(node);
+    node.graph?.setDirtyCanvas(true, true);
+    return true;
+}
+
+// "reference" reads as "keep it" rather than a ratio, so the chip says so.
+function presetLabel(name) {
+    return name === "reference" ? "auto" : name;
+}
+
+function drawSizePresets(ctx, node, rect) {
+    const current = readSettings(node).sizeAspect;
+    ctx.save();
+    ctx.font = "10px sans-serif";
+    ctx.textAlign = "center";
+    for (const chip of sizePresetRects(rect)) {
+        const on = chip.name === current;
+        ctx.fillStyle = on ? "#2f6b45" : "rgba(255,255,255,.06)";
+        ctx.fillRect(chip.x, chip.y, chip.w, chip.h);
+        ctx.strokeStyle = on ? "#4ade80" : "#2c3c32";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(chip.x + 0.5, chip.y + 0.5, chip.w - 1, chip.h - 1);
+        ctx.fillStyle = on ? "#c9f7d9" : "#8fb89d";
+        ctx.fillText(presetLabel(chip.name), chip.x + chip.w / 2, chip.y + 14, chip.w - 4);
+    }
+    ctx.restore();
 }
 
 function toggleSizePanel(node) {
@@ -305,6 +358,9 @@ function drawSizePanel(ctx, node, rect) {
             node._msImages?.length ? "Loading…" : "Add an image: its size becomes the width / height outputs",
             rect.x + rect.w / 2, box.y + box.h / 2 + 4, box.w - 20,
         );
+        drawSizePresets(ctx, node, rect);
+        ctx.fillStyle = "#7fb08f";
+        ctx.textAlign = "center";
         ctx.fillText("width / height outputs", rect.x + rect.w / 2, rect.y + rect.h - 12);
         ctx.restore();
         return;
@@ -330,8 +386,11 @@ function drawSizePanel(ctx, node, rect) {
     ctx.lineWidth = 2;
     ctx.strokeRect(x, y, w, h);
 
+    drawSizePresets(ctx, node, rect);
+
     ctx.fillStyle = "#e9ffef";
     ctx.font = "13px sans-serif";
+    ctx.textAlign = "center";
     ctx.fillText(
         `${readout.w} x ${readout.h}  |  ${readout.ratio}  |  ${readout.megapixels.toFixed(2)} MP  |  divisible by ${readout.step}`,
         rect.x + rect.w / 2, rect.y + rect.h - 12, rect.w - 16,
@@ -921,6 +980,13 @@ const DOM_VIEW_ACTIONS = () => (domViewActions ||= {
     togglePreview: (node) => { if (node._msImages?.length) togglePreview(node); },
     toggleOptions: toggleAdvanced,
     toggleSizePanel,
+    // The DOM panel is the same drawing at its own origin, so a click on it is
+    // laid out for that rect rather than for the node's.
+    sizePanelClick: (node, point) => {
+        const chip = sizePresetRects({ x: 0, y: 0, w: point.w, h: point.h })
+            .find((c) => inRect(point.x, point.y, c));
+        if (chip) setSizeAspect(node, chip.name);
+    },
     openGallery: (node) => openGalleryFor(node),
     edit: openEditor,
     remove: removeImageAt,
@@ -2666,6 +2732,12 @@ app.registerExtension({
                     stopEvent(event);
                     return true;
                 }
+                const preset = sizePresetAt(this, x, y);
+                if (preset) {
+                    setSizeAspect(this, preset.name);
+                    stopEvent(event);
+                    return true;
+                }
                 // With no images yet, the dashed box is the "add" target too.
                 if (!listCount(this) && inRect(x, y, emptyBoxRect(this))) {
                     chooseFiles(this);
@@ -2862,6 +2934,11 @@ export {
     sizeReadout,
     thumbActionRects,
     columnsOf,
+    SIZE_ASPECTS,
+    sizePanelRect,
+    sizePresetRects,
+    sizePresetAt,
+    setSizeAspect,
     dropIndexAt,
     dropBarRect,
     imageCardEntries,

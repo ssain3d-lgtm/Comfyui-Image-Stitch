@@ -1,6 +1,6 @@
 {
   "name": "comfyui-image-stitch-tests",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "private": true,
   "description": "Frontend tests for the Multi Stitch Images ComfyUI node. ComfyUI itself never reads this file. The version tracks pyproject.toml so a release cannot half-happen; tests/test_packaging.py checks it.",
   "scripts": {
@@ -8,7 +8,8 @@
     "test:logic": "node --test tests/web/logic.test.mjs",
     "test:browser": "node --test tests/web/browser.test.mjs",
     "test:coverage": "node --test --experimental-test-coverage \"tests/web/*.test.mjs\"",
-    "lint": "eslint \"web/**/*.js\" \"tests/web/**/*.mjs\" \"tests/web/stubs/*.js\""
+    "lint": "eslint \"web/**/*.js\" \"tests/web/**/*.mjs\" \"tests/web/stubs/*.js\"",
+    "test:coverage:gate": "node scripts/coverage-gate.mjs"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
