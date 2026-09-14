@@ -836,7 +836,7 @@ function drawCard(ctx, node, item, index, r) {
     ctx.fillStyle = "#171717";
     ctx.fillRect(r.x, r.y, r.w, r.h);
     const selected = isSelected(node, index);
-    ctx.strokeStyle = selected ? "#8ab4f8" : (isCropped(item.crop) || isTransformed(item) ? "#f6b73c" : "#555");
+    ctx.strokeStyle = selected ? "#8ab4f8" : "#555";
     ctx.lineWidth = selected ? 2 : 1;
     ctx.strokeRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2);
     if (selected) {

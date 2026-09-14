@@ -116,7 +116,7 @@ describe("dom view", () => {
         assert.deepEqual(buttons(handle.root).map((b) => b.textContent),
             ["+ Add", "Clear", "⧉ Copy", "↶", "↷", "Preview ✓", "Options ▸ (2)", "🖼 Gallery", "📐 Size"]);
         assert.equal(cards(handle.root).length, 2);
-        assert.equal(cards(handle.root)[1].className, "card edited", "a cropped image is marked, as on the canvas");
+        assert.equal(cards(handle.root)[1].className, "card", "an edited image is outlined like any other; its ✂ badge marks it");
         assert.equal(part(handle.root, "empty").hidden, true, "no dashed box while there are images");
         assert.equal(part(handle.root, "preview").hidden, false);
         assert.equal(part(handle.root, "panel").hidden, true);

@@ -9,6 +9,9 @@ All notable changes to **Multi Stitch Images**. The version is the one in `pypro
 - **The editor counts the crop while it is dragged.** Its header was showing the source size and nothing else, so the size a crop produced could only be found out after applying it. It now reads `1080 × 1920 → 792 × 1411` and updates on every move of the rectangle, which is what makes cropping *to* a size possible instead of towards one.
 - Both numbers come out of `cropPixelBox`, the function the server crops with (`_crop_box`, rounding included), so the UI cannot report a resolution the run would not produce.
 
+### Changed
+- **An edited card is outlined like the rest.** A crop or a quarter turn used to turn the whole card border amber, which drew a frame around the picture to say what the ✂ / `90°` badge in its corner — and now the amber size beside it — already say. The border is back to meaning one thing: blue is a card you selected.
+
 ## 1.6.0 — 2026-09-14
 
 ### Added

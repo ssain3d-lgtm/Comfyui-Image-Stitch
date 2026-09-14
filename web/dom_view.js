@@ -49,7 +49,6 @@ function installStyles() {
 .ms-dom-view .card.dragging{opacity:.55}
 .ms-dom-view .card.drop-before,.ms-dom-view .card.drop-after{box-shadow:inset 3px 0 0 #8ab4f8}
 .ms-dom-view .card.drop-after{box-shadow:inset -3px 0 0 #8ab4f8}
-.ms-dom-view .card.edited{border-color:#f6b73c}
 .ms-dom-view .card canvas.thumb{position:absolute;inset:3px;width:calc(100% - 6px);height:calc(100% - 6px);cursor:pointer}
 .ms-dom-view .card .text{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:#8d8d8d;padding:4px 26px;cursor:pointer}
 .ms-dom-view .card .text.failed{color:#f08a8a}
@@ -250,7 +249,7 @@ export function installDomView(node, actions) {
 
     const cardFor = (item, index) => {
         const el = document.createElement("div");
-        el.className = `card${isCropped(item.crop) || isTransformed(item) ? " edited" : ""}`;
+        el.className = "card";
         const state = actions.thumb(node, item);
         if (state.ready) {
             const canvas = document.createElement("canvas");
