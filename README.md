@@ -40,6 +40,11 @@
 - 일반 `IMAGE` 출력 → `Preview Image`, `Save Image`, `VAE Encode` 등에 바로 연결
 - 추가 Python 패키지 불필요 — 동영상 서버 디코딩에만 PyAV가 쓰이고 최신 ComfyUI에는 이미 포함되어 있습니다(ComfyUI-Manager용 `requirements.txt`에도 적어 두었습니다)
 
+### 1.6에서 달라진 점
+
+- **이미지 편집기 확대 / 이동** — 큰 사진일수록 Crop이 거칠어지던 문제를 없앴습니다. 4000px 사진이 1000px로 그려지면 화면 1픽셀이 Crop 4픽셀이었습니다. 이제 **최대 16배**까지 확대됩니다: 휠은 **포인터 위치를 기준으로** 확대해 보고 있던 부분이 그대로 있고, `+ / − / Fit` 버튼과 키보드 `+ / - / 0`도 같은 일을 합니다.
+- 이동은 **휠 버튼 드래그** 또는 **Space + 좌클릭 드래그** — 좌클릭은 Crop 그리기용으로 그대로 남습니다. 확대하면 핸들이 잡히는 범위와 최소 Crop 크기도 함께 줄어들어 **픽셀 단위로 다듬을 수 있습니다**.
+
 ### 1.5에서 달라진 점
 
 - **`grid_target_aspect`** — Grid 모드에서 열 수를 직접 정하는 대신 **완성될 캔버스의 비율**을 지정하면, 가능한 모든 열 수를 실제로 배치해 보고 그 비율에 가장 가까운 것을 고릅니다. 정사각 8장 기준 `16:9` → 4×2, `1:1` → 3×3, `9:16` → 2×4. 기본값 `off`는 지금까지처럼 `grid_columns`를 그대로 씁니다.
@@ -176,6 +181,7 @@ git pull
 - `Flip H / Flip V`
 - `Reset crop`
 - `Reset all`
+- **확대 / 이동**: 휠(포인터 기준 확대), `+ / − / Fit` 버튼, 키보드 `+ / - / 0`. 이동은 **휠 버튼 드래그** 또는 **Space + 좌클릭 드래그**. 최대 16배까지 확대되며, 확대하면 핸들이 잡는 범위와 최소 Crop 크기도 함께 작아져 픽셀 단위로 다듬을 수 있습니다.
 
 회전 / 반전은 **잡아둔 Crop 영역을 그대로 유지**합니다. Crop은 이미지 내용을 따라 함께 회전·반전되므로, 편집 순서에 상관없이 같은 영역이 선택된 상태로 남습니다. Crop을 전체로 되돌리려면 `Reset crop`을 사용하세요.
 
@@ -426,6 +432,11 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 - Standard `IMAGE` output → `Preview Image`, `Save Image`, `VAE Encode`, etc.
 - No extra Python packages required — only server-side video decoding uses PyAV, which current ComfyUI already installs (and `requirements.txt` lists it for ComfyUI-Manager)
 
+### What changed in 1.6
+
+- **Zoom and pan in the image editor.** A crop could only be as precise as the image was small — a 4000px photo drawn at 1000px moved four pixels per screen pixel. The editor now zooms to **16×**: the wheel zooms **around the pointer** so the detail under it stays still, and `+ / − / Fit` and the keys `+ / - / 0` do the same.
+- Pan with a **middle-button drag** or **space held with the left button**, leaving the left button free for drawing a crop. Zooming in shrinks the grab areas and the minimum crop with it, so a crop can be trimmed **to the pixel**.
+
 ### What changed in 1.5
 
 - **`grid_target_aspect`** — in grid mode, name the shape the finished canvas should have instead of fixing the column count. Every count is laid out and the one landing closest wins: eight squares become 4x2 at `16:9`, 3x3 at `1:1`, 2x4 at `9:16`. `off` keeps `grid_columns`, as before.
@@ -564,6 +575,7 @@ Single-click the thumbnail image area to open the editor.
 - `Flip H / Flip V`
 - `Reset crop`
 - `Reset all`
+- **Zoom and pan**: the wheel zooms around the pointer, `+ / − / Fit` and the keys `+ / - / 0` do the same from the keyboard. Pan with a **middle-button drag** or **space held with the left button**. Up to 16×, and zooming in shrinks the grab areas and the minimum crop with it, so a crop can be trimmed to the pixel.
 
 Rotating or flipping **keeps the crop you drew**. The crop travels with the image content, so the same region stays selected no matter what order you edit in. Use `Reset crop` to go back to the full frame.
 

@@ -2,6 +2,12 @@
 
 All notable changes to **Multi Stitch Images**. The version is the one in `pyproject.toml`; each release is tagged `v<version>` on `main`.
 
+## 1.6.0 — 2026-09-14
+
+### Added
+- **Zoom and pan in the image editor.** The crop rectangle could only ever be as precise as the image was small: a 4000px photo was drawn at 1000px, so one screen pixel moved the crop by four. The editor now zooms up to **16×** — the wheel zooms around the pointer so the detail under it stays still, `+` / `−` / `Fit` and the keys `+ / - / 0` do it from the middle of the view — and pans with a **middle-button drag** or **space held with the left button**, both of which leave the left button free for drawing a crop. The percentage beside the buttons says where you are.
+- The zoom is a view rectangle over the working image, and every pointer position is read through it, so the crop maths never learns about zoom: the grab areas and the minimum crop are a constant number of *screen* pixels and therefore shrink in image pixels as you zoom, which is what makes a crop trimmable to the pixel. A rotation or a flip re-fits the view, since the image it is a window onto has changed shape.
+
 ## 1.5.1 — 2026-09-14
 
 ### Added

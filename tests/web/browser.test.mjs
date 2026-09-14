@@ -138,6 +138,106 @@ describe("crop editor", () => {
         await page.close();
     });
 
+    it("zooms around the pointer, and crops in the pixels the zoom shows", async () => {
+        const { page, errors } = await openPage();
+        await page.evaluate(() => {
+            window.__node = window.__makeNode("editor.png");
+            window.__openCropEditor(window.__node, 0);
+        });
+        const canvas = page.locator(".ms-crop-canvas");
+        await canvas.waitFor();
+        const box = await canvas.boundingBox();
+        const view = () => page.evaluate(() => window.__node._msEditor.view());
+        // The image pixel a screen point is showing, worked out from the view.
+        const imageAt = (v, x, y) => ({
+            x: v.x + (x - box.x) / box.width * v.w,
+            y: v.y + (y - box.y) / box.height * v.h,
+        });
+        assert.equal(await page.locator(".zoom-level").textContent(), "100%");
+
+        const at = [box.x + box.width * 0.25, box.y + box.height * 0.75];
+        const before = await view();
+        const was = imageAt(before, ...at);
+        await page.mouse.move(...at);
+        await page.mouse.wheel(0, -120);
+        const after = await view();
+        assert.ok(after.w < before.w, `the wheel zoomed in: ${after.w} < ${before.w}`);
+        const now = imageAt(after, ...at);
+        assert.ok(Math.abs(now.x - was.x) < 1 && Math.abs(now.y - was.y) < 1,
+            `the pixel under the pointer stayed put: ${JSON.stringify([was, now])}`);
+
+        await page.click(".zoom-fit");
+        assert.equal(await page.locator(".zoom-level").textContent(), "100%", "Fit shows the whole image again");
+
+        // Pull the bottom-right corner to the middle at 1:1, zoom to 225%, then
+        // pull it 45 more screen pixels: that is 20 image pixels across and 20
+        // down, not 45 of either.
+        const drag = async (from, to) => {
+            await page.mouse.move(from[0], from[1]);
+            await page.mouse.down();
+            await page.mouse.move(to[0], to[1], { steps: 4 });
+            await page.mouse.up();
+        };
+        await drag([box.x + box.width - 1, box.y + box.height - 1], [box.x + box.width / 2, box.y + box.height / 2]);
+        await page.click(".zoom-in");
+        await page.click(".zoom-in");
+        assert.equal(await page.locator(".zoom-level").textContent(), "225%");
+        await drag([box.x + box.width / 2, box.y + box.height / 2], [box.x + box.width / 2 - 45, box.y + box.height / 2 - 45]);
+        await page.click(".apply");
+
+        const item = await page.evaluate(() => window.__node._msImages[0]);
+        const near = (a, b) => Math.abs(a - b) < 0.02;
+        assert.ok(near(item.crop.w, 130 / 300) && near(item.crop.h, 80 / 200), JSON.stringify(item.crop));
+        assert.deepEqual(errors, []);
+        await page.close();
+    });
+
+    it("pans with the middle button and with space held, leaving the crop alone", async () => {
+        const { page, errors } = await openPage();
+        await page.evaluate(() => {
+            window.__node = window.__makeNode("editor.png");
+            window.__openCropEditor(window.__node, 0);
+        });
+        const canvas = page.locator(".ms-crop-canvas");
+        await canvas.waitFor();
+        const box = await canvas.boundingBox();
+        const view = () => page.evaluate(() => window.__node._msEditor.view());
+
+        await page.click(".zoom-in");
+        await page.click(".zoom-in");
+        const start = await view();
+        const centre = [box.x + box.width / 2, box.y + box.height / 2];
+
+        await page.mouse.move(...centre);
+        await page.mouse.down({ button: "middle" });
+        await page.mouse.move(centre[0] + 60, centre[1] + 40, { steps: 4 });
+        await page.mouse.up({ button: "middle" });
+        const panned = await view();
+        assert.ok(Math.abs(panned.x - (start.x - 60 / box.width * start.w)) < 1, `x: ${panned.x} from ${start.x}`);
+        assert.ok(Math.abs(panned.y - (start.y - 40 / box.height * start.h)) < 1, `y: ${panned.y} from ${start.y}`);
+        assert.equal(panned.w, start.w, "a pan does not zoom");
+
+        // Space with the left button, back the other way.
+        await page.evaluate(() => document.querySelector(".ms-crop-overlay").focus());
+        await page.keyboard.down("Space");
+        await page.mouse.move(...centre);
+        await page.mouse.down();
+        await page.mouse.move(centre[0] - 60, centre[1] - 40, { steps: 4 });
+        await page.mouse.up();
+        await page.keyboard.up("Space");
+        const back = await view();
+        assert.ok(Math.abs(back.x - start.x) < 1 && Math.abs(back.y - start.y) < 1,
+            `back where it started: ${JSON.stringify([start, back])}`);
+
+        await page.click(".zoom-fit");
+        assert.deepEqual(await view(), { x: 0, y: 0, w: 300, h: 200 });
+        await page.click(".apply");
+        assert.deepEqual(await page.evaluate(() => window.__node._msImages[0].crop), { x: 0, y: 0, w: 1, h: 1 },
+            "none of that moved the crop");
+        assert.deepEqual(errors, []);
+        await page.close();
+    });
+
     it("closes on Escape without applying", async () => {
         const { page, errors } = await openPage();
         await page.evaluate(() => {

@@ -30,6 +30,9 @@ function installStyles() {
 .ms-crop-controls select,.ms-crop-controls button{background:#303134;color:#eee;border:1px solid #5f6368;border-radius:7px;padding:7px 11px;font-size:13px}
 .ms-crop-controls button{cursor:pointer}.ms-crop-controls button:hover{background:#3c4043}.ms-crop-controls .primary{background:#1a73e8;border-color:#1a73e8}
 .ms-crop-controls .active{border-color:#8ab4f8;background:#35435d}
+.ms-crop-zoom{display:flex;align-items:center;gap:5px}
+.ms-crop-zoom button{padding:6px 10px;min-width:32px}
+.ms-crop-zoom .zoom-level{font-size:12px;color:#cfcfcf;min-width:48px;text-align:center;font-variant-numeric:tabular-nums}
 .ms-crop-spacer{flex:1}.ms-crop-hint{font-size:12px;color:#aaa}.ms-transform-state{font-size:12px;color:#9aa0a6;min-width:130px}
 `;
     document.head.appendChild(style);
@@ -122,9 +125,15 @@ export async function openCropEditor(node, index) {
               <option>9:16</option>
             </select>
           </label>
+          <span class="ms-crop-zoom">
+            <button class="zoom-out" title="Zoom out">−</button>
+            <span class="zoom-level">100%</span>
+            <button class="zoom-in" title="Zoom in">+</button>
+            <button class="zoom-fit" title="Show the whole image">Fit</button>
+          </span>
           <button class="reset-crop">Reset crop</button>
           <button class="reset-all">Reset all</button>
-          <span class="ms-crop-hint">Free: drag black edge bars/corners • inside: move • outside: new crop</span>
+          <span class="ms-crop-hint">Drag bars/corners • inside: move • outside: new crop • wheel: zoom • space or middle drag: pan</span>
           <span class="ms-crop-spacer"></span>
           <button class="cancel">Cancel</button>
           <button class="primary apply">Apply</button>
@@ -135,6 +144,7 @@ export async function openCropEditor(node, index) {
     const canvas = overlay.querySelector("canvas");
     const ctx = canvas.getContext("2d");
     const ratioSelect = overlay.querySelector(".ratio");
+    const zoomLevel = overlay.querySelector(".zoom-level");
     const dimensions = overlay.querySelector(".dimensions");
     const transformState = overlay.querySelector(".ms-transform-state");
     const flipHButton = overlay.querySelector(".flip-h");
@@ -147,7 +157,16 @@ export async function openCropEditor(node, index) {
     let working = renderTransformedImage(source, transform);
     let rect;
     let scale = 1;
+    const MAX_ZOOM = 16;
     let drag = null;
+    // The part of the image the canvas shows, in image pixels. Zooming shrinks
+    // it around a point; panning slides it. Everything else works in image
+    // pixels and goes through this, so the crop maths never learns about zoom.
+    let view = null;
+    // A pan in progress: where the pointer went down, and the view it started
+    // from. `spaceHeld` is the other way into one.
+    let pan = null;
+    let spaceHeld = false;
     let handleRadius = 10;
     let edgeHit = 12;
     let minSize = 4;
@@ -156,11 +175,52 @@ export async function openCropEditor(node, index) {
         scale = Math.min(1, maxW / working.width, maxH / working.height);
         canvas.width = Math.max(1, Math.round(working.width * scale));
         canvas.height = Math.max(1, Math.round(working.height * scale));
-
-        handleRadius = Math.max(10, 14 / scale);
-        edgeHit = Math.max(10, 12 / scale);
-        minSize = Math.max(4, 8 / scale);
+        view = { x: 0, y: 0, w: working.width, h: working.height };
+        applyViewMetrics();
         dimensions.textContent = `${working.width} × ${working.height}`;
+    }
+
+    // Grab areas are a constant number of screen pixels, so they are expressed
+    // in image pixels through whatever the view is showing. Zooming in
+    // therefore also buys a finer minimum crop.
+    function applyViewMetrics() {
+        const viewScale = canvas.width / view.w;
+        // The floor is only there so nothing can reach zero; at 16x, the
+        // deepest zoom, 14 canvas pixels is still most of an image pixel.
+        handleRadius = Math.max(1, 14 / viewScale);
+        edgeHit = Math.max(1, 12 / viewScale);
+        minSize = Math.max(1, 8 / viewScale);
+    }
+
+    // Keeps the view inside the image and no larger than it: there is never a
+    // reason to show emptiness beside the picture.
+    function clampView() {
+        view.w = Math.min(working.width, Math.max(working.width / MAX_ZOOM, view.w));
+        view.h = Math.min(working.height, Math.max(working.height / MAX_ZOOM, view.h));
+        view.x = Math.max(0, Math.min(working.width - view.w, view.x));
+        view.y = Math.max(0, Math.min(working.height - view.h, view.y));
+        applyViewMetrics();
+    }
+
+    // `anchor` is the image point to hold still — the pointer for a wheel, the
+    // middle of the view for a button.
+    function zoomBy(factor, anchor) {
+        const previous = view.w;
+        const at = anchor || { x: view.x + view.w / 2, y: view.y + view.h / 2 };
+        view.w /= factor;
+        view.h /= factor;
+        clampView();
+        const applied = previous / view.w;
+        view.x = at.x - (at.x - view.x) / applied;
+        view.y = at.y - (at.y - view.y) / applied;
+        clampView();
+        render();
+    }
+
+    function fitView() {
+        view = { x: 0, y: 0, w: working.width, h: working.height };
+        applyViewMetrics();
+        render();
     }
 
     function fullRect() {
@@ -179,8 +239,8 @@ export async function openCropEditor(node, index) {
     const point = (event) => {
         const box = canvas.getBoundingClientRect();
         return {
-            x: Math.max(0, Math.min(working.width, (event.clientX - box.left) * working.width / box.width)),
-            y: Math.max(0, Math.min(working.height, (event.clientY - box.top) * working.height / box.height)),
+            x: Math.max(0, Math.min(working.width, view.x + (event.clientX - box.left) * view.w / box.width)),
+            y: Math.max(0, Math.min(working.height, view.y + (event.clientY - box.top) * view.h / box.height)),
         };
     };
 
@@ -232,16 +292,17 @@ export async function openCropEditor(node, index) {
     }
 
     function render() {
-        const sx = canvas.width / working.width;
-        const sy = canvas.height / working.height;
+        const sx = canvas.width / view.w;
+        const sy = canvas.height / view.h;
 
-        const x = rect.x * sx;
-        const y = rect.y * sy;
+        const x = (rect.x - view.x) * sx;
+        const y = (rect.y - view.y) * sy;
         const w = rect.w * sx;
         const h = rect.h * sy;
 
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(working, 0, 0, canvas.width, canvas.height);
+        ctx.drawImage(working, view.x, view.y, view.w, view.h, 0, 0, canvas.width, canvas.height);
+        zoomLevel.textContent = `${Math.round(working.width / view.w * 100)}%`;
 
         ctx.fillStyle = "rgba(0,0,0,.56)";
         ctx.fillRect(0, 0, canvas.width, y);
@@ -338,6 +399,16 @@ export async function openCropEditor(node, index) {
     }
 
     canvas.addEventListener("pointerdown", (event) => {
+        // Panning is the middle button, or space held with the left one: both
+        // leave the left button alone for drawing a crop.
+        if (event.button === 1 || (spaceHeld && event.button === 0)) {
+            pan = { x: event.clientX, y: event.clientY, from: { ...view } };
+            canvas.style.cursor = "grabbing";
+            canvas.setPointerCapture(event.pointerId);
+            event.preventDefault();
+            return;
+        }
+
         const p = point(event);
         const mode = hit(p);
         drag = { mode, start: p, original: { ...rect } };
@@ -353,6 +424,15 @@ export async function openCropEditor(node, index) {
     });
 
     canvas.addEventListener("pointermove", (event) => {
+        if (pan) {
+            const box = canvas.getBoundingClientRect();
+            view.x = pan.from.x - (event.clientX - pan.x) * view.w / box.width;
+            view.y = pan.from.y - (event.clientY - pan.y) * view.h / box.height;
+            clampView();
+            render();
+            return;
+        }
+
         const p = point(event);
 
         if (!drag) {
@@ -396,17 +476,51 @@ export async function openCropEditor(node, index) {
             try { canvas.releasePointerCapture(event.pointerId); } catch (_) {}
         }
         drag = null;
+        if (pan) {
+            pan = null;
+            canvas.style.cursor = spaceHeld ? "grab" : "crosshair";
+            return;
+        }
         if (event) canvas.style.cursor = cursorForMode(hit(point(event)));
     };
 
     canvas.addEventListener("pointerup", endDrag);
     canvas.addEventListener("pointercancel", () => {
         drag = null;
-        canvas.style.cursor = "crosshair";
+        pan = null;
+        canvas.style.cursor = spaceHeld ? "grab" : "crosshair";
     });
     canvas.addEventListener("pointerleave", (event) => {
-        if (!drag) canvas.style.cursor = cursorForMode(hit(point(event)));
+        if (!drag && !pan) canvas.style.cursor = cursorForMode(hit(point(event)));
     });
+    // Middle-click otherwise starts the browser's scroll-by-drag.
+    canvas.addEventListener("auxclick", (event) => event.preventDefault());
+
+    overlay.querySelector(".zoom-in").onclick = () => zoomBy(1.5, null);
+    overlay.querySelector(".zoom-out").onclick = () => zoomBy(1 / 1.5, null);
+    overlay.querySelector(".zoom-fit").onclick = () => fitView();
+
+    // The wheel zooms around the pointer, so the detail under it stays put.
+    canvas.addEventListener("wheel", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        zoomBy(event.deltaY < 0 ? 1.2 : 1 / 1.2, point(event));
+    }, { passive: false });
+
+    const onSpace = (event, down) => {
+        if (event.code !== "Space" && event.key !== " ") return;
+        // A focused select or field keeps the key for itself.
+        if (isTextEntry(event.target)) return;
+        event.preventDefault();
+        swallowKey(event);
+        if (spaceHeld === down) return;
+        spaceHeld = down;
+        if (!pan) canvas.style.cursor = down ? "grab" : "crosshair";
+    };
+    const onSpaceDown = (event) => onSpace(event, true);
+    const onSpaceUp = (event) => onSpace(event, false);
+    document.addEventListener("keydown", onSpaceDown, true);
+    document.addEventListener("keyup", onSpaceUp, true);
 
     ratioSelect.addEventListener("change", () => {
         const ratio = ratioValue(ratioSelect.value, working);
@@ -442,11 +556,17 @@ export async function openCropEditor(node, index) {
     let closed = false;
     // The handle the node keeps, so a removed node (or a second edit) can close
     // the editor, and the tests can drive it.
-    const handle = { overlay, canvas, changed, close: () => {}, onKey: (event) => keyHandler?.(event) };
+    const handle = {
+        overlay, canvas, changed, close: () => {},
+        onKey: (event) => keyHandler?.(event),
+        view: () => ({ ...view }),
+    };
     const close = () => {
         if (closed) return;
         closed = true;
         if (keyHandler) document.removeEventListener("keydown", keyHandler, true);
+        document.removeEventListener("keydown", onSpaceDown, true);
+        document.removeEventListener("keyup", onSpaceUp, true);
         overlay.remove();
         if (node._msEditor === handle) node._msEditor = null;
     };
@@ -498,7 +618,12 @@ export async function openCropEditor(node, index) {
             }
             return;
         }
-        if (event.key === "Escape") {
+        if (event.key === "+" || event.key === "=" || event.key === "-" || event.key === "_" || event.key === "0") {
+            swallowKey(event);
+            event.preventDefault();
+            if (event.key === "0") fitView();
+            else zoomBy(event.key === "-" || event.key === "_" ? 1 / 1.5 : 1.5, null);
+        } else if (event.key === "Escape") {
             close();
             event.preventDefault();
         } else if (isModalKey(event)) {

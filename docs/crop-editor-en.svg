@@ -15,17 +15,21 @@
     <rect x="414" y="435" width="13" height="13" rx="3"/><rect x="753" y="435" width="13" height="13" rx="3"/>
   </g>
   <g font-family="Segoe UI,Arial" font-size="12" fill="#eee">
-    <rect x="72" y="535" width="72" height="31" rx="7" fill="#303134" stroke="#5f6368"/><text x="88" y="555">↶ 90°</text>
-    <rect x="152" y="535" width="72" height="31" rx="7" fill="#303134" stroke="#5f6368"/><text x="168" y="555">↷ 90°</text>
-    <rect x="232" y="535" width="72" height="31" rx="7" fill="#35435d" stroke="#8ab4f8"/><text x="250" y="555">Flip H</text>
-    <rect x="312" y="535" width="72" height="31" rx="7" fill="#303134" stroke="#5f6368"/><text x="330" y="555">Flip V</text>
-    <text x="395" y="555" fill="#9aa0a6">Rotate 90° • H</text>
-    <text x="525" y="555" fill="#ccc">Aspect</text><rect x="575" y="535" width="92" height="31" rx="7" fill="#303134" stroke="#5f6368"/><text x="605" y="555">Free</text>
-    <rect x="677" y="535" width="92" height="31" rx="7" fill="#303134" stroke="#5f6368"/><text x="693" y="555">Reset crop</text>
-    <rect x="779" y="535" width="82" height="31" rx="7" fill="#303134" stroke="#5f6368"/><text x="796" y="555">Reset all</text>
-    <rect x="900" y="535" width="72" height="31" rx="7" fill="#303134" stroke="#5f6368"/><text x="918" y="555">Cancel</text>
-    <rect x="982" y="535" width="126" height="31" rx="7" fill="#1a73e8"/><text x="1028" y="555" fill="#fff">Apply</text>
+    <rect x="72" y="520" width="72" height="31" rx="7" fill="#303134" stroke="#5f6368"/><text x="88" y="540">↶ 90°</text>
+    <rect x="152" y="520" width="72" height="31" rx="7" fill="#303134" stroke="#5f6368"/><text x="168" y="540">↷ 90°</text>
+    <rect x="232" y="520" width="72" height="31" rx="7" fill="#35435d" stroke="#8ab4f8"/><text x="268" y="540" text-anchor="middle">Flip H</text>
+    <rect x="312" y="520" width="72" height="31" rx="7" fill="#303134" stroke="#5f6368"/><text x="348" y="540" text-anchor="middle">Flip V</text>
+    <text x="395" y="540" fill="#9aa0a6">Rotate 90° • H</text>
+    <text x="525" y="540" fill="#ccc">Aspect</text><rect x="575" y="520" width="92" height="31" rx="7" fill="#303134" stroke="#5f6368"/><text x="621" y="540" text-anchor="middle">Free</text>
+    <rect x="683" y="520" width="32" height="31" rx="7" fill="#303134" stroke="#5f6368"/><text x="699" y="540" text-anchor="middle">−</text>
+    <text x="745" y="540" fill="#cfcfcf" text-anchor="middle">100%</text>
+    <rect x="775" y="520" width="32" height="31" rx="7" fill="#303134" stroke="#5f6368"/><text x="791" y="540" text-anchor="middle">+</text>
+    <rect x="817" y="520" width="42" height="31" rx="7" fill="#303134" stroke="#5f6368"/><text x="838" y="540" text-anchor="middle">Fit</text>
+    <rect x="873" y="520" width="92" height="31" rx="7" fill="#303134" stroke="#5f6368"/><text x="919" y="540" text-anchor="middle">Reset crop</text>
+    <rect x="975" y="520" width="92" height="31" rx="7" fill="#303134" stroke="#5f6368"/><text x="1021" y="540" text-anchor="middle">Reset all</text>
+    <rect x="900" y="566" width="72" height="31" rx="7" fill="#303134" stroke="#5f6368"/><text x="936" y="586" text-anchor="middle">Cancel</text>
+    <rect x="982" y="566" width="126" height="31" rx="7" fill="#1a73e8"/><text x="1045" y="586" fill="#fff" text-anchor="middle">Apply</text>
   </g>
-  <text x="72" y="594" font-family="Segoe UI,Arial" font-size="12" fill="#aaa">Free crop: drag the black top / bottom / left / right bars or the corner handles for easier resizing.</text>
-  <text x="72" y="617" font-family="Segoe UI,Arial" font-size="12" fill="#8f8f8f">Inside crop: move • black bars/corners: resize • outside: draw a new crop • source image stays unchanged</text>
+  <text x="72" y="586" font-family="Segoe UI,Arial" font-size="12" fill="#aaa">Drag bars/corners • inside: move • outside: new crop • wheel: zoom • space or middle drag: pan</text>
+  <text x="72" y="622" font-family="Segoe UI,Arial" font-size="12" fill="#8f8f8f">Zoom to 16x for a crop trimmed to the pixel. The source image file is never modified.</text>
 </svg>
