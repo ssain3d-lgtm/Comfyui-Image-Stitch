@@ -43,6 +43,8 @@
 
 ### 1.7에서 달라진 점
 
+- **편집기에서 우클릭 복사 수정 (1.7.1)** — 예전에는 브라우저 기본 메뉴의 "이미지 복사"가 실행돼서 **격자·크롭 테두리·어두운 영역이 그대로 박힌 그림**이 복사됐습니다. 이제 편집기가 우클릭을 직접 받아 **`Copy crop to clipboard`**(Crop된 부분만, 원본 해상도로, 회전/반전 반영)과 **`Copy whole image to clipboard`** 두 가지를 제공합니다.
+
 - **갤러리 중복 정리** — 같은 구성인지를 **파일 이름이 아니라 이미지 내용(크기 + 해시)** 으로 판단합니다. 같은 사진을 다시 붙여넣으면 새 파일로 올라가기 때문에 예전에는 똑같이 생긴 항목이 하나 더 생겼지만, 이제는 기존 항목의 사용 횟수만 올라갑니다. 중복된 파일은 어느 항목에서도 안 쓰이게 되어 `Clean up unused files…`로 지울 수 있습니다.
 
 - **해상도 표시** — 카드 **오른쪽 아래 모서리**에 그 이미지의 **픽셀 크기**가 작게 표시됩니다. Crop한 이미지는 **Crop 후 크기**가 ✂ 배지와 같은 주황색으로 나오고, 카드에 마우스를 올리면 상태 줄에 `3000 × 2000 → 1400 × 2000`처럼 원본과 결과가 함께 표시됩니다.
@@ -191,6 +193,7 @@ git pull
 - `Reset crop`
 - `Reset all`
 - **크기 표시**: 헤더가 `1080 × 1920 → 792 × 1411`처럼 **원본 크기와 지금 Crop의 크기**를 드래그하는 동안 계속 보여 줍니다
+- **우클릭**: `Copy crop to clipboard`(Crop된 부분만 원본 해상도로) / `Copy whole image to clipboard` — 편집기의 격자나 테두리는 복사되지 않습니다
 - **확대 / 이동**: 휠(포인터 기준 확대), `+ / − / Fit` 버튼, 키보드 `+ / - / 0`. 이동은 **휠 버튼 드래그** 또는 **Space + 좌클릭 드래그**. 최대 16배까지 확대되며, 확대하면 핸들이 잡는 범위와 최소 Crop 크기도 함께 작아져 픽셀 단위로 다듬을 수 있습니다.
 
 회전 / 반전은 **잡아둔 Crop 영역을 그대로 유지**합니다. Crop은 이미지 내용을 따라 함께 회전·반전되므로, 편집 순서에 상관없이 같은 영역이 선택된 상태로 남습니다. Crop을 전체로 되돌리려면 `Reset crop`을 사용하세요.
@@ -446,6 +449,8 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 
 ### What changed in 1.7
 
+- **Right-click copy in the editor (1.7.1)** — it used to fall through to the browser's menu, whose "Copy image" hands over the canvas as drawn, grid and crop outline included. The editor answers it now: **`Copy crop to clipboard`** gives the crop alone at full resolution, **`Copy whole image to clipboard`** gives the picture.
+
 - **The gallery no longer fills up with the same composition.** It tells images apart by content (size and hash) instead of by file name, so the same photo pasted again — stored under a new name, as every upload is — does not make a second entry indistinguishable from the first. The duplicate files become unreferenced, ready for `Clean up unused files…`.
 
 - **Every image says what it measures.** A card carries its pixel size in its **bottom-right corner**, at half the card's type size, and a cropped card carries the size the crop leaves, in the amber its ✂ badge already uses. Hover a card and the status line shows both — `3000 × 2000 → 1400 × 2000`.
@@ -596,6 +601,7 @@ Single-click the thumbnail image area to open the editor.
 - `Reset crop`
 - `Reset all`
 - **The size, live**: the header shows the image's size and what the crop leaves of it — `1080 × 1920 → 792 × 1411` — updated while the crop is dragged
+- **Right-click**: `Copy crop to clipboard` (the crop alone, at full resolution) or `Copy whole image to clipboard` — never the grid and outline drawn over the picture
 - **Zoom and pan**: the wheel zooms around the pointer, `+ / − / Fit` and the keys `+ / - / 0` do the same from the keyboard. Pan with a **middle-button drag** or **space held with the left button**. Up to 16×, and zooming in shrinks the grab areas and the minimum crop with it, so a crop can be trimmed to the pixel.
 
 Rotating or flipping **keeps the crop you drew**. The crop travels with the image content, so the same region stays selected no matter what order you edit in. Use `Reset crop` to go back to the full frame.

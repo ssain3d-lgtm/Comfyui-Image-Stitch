@@ -23,6 +23,8 @@ import {
 import { canvasToPngFile, captureFileName, formatTime, openFramePicker } from "./frame_picker.js";
 import {
     commitImages,
+    canvasPngBlob,
+    clipboardUnavailable,
     cropPixelBox,
     drawImageScaled,
     forgetThumb,
@@ -56,6 +58,7 @@ import {
     safeJsonParse,
     setWidgetHidden,
     undoImages,
+    writePngToClipboard,
     uploadFile,
 } from "./shared.js";
 
@@ -1265,12 +1268,7 @@ async function originalPngBlob(item) {
     canvas.height = bitmap.height;
     canvas.getContext("2d").drawImage(bitmap, 0, 0);
     bitmap.close?.();
-    return await new Promise((resolve, reject) => {
-        canvas.toBlob(
-            (out) => (out ? resolve(out) : reject(new Error("could not encode the image as PNG"))),
-            "image/png",
-        );
-    });
+    return await canvasPngBlob(canvas);
 }
 
 async function copyOriginalImage(node, index) {
@@ -1287,17 +1285,7 @@ async function copyOriginalImage(node, index) {
     }
 
     try {
-        try {
-            // Handing over the pending promise keeps the click's user gesture
-            // alive across the fetch, which Safari requires.
-            await navigator.clipboard.write([
-                new ClipboardItem({ "image/png": originalPngBlob(item) }),
-            ]);
-        } catch (_) {
-            // Browsers that reject a pending promise inside ClipboardItem.
-            const blob = await originalPngBlob(item);
-            await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-        }
+        await writePngToClipboard(originalPngBlob(item));
         notify("Copied", `Image #${index + 1} copied to the clipboard, as uploaded. Ctrl+V pastes it back as another image.`);
     } catch (error) {
         notify("Copy failed", String(error?.message || error), "error");
@@ -1572,12 +1560,7 @@ async function renderStitched(node, onProgress) {
         { first: true },
     );
 
-    const blob = await new Promise((resolve, reject) => {
-        canvas.toBlob(
-            (out) => (out ? resolve(out) : reject(new Error("could not encode the result as PNG"))),
-            "image/png",
-        );
-    });
+    const blob = await canvasPngBlob(canvas);
     return { blob, width: canvas.width, height: canvas.height, skipped, key: copyCacheKey(node, planned) };
 }
 
@@ -1585,18 +1568,6 @@ async function renderStitched(node, onProgress) {
 // a second click can write the rendering the first one produced.
 function copyCacheKey(node, planned = plannedLayout(node)) {
     return planned ? `${previewContentKey(node, planned)}|${planned.finalWidth}x${planned.finalHeight}` : null;
-}
-
-// Why the clipboard cannot be written: no API at all, or an API the browser
-// only offers in a secure context. The two need different answers.
-function clipboardUnavailable() {
-    const haveApi = typeof navigator !== "undefined" && !!navigator.clipboard?.write && typeof ClipboardItem !== "undefined";
-    if (haveApi) return null;
-    if (typeof globalThis.isSecureContext === "boolean" && !globalThis.isSecureContext) {
-        return "Writing images to the clipboard needs a secure context: open ComfyUI over https:// or on localhost.";
-    }
-    return "This browser has no clipboard image API (navigator.clipboard.write with ClipboardItem). " +
-        "Right-click the node and copy an original, or queue the workflow and save the result.";
 }
 
 // "⧉ Copy": the composite as it will be stitched, on the clipboard now,
@@ -1631,16 +1602,8 @@ async function copyStitchedResult(node) {
     rendering.catch(() => {});  // observed below; keep a render failure from surfacing twice
 
     try {
-        try {
-            // The pending promise keeps the click's user gesture alive while
-            // the originals load, which Safari requires.
-            await navigator.clipboard.write([new ClipboardItem({ "image/png": rendering })]);
-        } catch (_) {
-            // A render failure rethrows here with its own message; a browser
-            // that rejects a pending promise gets the resolved blob instead.
-            const blob = await rendering;
-            await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-        }
+        // A render failure surfaces from here with its own message.
+        await writePngToClipboard(rendering);
         const notes = [];
         if (result.skipped) notes.push(`${result.skipped} not loaded, left blank`);
         if (imageInputConnected(node)) notes.push("IMAGE input frames not included");

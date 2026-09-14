@@ -1872,12 +1872,16 @@ describe("modal keyboard isolation", () => {
         // A rotation makes it worth asking before a click beside the panel.
         editor.overlay.parts[".rotate-right"].onclick();
         assert.equal(editor.changed(), true);
+        // A right-click beside the panel is for a menu, not for throwing the
+        // edit away, so it is not even asked about.
+        editor.overlay.handlers.mousedown[0]({ target: editor.overlay, button: 2 });
+        assert.equal(dom.confirms.asked.length, 0, "the secondary button asks nothing");
         dom.confirms.answer = false;
-        editor.overlay.handlers.mousedown[0]({ target: editor.overlay });
+        editor.overlay.handlers.mousedown[0]({ target: editor.overlay, button: 0 });
         assert.match(dom.confirms.asked.at(-1), /Discard/);
         assert.equal(node._msEditor, editor, "the answer was no, so the edit is still open");
         dom.confirms.answer = true;
-        editor.overlay.handlers.mousedown[0]({ target: editor.overlay });
+        editor.overlay.handlers.mousedown[0]({ target: editor.overlay, button: 0 });
         assert.equal(node._msEditor, null);
         assert.equal(editor.overlay.attached, false);
         assert.equal(node._msImages[0].rotation, 0, "and the rotation was discarded, as asked");

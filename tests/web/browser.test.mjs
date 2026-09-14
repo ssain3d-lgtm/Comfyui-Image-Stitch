@@ -271,6 +271,75 @@ describe("crop editor", () => {
         await page.close();
     });
 
+    it("copies the picture itself on right-click, never the grid drawn over it", async () => {
+        const { page, errors } = await openPage();
+        await page.evaluate(() => {
+            window.__node = window.__makeNode("editor.png");
+            window.__openCropEditor(window.__node, 0);
+        });
+        const canvas = page.locator(".ms-crop-canvas");
+        await canvas.waitFor();
+        const box = await canvas.boundingBox();
+
+        // The browser's own menu would hand over the canvas as drawn: the
+        // darkened surround, the white outline and the thirds grid.
+        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2, { button: "right" });
+        assert.deepEqual(
+            await page.locator(".ms-crop-menu button").allTextContents(),
+            ["Copy crop to clipboard", "Copy whole image to clipboard"],
+        );
+
+        await page.locator(".ms-crop-menu button", { hasText: "Copy whole image" }).click();
+        await page.waitForFunction(() => /copied/.test(document.querySelector(".ms-crop-hint").textContent));
+        const whole = await page.evaluate(async () => {
+            const items = await navigator.clipboard.read();
+            const blob = await items.find((i) => i.types.includes("image/png")).getType("image/png");
+            const bitmap = await createImageBitmap(blob);
+            const shot = document.createElement("canvas");
+            shot.width = bitmap.width;
+            shot.height = bitmap.height;
+            shot.getContext("2d").drawImage(bitmap, 0, 0);
+            // The same file, decoded on its own: the copy has to equal it pixel
+            // for pixel, which nothing drawn over the picture could survive.
+            const source = new Image();
+            source.src = `${window.__msFixtureBase}/editor.png`;
+            await source.decode();
+            const want = document.createElement("canvas");
+            want.width = source.naturalWidth;
+            want.height = source.naturalHeight;
+            want.getContext("2d").drawImage(source, 0, 0);
+            const a = shot.getContext("2d").getImageData(0, 0, shot.width, shot.height).data;
+            const b = want.getContext("2d").getImageData(0, 0, want.width, want.height).data;
+            let differing = 0;
+            if (a.length === b.length) {
+                for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) differing++;
+            }
+            return { w: bitmap.width, h: bitmap.height, source: [want.width, want.height], differing, same: a.length === b.length };
+        });
+        assert.deepEqual([whole.w, whole.h], whole.source, "the whole image, at its own size");
+        assert.ok(whole.same, "same number of samples");
+        assert.equal(whole.differing, 0, "not one pixel of the editor's overlay came with it");
+
+        // And a crop copies only the crop, at the size the header counts.
+        await page.mouse.move(box.x + box.width - 3, box.y + box.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(box.x + box.width * 0.6, box.y + box.height / 2, { steps: 4 });
+        await page.mouse.up();
+        const [, wanted, high] = (await page.locator(".dimensions").textContent()).match(/→ (\d+) × (\d+)/);
+        await page.mouse.click(box.x + box.width * 0.3, box.y + box.height / 2, { button: "right" });
+        await page.locator(".ms-crop-menu button", { hasText: "Copy crop" }).click();
+        await page.waitForFunction(() => /Crop copied/.test(document.querySelector(".ms-crop-hint").textContent));
+        const crop = await page.evaluate(async () => {
+            const items = await navigator.clipboard.read();
+            const blob = await items.find((i) => i.types.includes("image/png")).getType("image/png");
+            const bitmap = await createImageBitmap(blob);
+            return [bitmap.width, bitmap.height];
+        });
+        assert.deepEqual(crop, [Number(wanted), Number(high)], "exactly what the header said the crop measures");
+        assert.deepEqual(errors, []);
+        await page.close();
+    });
+
     it("closes on Escape without applying", async () => {
         const { page, errors } = await openPage();
         await page.evaluate(() => {

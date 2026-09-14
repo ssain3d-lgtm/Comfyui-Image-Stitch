@@ -2,6 +2,12 @@
 
 All notable changes to **Multi Stitch Images**. The version is the one in `pyproject.toml`; each release is tagged `v<version>` on `main`.
 
+## 1.7.1 — 2026-09-14
+
+### Fixed
+- **Copying from the editor gave you the editor, not the picture.** A right-click there fell through to the browser's own menu, whose "Copy image" hands over the `<canvas>` exactly as drawn — darkened surround, white crop outline, thirds grid and handle bars baked into the pixels. The editor answers the right-click itself now, with **`Copy crop to clipboard`** (the crop at its own full resolution, rotation and flip applied, cut with the same box the server uses) and **`Copy whole image to clipboard`**. A browser test copies at full frame and compares every sample against the source file, so a single pixel of overlay fails it.
+- A right-click beside the panel no longer asks whether to discard the edit, and Escape with the menu open closes the menu rather than the editor.
+
 ## 1.7.0 — 2026-09-14
 
 ### Added

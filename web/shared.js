@@ -353,6 +353,39 @@ export function cropViewToSource(crop, transform) {
     return rotateCrop(out, (360 - t.rotation) % 360);
 }
 
+// Why the clipboard cannot be written: no API at all, or an API the browser
+// only offers in a secure context. The two need different answers.
+export function clipboardUnavailable() {
+    const haveApi = typeof navigator !== "undefined" && !!navigator.clipboard?.write && typeof ClipboardItem !== "undefined";
+    if (haveApi) return null;
+    if (typeof globalThis.isSecureContext === "boolean" && !globalThis.isSecureContext) {
+        return "Writing images to the clipboard needs a secure context: open ComfyUI over https:// or on localhost.";
+    }
+    return "This browser has no clipboard image API (navigator.clipboard.write with ClipboardItem). " +
+        "Right-click the node and copy an original, or queue the workflow and save the result.";
+}
+
+// A canvas as a PNG blob, for the clipboard.
+export function canvasPngBlob(canvas) {
+    return new Promise((resolve, reject) => {
+        canvas.toBlob(
+            (blob) => (blob ? resolve(blob) : reject(new Error("could not encode the image as PNG"))),
+            "image/png",
+        );
+    });
+}
+
+// Writes one PNG to the clipboard. The pending promise goes in first: that
+// keeps the click's user gesture alive while the blob is encoded, which Safari
+// requires, and browsers that reject a pending promise get the resolved blob.
+export async function writePngToClipboard(blob) {
+    try {
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+    } catch (_) {
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": await blob })]);
+    }
+}
+
 export function isCropped(crop) {
     const c = normalizeCrop(crop);
     return Math.abs(c.x) > CROPPED_EPSILON || Math.abs(c.y) > CROPPED_EPSILON ||

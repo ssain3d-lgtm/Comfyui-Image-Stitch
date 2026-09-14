@@ -1,5 +1,8 @@
 import {
+    canvasPngBlob,
+    clipboardUnavailable,
     CROPPED_EPSILON,
+    cropPixelBox,
     cropSourceToView,
     cropViewToSource,
     imageUrl,
@@ -10,6 +13,7 @@ import {
     renderTransformedImage,
     sizeText,
     swallowKey,
+    writePngToClipboard,
     commitImages,
 } from "./shared.js";
 
@@ -35,6 +39,10 @@ function installStyles() {
 .ms-crop-zoom button{padding:6px 10px;min-width:32px}
 .ms-crop-zoom .zoom-level{font-size:12px;color:#cfcfcf;min-width:48px;text-align:center;font-variant-numeric:tabular-nums}
 .ms-crop-spacer{flex:1}.ms-crop-hint{font-size:12px;color:#aaa}.ms-transform-state{font-size:12px;color:#9aa0a6;min-width:130px}
+.ms-crop-hint.said{color:#8ab4f8}
+.ms-crop-menu{position:fixed;z-index:100001;background:#2b2b2b;border:1px solid #4a4a4a;border-radius:6px;padding:3px;display:flex;flex-direction:column;min-width:190px;box-shadow:0 6px 20px rgba(0,0,0,.55);font-size:13px}
+.ms-crop-menu button{background:transparent;border:0;color:#e6e6e6;text-align:left;padding:6px 10px;border-radius:4px;cursor:pointer;font:inherit}
+.ms-crop-menu button:hover{background:#3d5a80}
 `;
     document.head.appendChild(style);
 }
@@ -148,6 +156,11 @@ export async function openCropEditor(node, index) {
     const zoomLevel = overlay.querySelector(".zoom-level");
     const dimensions = overlay.querySelector(".dimensions");
     const transformState = overlay.querySelector(".ms-transform-state");
+    const hint = overlay.querySelector(".ms-crop-hint");
+    const hintText = hint.textContent;
+    // The row wraps around this text, so a short message in its place would
+    // move Cancel and Apply. Freeze the box at the width the hint already has.
+    hint.style.minWidth = `${Math.round(hint.getBoundingClientRect?.().width || 0)}px`;
     const flipHButton = overlay.querySelector(".flip-h");
     const flipVButton = overlay.querySelector(".flip-v");
 
@@ -504,6 +517,83 @@ export async function openCropEditor(node, index) {
     // Middle-click otherwise starts the browser's scroll-by-drag.
     canvas.addEventListener("auxclick", (event) => event.preventDefault());
 
+    // A message where the hint is, for as long as it is worth reading: the
+    // editor covers the screen, so this is where the eye already is.
+    let sayTimer = null;
+    const say = (message) => {
+        clearTimeout(sayTimer);
+        hint.textContent = message || hintText;
+        hint.classList.toggle("said", !!message);
+        if (message) sayTimer = setTimeout(() => say(null), 4000);
+    };
+
+    // The pixels themselves, at their own size: `working` carries the rotation
+    // and the flip, and the box is the server's, so what lands on the clipboard
+    // is what the run would cut.
+    const cropCanvas = () => {
+        const box = cropPixelBox(working.width, working.height, cropFraction());
+        const out = document.createElement("canvas");
+        out.width = box.w;
+        out.height = box.h;
+        out.getContext("2d").drawImage(working, box.x, box.y, box.w, box.h, 0, 0, box.w, box.h);
+        return out;
+    };
+
+    const copy = async (make, what) => {
+        const unavailable = clipboardUnavailable();
+        if (unavailable) {
+            say(unavailable);
+            return;
+        }
+        const image = make();
+        try {
+            await writePngToClipboard(canvasPngBlob(image));
+            say(`${what} copied — ${image.width} × ${image.height}`);
+        } catch (error) {
+            say(`Copy failed: ${error?.message || error}`);
+        }
+    };
+
+    // The editor's own menu. Without it the browser offers its "Copy image",
+    // which hands over the canvas as drawn — the darkened surround, the crop
+    // outline and the thirds grid baked into the picture.
+    let menu = null;
+    const closeMenu = () => {
+        menu?.remove();
+        menu = null;
+    };
+    canvas.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        closeMenu();
+        menu = document.createElement("div");
+        menu.className = "ms-crop-menu";
+        menu.style.left = `${Math.min(event.clientX, innerWidth - 210)}px`;
+        menu.style.top = `${Math.min(event.clientY, innerHeight - 90)}px`;
+        for (const [label, run] of [
+            ["Copy crop to clipboard", () => copy(cropCanvas, "Crop")],
+            ["Copy whole image to clipboard", () => copy(() => working, "Image")],
+        ]) {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.textContent = label;
+            button.addEventListener("click", () => {
+                closeMenu();
+                run();
+            });
+            menu.appendChild(button);
+        }
+        menu.addEventListener("contextmenu", (e) => e.preventDefault());
+        overlay.appendChild(menu);
+    });
+    // Dismissing the menu is all a click does: the backdrop handler below
+    // consults this so the same press does not also close the editor.
+    let menuWasOpen = false;
+    overlay.addEventListener("pointerdown", (event) => {
+        menuWasOpen = !!menu;
+        if (menu && !menu.contains(event.target)) closeMenu();
+    });
+
     overlay.querySelector(".zoom-in").onclick = () => zoomBy(1.5, null);
     overlay.querySelector(".zoom-out").onclick = () => zoomBy(1 / 1.5, null);
     overlay.querySelector(".zoom-fit").onclick = () => fitView();
@@ -569,6 +659,8 @@ export async function openCropEditor(node, index) {
     const close = () => {
         if (closed) return;
         closed = true;
+        clearTimeout(sayTimer);
+        closeMenu();
         if (keyHandler) document.removeEventListener("keydown", keyHandler, true);
         document.removeEventListener("keydown", onSpaceDown, true);
         document.removeEventListener("keyup", onSpaceUp, true);
@@ -604,7 +696,7 @@ export async function openCropEditor(node, index) {
     };
 
     overlay.addEventListener("mousedown", (event) => {
-        if (event.target !== overlay) return;
+        if (event.target !== overlay || event.button !== 0 || menuWasOpen) return;
         // A click beside the panel used to throw the edit away without a word;
         // ask first, but only when there is something to lose.
         if (changed() && !confirm("Discard the crop and rotation changes to this image?")) return;
@@ -630,7 +722,10 @@ export async function openCropEditor(node, index) {
             if (event.key === "0") fitView();
             else zoomBy(event.key === "-" || event.key === "_" ? 1 / 1.5 : 1.5, null);
         } else if (event.key === "Escape") {
-            close();
+            // The menu first: Escape closes what is on top, not the editor
+            // under it.
+            if (menu) closeMenu();
+            else close();
             event.preventDefault();
         } else if (isModalKey(event)) {
             event.preventDefault();
