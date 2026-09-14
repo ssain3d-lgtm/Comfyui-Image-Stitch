@@ -895,17 +895,21 @@ function drawCard(ctx, node, item, index, r) {
         ctx.fillText(`${t.rotation}°${t.flip_h ? "H" : ""}${t.flip_v ? "V" : ""}`, badgeX + 4, r.y + 17);
     }
     // What the image measures now — after a crop, what the crop left, in the
-    // colour the ✂ badge already uses for "this one was edited".
+    // colour the ✂ badge already uses for "this one was edited". Half the card
+    // font, in the corner: it is there to be looked up, not to sit on the
+    // picture, and the status line says it in full while the pointer is here.
     const dims = transformedCropDims(node, item);
     if (dims) {
         const label = `${dims.w}×${dims.h}`;
-        const barWidth = Math.min(r.w - 6, Math.max(46, (ctx.measureText?.(label)?.width ?? 0) + 12));
+        ctx.save();
+        ctx.font = "6px sans-serif";
+        const barWidth = Math.min(r.w - 6, (ctx.measureText?.(label)?.width ?? 0) + 8);
         ctx.fillStyle = "rgba(0,0,0,.72)";
-        ctx.fillRect(r.x + (r.w - barWidth) / 2, r.y + r.h - 21, barWidth, 18);
+        ctx.fillRect(r.x + r.w - 3 - barWidth, r.y + r.h - 14, barWidth, 11);
         ctx.fillStyle = isCropped(item.crop) ? "#f6b73c" : "#e8e8e8";
-        ctx.textAlign = "center";
-        ctx.fillText(label, r.x + r.w / 2, r.y + r.h - 8, barWidth - 6);
-        ctx.textAlign = "left";
+        ctx.textAlign = "right";
+        ctx.fillText(label, r.x + r.w - 7, r.y + r.h - 6, barWidth - 4);
+        ctx.restore();
     }
 
     const remove = thumbActionRects(r).remove;

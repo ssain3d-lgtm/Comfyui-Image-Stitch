@@ -43,7 +43,7 @@
 
 ### 1.7에서 달라진 점
 
-- **해상도 표시** — 카드마다 그 이미지의 **픽셀 크기**가 표시됩니다. Crop한 이미지는 **Crop 후 크기**가 ✂ 배지와 같은 주황색으로 나오고, 카드에 마우스를 올리면 상태 줄에 `3000 × 2000 → 1400 × 2000`처럼 원본과 결과가 함께 표시됩니다.
+- **해상도 표시** — 카드 **오른쪽 아래 모서리**에 그 이미지의 **픽셀 크기**가 작게 표시됩니다. Crop한 이미지는 **Crop 후 크기**가 ✂ 배지와 같은 주황색으로 나오고, 카드에 마우스를 올리면 상태 줄에 `3000 × 2000 → 1400 × 2000`처럼 원본과 결과가 함께 표시됩니다.
 - **편집기 헤더가 Crop 크기를 실시간으로 셉니다** — 지금까지는 원본 크기만 보여 줘서 Crop 결과 해상도를 Apply 후에야 알 수 있었습니다. 이제 드래그하는 동안 `1080 × 1920 → 792 × 1411`이 계속 갱신되어 **원하는 픽셀 크기에 맞춰** Crop할 수 있습니다.
 - 이 숫자는 서버가 실제로 자를 때 쓰는 계산(`_crop_box`)과 같은 함수에서 나오므로, 화면에 보이는 해상도와 실행 결과가 어긋나지 않습니다.
 
@@ -202,7 +202,7 @@ Crop / 회전 / 반전 정보만 workflow에 저장하는 **비파괴 방식**�
 - **카드 클릭**(누르고 그 자리에서 떼기) → Edit 즉시 열기
 - **카드를 끌기** → 순서 변경. 놓일 자리가 **파란 막대**로 카드 사이에 표시되고, 끌리는 카드는 반투명해집니다.
 - **카드 우클릭** → `Edit · Duplicate · Copy to clipboard · Replace · Remove`
-- 카드 아래쪽에 **그 이미지의 픽셀 크기**가 표시됩니다. Crop한 카드는 Crop 후 크기를 주황색으로 보여 주고, 마우스를 올리면 상태 줄에 원본 크기까지 함께 나옵니다.
+- 카드 **오른쪽 아래 모서리**에 **그 이미지의 픽셀 크기**가 작게 표시됩니다. Crop한 카드는 Crop 후 크기를 주황색으로 보여 주고, 마우스를 올리면 상태 줄에 원본 크기까지 함께 나옵니다.
 - 툴바 **`⧉ Copy`** → 합성 결과 복사
 - Drag 판정 거리는 ComfyUI Canvas 좌표가 아닌 **실제 화면 픽셀 기준**이라 Zoom 배율에 영향을 덜 받습니다. 그 거리를 넘지 않고 떼면 클릭으로 처리되어 편집기가 열립니다.
 
@@ -444,7 +444,7 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 
 ### What changed in 1.7
 
-- **Every image says what it measures.** A card carries its pixel size along the bottom, and a cropped one carries the size the crop leaves, in the amber its ✂ badge already uses. Hover a card and the status line shows both — `3000 × 2000 → 1400 × 2000`.
+- **Every image says what it measures.** A card carries its pixel size in its **bottom-right corner**, at half the card's type size, and a cropped card carries the size the crop leaves, in the amber its ✂ badge already uses. Hover a card and the status line shows both — `3000 × 2000 → 1400 × 2000`.
 - **The editor counts the crop while you drag it.** Its header showed the source size and nothing else, so the size a crop produced could only be found out after applying it; it now reads `1080 × 1920 → 792 × 1411` and follows the rectangle, which is what lets you crop *to* a size instead of towards one.
 - Both numbers come from the function the server crops with, rounding included, so the UI cannot report a resolution the run would not produce.
 
@@ -605,7 +605,7 @@ A card carries no buttons: the whole picture is the target, and everything else 
 - **Click a card** (press and release without moving) → open the editor immediately
 - **Drag a card** → reorder. A **blue bar** between the cards marks the slot it would drop into, and the card in hand goes translucent.
 - **Right-click a card** → `Edit · Duplicate · Copy to clipboard · Replace · Remove`
-- Each card shows **its pixel size** along the bottom; a cropped card shows what the crop leaves, in amber. Hover it and the status line adds the size before the crop.
+- Each card shows **its pixel size** in its bottom-right corner, small; a cropped card shows what the crop leaves, in amber. Hover it and the status line adds the size before the crop.
 - **`⧉ Copy`** in the toolbar → copies the stitched result
 - Drag threshold is measured in **real browser pixels**, not ComfyUI graph coordinates, so canvas zoom does not make normal clicks behave like drags. Release inside that threshold and it counts as a click, opening the editor.
 
