@@ -40,6 +40,12 @@
 - 일반 `IMAGE` 출력 → `Preview Image`, `Save Image`, `VAE Encode` 등에 바로 연결
 - 추가 Python 패키지 불필요 — 동영상 서버 디코딩에만 PyAV가 쓰이고 최신 ComfyUI에는 이미 포함되어 있습니다(ComfyUI-Manager용 `requirements.txt`에도 적어 두었습니다)
 
+### 1.3에서 달라진 점
+
+- **`size_aspect`** — `width`/`height` 출력의 **비율**을 고를 수 있습니다. `reference`(기본)는 예전과 똑같이 기준 이미지의 비율을 따르고, `9:16`처럼 지정하면 그 비율로 바꾸되 **픽셀 수는 그대로** 유지합니다. 원본이 3:4인데 모델에는 9:16으로 넣어야 할 때 노드를 더 붙이지 않아도 됩니다.
+- **Nodes 2.0 열 수가 캔버스와 같아졌습니다** — Vue 모드가 노드 폭과 무관하게 3열로 고정돼 있어 같은 노드가 캔버스에서는 8열, Vue에서는 3열로 보이던 문제를 고쳤습니다. 양쪽이 `shared.js`의 같은 함수를 씁니다.
+- **Vue 모드 높이를 실측합니다** — 툴바가 두 줄로 접히는데도 한 줄로 계산해 15px 모자라던 것을 DOM 실측 + `ResizeObserver`로 바꿨습니다.
+
 ### 1.2에서 달라진 점
 
 - **툴바 한 줄** `+ Add · Clear · ⧉ Copy · ↶ ↷ · Preview · Options`와 **접히는 고급 옵션** — 기본 상태 위젯 10행 → 5행. 기본값이 아닌 옵션은 접혀 있어도 보입니다.
@@ -47,7 +53,7 @@
 - **`match_image_size` 기본값이 `true`** — 새 노드는 처음부터 이미지 높이(세로 Strip은 너비)를 맞춰 붙입니다. 저장된 워크플로우는 자기 값을 유지합니다.
 - **`match_reference`** — `match_image_size`의 기준을 첫 번째 / 가장 큰 / 가장 작은 이미지 중에서 고릅니다(`Options ▸` 안). 기본값 `smallest`는 순서를 바꾸지 않아도 확대 없이 높이를 맞춥니다. 이 옵션이 생기기 전에 저장한 워크플로우는 예전 동작인 `first`로 열립니다.
 - **동영상에서 장면 캡처** — 동영상을 넣으면 프레임 선택기가 열리고, 캡처한 프레임은 보통 이미지처럼 편집·합성됩니다. 동영상은 temp 폴더에만 잠시 있다가 캡처가 끝나면 지워집니다. 브라우저가 못 여는 코덱은 서버의 PyAV가 대신 디코딩하고, 재생되는 동영상도 "server capture"로 프레임 단위 정확한 캡처를 받을 수 있습니다.
-- **`width` / `height` 출력과 크기 패널** — 기준 이미지(기본 첫 번째)의 크기를 `size_megapixels`로 조정하고 `size_divisible_by`(기본 32) 배수로 맞춘 값을 출력합니다. 제목줄의 **`📐 Size`** 버튼을 켜면 노드 아래에 비율 상자와 `672 x 1184 | 9:16 | 0.80 MP | divisible by 32` 같은 읽기가 붙습니다.
+- **`width` / `height` 출력과 크기 패널** — 기준 이미지(기본 첫 번째)의 크기를 `size_aspect` 비율로 바꾸고(기본은 원본 비율 유지) `size_megapixels`로 조정한 뒤 `size_divisible_by`(기본 32) 배수로 맞춘 값을 출력합니다. 제목줄의 **`📐 Size`** 버튼을 켜면 노드 아래에 비율 상자와 `672 x 1184 | 9:16 | 0.80 MP | divisible by 32` 같은 읽기가 붙습니다.
 - **목록이 아래로 늘어남** — 스크롤 대신 이미지 수만큼 노드가 아래로 커져 모든 카드가 보입니다.
 - 모든 위젯과 출력에 **툴팁** — 마우스를 올리면 설명이 보입니다.
 - **한국어 UI** — ComfyUI 언어를 한국어로 두면 위젯 이름·선택지·툴팁·노드 설명이 한국어로 표시됩니다.
@@ -230,6 +236,7 @@ grid_columns = 3
 - `size_reference` — 기준 이미지의 **번호**: `1`(기본) = 목록의 첫 번째, `2` = 두 번째… IMAGE 입력의 프레임은 붙여 넣은 이미지 뒤에 이어서 세고, 끝을 넘는 번호는 마지막 이미지를 씁니다(패널에 표시).
 - `size_megapixels` — `0`(기본)이면 기준 이미지의 픽셀 수 그대로, 값을 주면 비율을 유지한 채 그 메가픽셀로 확대·축소합니다.
 - `size_divisible_by` — 각 변을 이 값의 배수로 반올림합니다(기본 `32`, 최소 이 값). 예: 1440×2560을 0.8 MP·32로 → **672×1184**.
+- `size_aspect` — 출력의 **비율**입니다. 기본 `reference`는 기준 이미지의 비율 그대로이고, `1:1`·`16:9`·`9:16`·`4:3`·`3:4`·`3:2`·`2:3` 중 하나를 고르면 그 비율로 바꿉니다. **픽셀 수는 기준 이미지 그대로 유지**하므로(=`size_megapixels`가 0보다 크면 그 값) 비율만 바뀌고 생성 부담은 그대로입니다. 예: 1200×1600(3:4)에 `9:16` → **1024×1856**. 원본은 3:4인데 모델에는 9:16으로 넣어야 할 때 노드를 하나 더 붙일 필요가 없습니다.
 
 이 출력은 `Empty Latent Image`나 리사이즈 노드에 바로 연결해 쓰는 용도입니다. 제목줄 오른쪽의 **`📐 Size`** 버튼(또는 우클릭 → `Show size panel`)을 켜면 노드 아래에 그 크기의 비율 상자와 `672 x 1184 | 9:16 | 0.80 MP | divisible by 32` 읽기, 그리고 어느 이미지에서 나왔는지가 표시되고 위 세 위젯이 나타납니다. 끄면 위젯도 함께 숨겨지며(기본 위젯은 그대로 5개), 켜짐 여부는 워크플로우에 저장됩니다. 계산은 백엔드와 같은 식(`_reference_size` ↔ `referenceSize`)을 쓰고 CI에서 대조합니다.
 
@@ -291,6 +298,7 @@ grid_columns = 3
 | `size_reference` | `1` – `256`, `width`/`height` 출력의 기준 이미지 번호 (1 = 첫 번째) | `1` |
 | `size_megapixels` | `0` = 기준 이미지 크기 그대로 / 최대 64 MP | `0` |
 | `size_divisible_by` | `1` – `512`, 각 변을 이 배수로 반올림 | `32` |
+| `size_aspect` | `reference` / `1:1` / `16:9` / `9:16` / `4:3` / `3:4` / `3:2` / `2:3` | `reference` |
 | `images` (입력) | 선택 IMAGE 배치 — 붙여넣은 이미지 뒤에 추가 | — |
 | `width` / `height` (출력) | 기준 이미지 크기 → `size_megapixels` → `size_divisible_by` 배수 | — |
 
@@ -404,6 +412,12 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 - **Output Size Safety Guard** before giant tensors are allocated
 - Standard `IMAGE` output → `Preview Image`, `Save Image`, `VAE Encode`, etc.
 - No extra Python packages required — only server-side video decoding uses PyAV, which current ComfyUI already installs (and `requirements.txt` lists it for ComfyUI-Manager)
+
+### What changed in 1.3
+
+- **`size_aspect`** — the `width` / `height` outputs can take a **shape**. `reference` (the default) follows the reference image exactly as before; pick `9:16` and they take that ratio while **keeping the same pixel count**. No second node needed when the source is 3:4 but the model wants 9:16.
+- **Nodes 2.0 uses the same columns as the canvas** — the Vue mode was fixed at three columns whatever the node's width, so one node showed 8 columns on the canvas and 3 in Vue. Both call one function in `shared.js` now.
+- **The Vue view measures its own height** — its toolbar wraps to two rows at the default width but was counted as one, leaving it 15px short. It is read from the DOM now, with a `ResizeObserver` for resizes.
 
 ### What changed in 1.2
 
@@ -644,6 +658,7 @@ Hover any widget or output slot for its **tooltip**; the table below is the summ
 | `size_reference` | `1` – `256`, the number of the reference image for the `width`/`height` outputs (1 = first) | `1` |
 | `size_megapixels` | `0` = the reference's own size, up to 64 MP | `0` |
 | `size_divisible_by` | `1` – `512`, each side rounded to this multiple | `32` |
+| `size_aspect` | `reference` / `1:1` / `16:9` / `9:16` / `4:3` / `3:4` / `3:2` / `2:3` | `reference` |
 | `images` (input) | optional IMAGE batch, appended after the pasted images | — |
 | `width` / `height` (outputs) | reference image size → `size_megapixels` → snapped to `size_divisible_by` | — |
 

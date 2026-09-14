@@ -8,6 +8,20 @@ export const MAX_IMAGES = 256;
 // 1 MiB per image instead of a full-resolution canvas each.
 export const THUMB_MAX_SIDE = 512;
 
+// The thumbnail grid, shared so the canvas and the DOM rendering lay out the
+// same list the same way. The node's minimum width gives three columns; a
+// wider node fits more cards of about the same size rather than stretching
+// three of them.
+export const NODE_MIN_WIDTH = 420;
+export const THUMB_TARGET_W = 130;
+export const THUMB_GAP = 7;
+export const THUMB_PADDING = 16;
+
+export function columnsForWidth(width) {
+    const usable = Math.max(NODE_MIN_WIDTH, Number(width) || NODE_MIN_WIDTH) - THUMB_PADDING;
+    return Math.max(1, Math.floor((usable + THUMB_GAP) / (THUMB_TARGET_W + THUMB_GAP)));
+}
+
 export function defaultCrop() {
     return { x: 0, y: 0, w: 1, h: 1 };
 }
@@ -45,6 +59,18 @@ export const MATCH_REFERENCES = ["first", "largest", "smallest"];
 // size_reference is an image number, 1 = the first; these names it briefly
 // used are still understood.
 export const LEGACY_SIZE_REFERENCES = ["first", "largest", "smallest"];
+// Mirrors _SIZE_ASPECTS. "reference" keeps the image's own shape, which is what
+// the outputs did before presets existed.
+export const SIZE_ASPECTS = ["reference", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"];
+
+// Mirrors _aspect_ratio: the width/height a preset names, 0 to keep the
+// image's own. Anything unknown — including the value a workflow saved before
+// this existed — is "reference".
+export function aspectRatio(sizeAspect) {
+    if (typeof sizeAspect !== "string" || !SIZE_ASPECTS.includes(sizeAspect) || sizeAspect === "reference") return 0;
+    const [w, h] = sizeAspect.split(":");
+    return Number(w) / Number(h);
+}
 export const OUTPUT_LIMITS = ["none", "max_width", "max_height", "max_long_side"];
 
 // Python's round() is half-to-even; Math.round is half-up. The backend sizes
@@ -115,10 +141,17 @@ export function sizeReferenceIndex(dimensions, sizeReference) {
 // nearest multiple of the step (never below it). Half-even rounding, like
 // Python's round().
 
-export function referenceSize(dimensions, sizeReference, megapixels, divisibleBy) {
+export function referenceSize(dimensions, sizeReference, megapixels, divisibleBy, sizeAspect = "reference") {
     const index = sizeReferenceIndex(dimensions, sizeReference);
     let width = dimensions[index].w;
     let height = dimensions[index].h;
+    // A preset replaces the shape and keeps the area, as the backend does.
+    const ratio = aspectRatio(sizeAspect);
+    if (ratio > 0) {
+        const area = width * height;
+        height = Math.sqrt(area / ratio);
+        width = height * ratio;
+    }
     const target = Number(megapixels) || 0;
     if (target > 0) {
         const scale = Math.sqrt(target * 1_000_000 / (width * height));

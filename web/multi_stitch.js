@@ -18,13 +18,17 @@ import {
     layoutPlacements,
     LEGACY_SIZE_REFERENCES,
     limitedSize,
+    columnsForWidth,
     loadThumb,
     loadTransformedThumb,
     MAX_IMAGES,
+    NODE_MIN_WIDTH,
     normalizeCrop,
     normalizeTransform,
     redoImages,
     referenceSize,
+    aspectRatio,
+    THUMB_GAP as SHARED_THUMB_GAP,
     renderTransformedImage,
     retryThumb,
     sizeReferenceIndex,
@@ -37,12 +41,8 @@ import {
 
 const NODE_TYPE = "MultiStitchImages";
 const THUMB_HEIGHT = 92;
-const THUMB_GAP = 7;
-// The card width the three-column default gives at MIN_NODE_WIDTH. Columns are
-// derived from it, so a node made wider shows more images instead of stretching
-// three cards into letterboxes.
-const THUMB_TARGET_W = 130;
-const MIN_NODE_WIDTH = 420;
+const THUMB_GAP = SHARED_THUMB_GAP;
+const MIN_NODE_WIDTH = NODE_MIN_WIDTH;
 // Deliberately measured in browser/client pixels, not graph coordinates, so
 // ComfyUI zoom cannot turn a normal click into an accidental reorder.
 const DRAG_THRESHOLD_PX = 6;
@@ -83,7 +83,7 @@ const nodesWithVideos = new Set();
 // workflow; its three widgets show only while it is on.
 const SIZE_PANEL_H = 176;
 const SIZE_PANEL_BOX_H = 132;
-const SIZE_WIDGETS = ["size_reference", "size_megapixels", "size_divisible_by"];
+const SIZE_WIDGETS = ["size_reference", "size_megapixels", "size_divisible_by", "size_aspect"];
 const titleHeight = () => globalThis.LiteGraph?.NODE_TITLE_HEIGHT || 30;
 // One toolbar row under the status line holds every action, so no widget
 // rows are spent on buttons.
@@ -146,8 +146,7 @@ function listCount(node) {
 }
 
 function columnsOf(node) {
-    const width = nodeWidth(node) - 16;
-    return Math.max(1, Math.floor((width + THUMB_GAP) / (THUMB_TARGET_W + THUMB_GAP)));
+    return columnsForWidth(nodeWidth(node));
 }
 
 function rowsOf(node) {
@@ -245,11 +244,15 @@ function sizeReadout(node) {
     resolvePendingSizeReference(node, dims);
     const settings = readSettings(node);
     try {
-        const size = referenceSize(dims, settings.sizeReference, settings.sizeMegapixels, settings.sizeDivisibleBy);
+        const size = referenceSize(dims, settings.sizeReference, settings.sizeMegapixels, settings.sizeDivisibleBy, settings.sizeAspect);
         const index = sizeReferenceIndex(dims, settings.sizeReference);
         const requested = Math.trunc(Number(settings.sizeReference));
         return {
-            ...size, index, ref: dims[index], ratio: aspectLabel(dims[index].w, dims[index].h),
+            // The label describes the outputs: the preset when one shapes them,
+            // the reference image's own ratio when nothing does.
+            ...size, index, ref: dims[index],
+            aspect: aspectRatio(settings.sizeAspect) > 0 ? settings.sizeAspect : null,
+            ratio: aspectRatio(settings.sizeAspect) > 0 ? settings.sizeAspect : aspectLabel(dims[index].w, dims[index].h),
             megapixels: size.w * size.h / 1_000_000, step: settings.sizeDivisibleBy,
             note: Number.isFinite(requested) && requested > dims.length ? ` — size_reference ${requested} is past the end` : "",
         };
@@ -336,7 +339,10 @@ function drawSizePanel(ctx, node, rect) {
     ctx.textAlign = "left";
     ctx.font = "11px sans-serif";
     ctx.fillStyle = "#7fb08f";
-    ctx.fillText(`from image ${readout.index + 1} (${readout.ref.w}×${readout.ref.h})${readout.note}`, box.x + 6, box.y + 14, box.w - 12);
+    const from = readout.aspect
+        ? `image ${readout.index + 1} (${readout.ref.w}×${readout.ref.h}) at ${readout.aspect}`
+        : `image ${readout.index + 1} (${readout.ref.w}×${readout.ref.h})`;
+    ctx.fillText(`from ${from}${readout.note}`, box.x + 6, box.y + 14, box.w - 12);
     ctx.restore();
 }
 
@@ -562,6 +568,7 @@ function readSettings(node) {
         spacingColor: value("spacing_color", "white"),
         customColor: normalizeHex(value("custom_spacing_color", "#808080")),
         sizeReference: value("size_reference", 1),
+        sizeAspect: value("size_aspect", "reference"),
         sizeMegapixels: Math.max(0, Number(value("size_megapixels", 0)) || 0),
         sizeDivisibleBy: Math.max(1, Math.trunc(Number(value("size_divisible_by", 32)) || 32)),
     };

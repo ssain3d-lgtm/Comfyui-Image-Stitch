@@ -6,7 +6,7 @@
 // state through a DOM widget and routes every button to the same functions
 // the canvas UI calls; it is installed only while that mode is on, so the
 // classic canvas keeps its own drawing.
-import { isCropped, isTransformed, normalizeTransform } from "./shared.js";
+import { columnsForWidth, isCropped, isTransformed, normalizeTransform, THUMB_GAP } from "./shared.js";
 import { formatTime } from "./frame_picker.js";
 
 // The "$$" prefix marks a widget the frontend must treat as a pseudo widget:
@@ -16,6 +16,7 @@ export const DOM_VIEW_WIDGET = "$$multi_stitch_view";
 const PREVIEW_H = 150;
 const CARD_H = 92;
 const PANEL_H = 176;
+const TOOLBAR_ROW_H = 30;
 const REFRESH_MS = 300;
 
 export function vueNodesEnabled(app) {
@@ -43,7 +44,7 @@ function installStyles() {
 .ms-dom-view button:disabled{opacity:.45;cursor:default}
 .ms-dom-view button.on{background:#2f6b45;border-color:#4ade80;color:#c9f7d9}
 .ms-dom-view canvas.preview{width:100%;height:${PREVIEW_H}px;display:block;background:#101010;border:1px solid #333;border-radius:3px}
-.ms-dom-view .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}
+.ms-dom-view .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:${THUMB_GAP}px}
 .ms-dom-view .card{position:relative;height:${CARD_H}px;background:#171717;border:1px solid #555;border-radius:3px;overflow:hidden;cursor:grab}
 .ms-dom-view .card.dragging{opacity:.55}
 .ms-dom-view .card.drop-before,.ms-dom-view .card.drop-after{box-shadow:inset 3px 0 0 #8ab4f8}
@@ -107,11 +108,22 @@ function paintThumb(canvas, draw) {
 }
 
 // The view's height: what the widget asks the node for.
+// What the view needs when it cannot be measured — the first render, and the
+// tests. Once it is on the page the real height is read from the DOM instead:
+// the toolbar wraps at narrow widths and large UI scales, and guessing one row
+// for it leaves the node short.
 function viewHeight(node, actions) {
     const count = actions.items(node).length + actions.videos(node).length;
-    const rows = Math.max(1, Math.ceil(count / 3));
-    return 22 + 30 + (actions.previewOn(node) && actions.items(node).length ? PREVIEW_H + 8 : 0)
-        + rows * (CARD_H + 7) + (actions.sizePanelOn(node) ? PANEL_H + 8 : 0) + 8;
+    const rows = Math.max(1, Math.ceil(count / columnsForWidth(node?.size?.[0])));
+    return 22 + TOOLBAR_ROW_H + (actions.previewOn(node) && actions.items(node).length ? PREVIEW_H + 8 : 0)
+        + rows * (CARD_H + THUMB_GAP) + (actions.sizePanelOn(node) ? PANEL_H + 8 : 0) + 8;
+}
+
+// The height the rendered view actually occupies, or null where the DOM cannot
+// say (the test harness, a view not yet attached).
+function measuredHeight(root) {
+    const height = Math.round(Number(root?.scrollHeight) || 0);
+    return height > 0 ? height : null;
 }
 
 export function domView(node) {
@@ -356,12 +368,14 @@ export function installDomView(node, actions) {
         else cards.innerHTML = "";
         items.forEach((item, index) => cards.appendChild(cardFor(item, index)));
         videos.forEach((entry) => cards.appendChild(videoCardFor(entry)));
+        const columns = columnsForWidth(node?.size?.[0]);
+        if (cards.style) cards.style.gridTemplateColumns = `repeat(${columns}, 1fr)`;
         cards.hidden = !items.length && !videos.length;
         empty.hidden = items.length > 0 || videos.length > 0;
         panel.hidden = !sizeOn;
         if (sizeOn) paintSoon(() => paintThumb(panel, (ctx, rect) => actions.drawSizePanel(ctx, node, rect)));
 
-        const height = viewHeight(node, actions);
+        const height = measuredHeight(root) ?? viewHeight(node, actions);
         if (height !== view.height) {
             view.height = height;
             actions.resized?.(node, height);
@@ -399,8 +413,26 @@ export function installDomView(node, actions) {
         };
         view.widget.serializeValue = () => undefined;
     }
+    if (typeof ResizeObserver === "function") {
+        view.observer = new ResizeObserver(() => {
+            if (!view.alive) return;
+            const height = measuredHeight(root);
+            if (height && height !== view.height) {
+                view.height = height;
+                actions.resized?.(node, height);
+            }
+        });
+        try {
+            view.observer.observe(root);
+        } catch (_) {
+            view.observer = null;
+        }
+    }
+
     view.destroy = () => {
         view.alive = false;
+        view.observer?.disconnect?.();
+        view.observer = null;
         closeMenu();
         clearTimeout(view.timer);
         const widget = view.widget;

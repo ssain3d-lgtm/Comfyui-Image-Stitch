@@ -102,6 +102,10 @@ _HIGH_DEPTH_RANGES = {
 
 _DIRECTIONS = ("right", "down", "left", "up")
 _LAYOUT_MODES = ("strip", "grid")
+# Aspect presets for the width/height outputs. "reference" keeps the reference
+# image's own shape, which is what the outputs did before this existed, so a
+# saved workflow that has no value for it behaves exactly as it did.
+_SIZE_ASPECTS = ("reference", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3")
 _MATCH_REFERENCES = ("first", "largest", "smallest")
 # New nodes match to the smallest image, so nothing is ever upscaled. A prompt
 # that omits the value — one written before the option existed — keeps "first",
@@ -556,11 +560,28 @@ def _size_reference_index(dimensions: list[tuple[int, int]], size_reference: obj
     return min(max(1, number), len(dimensions)) - 1
 
 
+def _aspect_ratio(size_aspect: object) -> float:
+    """The width/height a preset names, or 0 for "reference" (keep the image's).
+
+    A value a saved workflow never carried arrives as None, which is the same
+    as "reference": the outputs then behave exactly as they did before the
+    preset existed.
+    """
+    if size_aspect is None:
+        return 0.0
+    name = _require_choice("size_aspect", size_aspect, _SIZE_ASPECTS)
+    if name == "reference":
+        return 0.0
+    w, h = name.split(":")
+    return float(w) / float(h)
+
+
 def _reference_size(
     dimensions: list[tuple[int, int]],
     size_reference: object,
     megapixels: float,
     divisible_by: int,
+    size_aspect: object = None,
 ) -> tuple[int, int]:
     """Width and height derived from one image of the list: that image's own
     size, optionally rescaled to a megapixel target, snapped to a multiple.
@@ -573,6 +594,14 @@ def _reference_size(
     """
     index = _size_reference_index(dimensions, size_reference)
     width, height = float(dimensions[index][0]), float(dimensions[index][1])
+    # A preset replaces the shape but keeps the area: the pixel count stays the
+    # reference image's unless a megapixel target says otherwise, so switching
+    # 3:4 to 9:16 does not silently change how much there is to generate.
+    ratio = _aspect_ratio(size_aspect)
+    if ratio > 0:
+        area = width * height
+        height = math.sqrt(area / ratio)
+        width = height * ratio
     megapixels = float(megapixels or 0)
     if megapixels > 0:
         scale = math.sqrt(megapixels * 1_000_000 / (width * height))
@@ -1138,6 +1167,15 @@ class MultiStitchImages:
                                "pixels, never below one multiple. Latents need a multiple of 8; 32 or 64 "
                                "suits most models.",
                 }),
+                # Last again, for the same reason as size_reference above.
+                "size_aspect": (list(_SIZE_ASPECTS), {
+                    "default": "reference",
+                    "tooltip": "Shape of the width and height outputs. 'reference' keeps the reference "
+                               "image's own aspect ratio; any other value gives that ratio instead, at "
+                               "size_megapixels (or the reference image's pixel count when that is 0), "
+                               "still snapped to size_divisible_by. Useful when the source is 3:4 but the "
+                               "model should be fed 9:16.",
+                }),
             },
         }
 
@@ -1181,6 +1219,7 @@ class MultiStitchImages:
         size_reference=1,
         size_megapixels=0.0,
         size_divisible_by=32,
+        size_aspect="reference",
     ):
         try:
             items = json.loads(images_json or "[]")
@@ -1217,7 +1256,9 @@ class MultiStitchImages:
         # The size outputs come from the same measurements the canvas is laid
         # out from, so they describe an image as it lands there. They cost
         # nothing, so a bad choice is rejected before anything is decoded.
-        width, height = _reference_size(dimensions, size_reference, size_megapixels, size_divisible_by)
+        width, height = _reference_size(
+            dimensions, size_reference, size_megapixels, size_divisible_by, size_aspect,
+        )
 
         # Decode pass: _compose_from validates the canvas first, then pulls
         # each source through its loader one at a time.
@@ -1254,6 +1295,7 @@ class MultiStitchImages:
                 "cells_resolution": cells_resolution, "minimum_image_side": minimum_image_side,
                 "match_reference": match_reference, "size_reference": size_reference,
                 "size_megapixels": size_megapixels, "size_divisible_by": size_divisible_by,
+                "size_aspect": size_aspect,
             },
             image,
             input_frames=len(frames),

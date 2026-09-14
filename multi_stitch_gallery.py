@@ -43,7 +43,7 @@ SETTING_KEYS = (
     "grid_columns", "custom_spacing_color", "output_limit", "output_limit_px",
     "grid_cell_width", "grid_cell_height", "output_cells", "cells_resolution",
     "minimum_image_side", "match_reference", "size_reference", "size_megapixels",
-    "size_divisible_by",
+    "size_divisible_by", "size_aspect",
 )
 _ITEM_KEYS = ("filename", "subfolder", "type", "crop", "rotation", "flip_h", "flip_v", "source")
 

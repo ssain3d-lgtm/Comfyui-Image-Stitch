@@ -458,7 +458,7 @@ class MultiStitchTests(unittest.TestCase):
         self.assertEqual(
             list(optional),
             ["images", "cells_resolution", "minimum_image_side", "match_reference",
-             "size_reference", "size_megapixels", "size_divisible_by"],
+             "size_reference", "size_megapixels", "size_divisible_by", "size_aspect"],
         )
         self.assertEqual(optional["images"][0], "IMAGE")
         self.assertEqual(optional["match_reference"][0], list(ms._MATCH_REFERENCES))
@@ -855,6 +855,27 @@ class MultiStitchTests(unittest.TestCase):
             ms._reference_size(dims, "biggest", 0, 1)
         with self.assertRaisesRegex(ValueError, "at least one image"):
             ms._reference_size([], 1, 0, 1)
+
+    def test_size_aspect_reshapes_the_outputs_without_changing_their_area(self):
+        """A preset replaces the shape; the pixel count stays the reference image's."""
+        dims = [(1200, 1600)]   # 3:4, 1.92 MP
+        self.assertEqual(ms._reference_size(dims, 1, 0, 32), (1216, 1600), "'reference' keeps its own shape")
+        self.assertEqual(ms._reference_size(dims, 1, 0, 32, "reference"), (1216, 1600))
+        self.assertEqual(ms._reference_size(dims, 1, 0, 32, None), (1216, 1600),
+                         "a workflow saved before the preset existed carries no value")
+
+        tall = ms._reference_size(dims, 1, 0, 32, "9:16")
+        self.assertEqual(tall, (1024, 1856))
+        wide = ms._reference_size(dims, 1, 0, 32, "16:9")
+        self.assertEqual(wide, (1856, 1024), "the same ratio the other way round")
+        for shaped in (tall, wide):
+            self.assertLess(abs(shaped[0] * shaped[1] / (1200 * 1600) - 1), 0.05,
+                            f"{shaped} is about as many pixels as the reference image")
+
+        # A megapixel target still wins over the reference image's own area.
+        self.assertEqual(ms._reference_size(dims, 1, 1.0, 64, "1:1"), (1024, 1024))
+        with self.assertRaisesRegex(ValueError, "size_aspect"):
+            ms._reference_size(dims, 1, 0, 32, "21:9")
 
     def test_reference_size_rescales_to_megapixels_and_snaps_to_a_multiple(self):
         # 1440×2560 at 0.8 MP: scale = sqrt(800000 / 3686400) = 0.4659, so 670.9×1192.6, each to the nearest 32.

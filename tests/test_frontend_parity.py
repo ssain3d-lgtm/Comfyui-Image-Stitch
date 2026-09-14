@@ -45,7 +45,7 @@ const out = {
         layoutPlacements(dims.map(([w, h]) => ({ w, h })), layout, direction, match, gc, sw, cw, ch, ref)),
     limit: (cases.limit || []).map(([w, h, mode, px]) => limitedSize(w, h, mode, px)),
     box: (cases.box || []).map(([w, h, c]) => cropPixelBox(w, h, c)),
-    size: (cases.size || []).map(([dims, ref, mp, d]) => referenceSize(dims.map(([w, h]) => ({ w, h })), ref, mp, d)),
+    size: (cases.size || []).map(([dims, ref, mp, d, aspect]) => referenceSize(dims.map(([w, h]) => ({ w, h })), ref, mp, d, aspect)),
 };
 process.stdout.write(JSON.stringify(out));
 """
@@ -196,16 +196,22 @@ class FrontendParityTests(unittest.TestCase):
         for _ in range(400):
             dims = [(rng.randint(1, 4000), rng.randint(1, 4000)) for _ in range(rng.randint(1, 6))]
             cases.append([dims, rng.choice([1, 2, 3, 7, 0, "first", "largest", "smallest"]), rng.choice([0, 0.5, 0.8, 1, 2.25, 12]),
-                          rng.choice([1, 8, 16, 32, 64])])
+                          rng.choice([1, 8, 16, 32, 64]), rng.choice(ms._SIZE_ASPECTS)])
         # Exact halves, where half-even rounding differs from Math.round.
-        cases += [[[(48, 48)], 1, 0, 32], [[(80, 80)], 1, 0, 32], [[(1440, 2560)], 1, 0.8, 32],
-                  [[(10, 10), (20, 5), (5, 20)], 2, 0, 8], [[(100, 100), (50, 200)], 9, 1, 64],
-                  [[(10, 10), (20, 5), (5, 20)], "largest", 0, 8], [[(100, 100), (50, 200)], "smallest", 1, 64],
-                  [[(3, 3)], 1, 0, 16]]
+        cases += [[[(48, 48)], 1, 0, 32, "reference"], [[(80, 80)], 1, 0, 32, "reference"],
+                  [[(1440, 2560)], 1, 0.8, 32, "reference"],
+                  [[(10, 10), (20, 5), (5, 20)], 2, 0, 8, "reference"], [[(100, 100), (50, 200)], 9, 1, 64, "reference"],
+                  [[(10, 10), (20, 5), (5, 20)], "largest", 0, 8, "reference"],
+                  [[(100, 100), (50, 200)], "smallest", 1, 64, "reference"],
+                  [[(3, 3)], 1, 0, 16, "reference"],
+                  # A preset keeps the area and replaces the shape, at every step.
+                  [[(1200, 1600)], 1, 0, 32, "9:16"], [[(1200, 1600)], 1, 0, 8, "16:9"],
+                  [[(1000, 1000)], 1, 1.0, 64, "3:2"], [[(4000, 3000)], 1, 0.5, 32, "1:1"],
+                  [[(3, 3)], 1, 0, 16, "2:3"], [[(1, 1)], 1, 0, 1, "4:3"]]
         got = self.run_js({"size": cases})
-        for (dims, ref, mp, d), js in zip(cases, got["size"], strict=True):
-            with self.subTest(size=(dims, ref, mp, d)):
-                self.assertEqual((js["w"], js["h"]), ms._reference_size(dims, ref, mp, d))
+        for (dims, ref, mp, d, aspect), js in zip(cases, got["size"], strict=True):
+            with self.subTest(size=(dims, ref, mp, d, aspect)):
+                self.assertEqual((js["w"], js["h"]), ms._reference_size(dims, ref, mp, d, aspect))
 
     def test_crop_pixel_box_matches_python(self):
         """cropPixelBox mirrors _crop_box, half-even rounding and 1px minimum included."""

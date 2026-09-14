@@ -262,6 +262,35 @@ describe("dom view", () => {
         assert.equal(handle.alive, false);
     });
 
+    it("lays the cards out in the same columns the canvas would, for the same node width", () => {
+        const node = fakeNode(Array.from({ length: 12 }, (_, i) => item(`f${i}.png`)));
+        const spy = actionSpy();
+        const handle = view.installDomView(node, spy.actions);
+        const grid = () => part(handle.root, "cards").style.gridTemplateColumns;
+        assert.equal(grid(), "repeat(3, 1fr)", "three at the node's minimum width");
+        const threeRows = node.widgets[0].options.getHeight();
+
+        node.size = [1200, 300];
+        handle.render();
+        assert.equal(grid(), "repeat(8, 1fr)", "and eight at 1200px, as the canvas lays out");
+        assert.ok(node.widgets[0].options.getHeight() < threeRows, "fewer rows, so a shorter view");
+    });
+
+    it("reports the height it measures, and follows the toolbar when it wraps", () => {
+        const node = fakeNode([item("a.png")]);
+        const spy = actionSpy();
+        const handle = view.installDomView(node, spy.actions);
+        // Nothing to measure in this DOM, so the computed fallback is used.
+        assert.equal(handle.height, node.widgets[0].options.getHeight());
+
+        // A real page reports a height that includes a wrapped toolbar.
+        handle.root.scrollHeight = 431;
+        handle.render();
+        assert.equal(handle.height, 431, "what the view actually occupies wins over the guess");
+        assert.deepEqual(spy.calls.filter(([name]) => name === "resized").length > 0, true);
+        handle.destroy();
+    });
+
     it("reads the Vue node setting defensively", () => {
         assert.equal(view.vueNodesEnabled(undefined), false);
         assert.equal(view.vueNodesEnabled({ extensionManager: { setting: { get: () => true } } }), true);

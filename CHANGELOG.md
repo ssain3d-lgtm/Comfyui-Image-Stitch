@@ -2,6 +2,15 @@
 
 All notable changes to **Multi Stitch Images**. The version is the one in `pyproject.toml`; each release is tagged `v<version>` on `main`.
 
+## 1.3.0 — 2026-09-14
+
+### Added
+- **`size_aspect`: a shape for the `width` / `height` outputs.** They have always followed the reference image, so a 3:4 photo could not ask for 9:16 without a second node. Picking `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `3:2` or `2:3` gives that ratio instead, **keeping the reference image's pixel count** — reshaping does not quietly ask the model for more or fewer pixels — and `size_megapixels` still overrides the area when it is above 0, with `size_divisible_by` snapping as before. The default `reference` is exactly the old behaviour, the widget is last in the definition so no saved workflow shifts a slot, and a workflow that carries no value for it is read as `reference`. The size panel says which shape it used (`from image 1 (1200×1600) at 9:16`), and the frontend mirror is checked against the backend by the parity test over every preset.
+
+### Fixed
+- **Nodes 2.0 laid the cards out in three columns whatever the node's width**, while the canvas had followed the width since 1.2.2 — so the same node showed 8 columns in one mode and 3 in the other. Both now call one `columnsForWidth()` in `shared.js`, so they cannot drift again.
+- **The Vue view reported a height that assumed a one-row toolbar.** Its nine buttons already wrap to two rows at the default width, leaving the reported height 15px short of what the view occupies; it is measured from the DOM now, and a `ResizeObserver` re-measures when the node is resized or the toolbar rewraps.
+
 ## 1.2.4 — 2026-09-13
 
 ### Changed

@@ -1449,7 +1449,7 @@ describe("video frames", () => {
 });
 
 describe("size panel", () => {
-    const SIZE_NAMES = ["size_reference", "size_megapixels", "size_divisible_by"];
+    const SIZE_NAMES = ["size_reference", "size_megapixels", "size_divisible_by", "size_aspect"];
     // The pill sits in the title bar, above the node's body (sizeButtonRect).
     const clickTitleButton = (node) => click(node, centre(ms.sizeButtonRect(node)));
 
@@ -1476,6 +1476,31 @@ describe("size panel", () => {
         clickTitleButton(node);
         assert.equal(node.properties.multi_stitch_size_panel, false);
         assert.equal(node.size[1], before);
+    });
+
+    it("gives the outputs a preset shape without changing how much there is to generate", async () => {
+        const node = plainNode(nodeType);
+        dom.imageSizes.set("tall.png", [1200, 1600]);   // 3:4
+        setImages(node, [item("tall.png")]);
+        node.properties.multi_stitch_size_panel = true;
+        paintedCalls(nodeType, node);
+        await waitForThumbs(node);
+        const reference = paintedText(nodeType, node).find((t) => / x .*divisible by /.test(t));
+        assert.match(reference, /^1216 x 1600 {2}\| {2}3:4/, "its own shape while the preset is 'reference'");
+
+        widget(node, "size_aspect").value = "9:16";
+        const painted = paintedText(nodeType, node);
+        const preset = painted.find((t) => / x .*divisible by /.test(t));
+        assert.match(preset, /^1024 x 1856 {2}\| {2}9:16/, "9:16 snapped to 32, and labelled as the shape it was given");
+        assert.ok(painted.includes("from image 1 (1200×1600) at 9:16"), painted.join(" | "));
+
+        // The area is the reference image's either way: a preset reshapes, it
+        // does not quietly ask the model for more or fewer pixels.
+        const area = (text) => { const [w, h] = text.match(/^(\d+) x (\d+)/).slice(1); return w * h; };
+        assert.ok(Math.abs(area(preset) / area(reference) - 1) < 0.05, `${area(preset)} vs ${area(reference)}`);
+
+        widget(node, "size_aspect").value = "reference";
+        assert.match(paintedText(nodeType, node).find((t) => / x .*divisible by /.test(t)), /^1216 x 1600/, "and back");
     });
 
     it("follows the reference choice and the step, and is offered in the context menu", async () => {
