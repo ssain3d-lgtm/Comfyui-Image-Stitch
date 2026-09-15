@@ -386,6 +386,86 @@ export async function writePngToClipboard(blob) {
     }
 }
 
+// Mirrors the _MAX_BLUR_* limits in multi_stitch.py: what the editor is
+// allowed to store is exactly what the server is willing to paint.
+export const MAX_BLUR_STROKES = 200;
+export const MAX_BLUR_POINTS = 20000;
+export const MAX_BLUR_RADIUS = 0.5;
+export const MAX_BLUR_STRENGTH = 0.25;
+
+// Numbers only: Number(null) and Number("") are 0, which would quietly turn
+// a broken coordinate into a real one, and the server drops it instead.
+const finite = (value) => (typeof value === "number" && Number.isFinite(value) ? value : null);
+
+// The strokes an item carries, or null when there is nothing to paint.
+// Coordinates are fractions of the *transformed* image, exactly like the crop,
+// so a rotation carries them with the picture; radii are fractions of its
+// longest side, which a quarter turn leaves alone.
+export function normalizeBlur(blur) {
+    if (!blur || typeof blur !== "object" || !Array.isArray(blur.strokes)) return null;
+    const strength = finite(blur.strength);
+    if (strength === null || strength <= 0) return null;
+
+    let budget = MAX_BLUR_POINTS;
+    const strokes = [];
+    for (const raw of blur.strokes.slice(0, MAX_BLUR_STROKES)) {
+        if (!raw || !Array.isArray(raw.pts)) continue;
+        const radius = finite(raw.r);
+        if (radius === null || radius <= 0) continue;
+        const pts = [];
+        for (const point of raw.pts.slice(0, budget)) {
+            if (!Array.isArray(point) || point.length !== 2) continue;
+            const x = finite(point[0]);
+            const y = finite(point[1]);
+            // A stroke drawn off the edge keeps going: only absurd values are cut.
+            if (x === null || y === null) continue;
+            pts.push([Math.min(Math.max(x, -0.5), 1.5), Math.min(Math.max(y, -0.5), 1.5)]);
+        }
+        budget -= pts.length;
+        if (pts.length) strokes.push({ r: Math.min(radius, MAX_BLUR_RADIUS), pts });
+        if (budget <= 0) break;
+    }
+    if (!strokes.length) return null;
+    return { strength: Math.min(strength, MAX_BLUR_STRENGTH), strokes };
+}
+
+export function isBlurred(item) {
+    return normalizeBlur(item?.blur) !== null;
+}
+
+// A point travels between the source and a view of it exactly as a crop does,
+// so it goes through the same function as a rectangle with no size.
+function mapPoints(blur, transform, map) {
+    const spec = normalizeBlur(blur);
+    if (!spec) return null;
+    return {
+        strength: spec.strength,
+        strokes: spec.strokes.map(({ r, pts }) => ({
+            r,
+            pts: pts.map(([x, y]) => {
+                const out = map({ x, y, w: 0, h: 0 }, transform);
+                return [out.x, out.y];
+            }),
+        })),
+    };
+}
+
+export function blurSourceToView(blur, transform) {
+    return mapPoints(blur, transform, cropSourceToView);
+}
+
+export function blurViewToSource(blur, transform) {
+    return mapPoints(blur, transform, cropViewToSource);
+}
+
+// Identifies the strokes for a cache key: two items with the same painting
+// share a rendering, and one more dab makes a new one.
+export function blurKey(blur) {
+    const spec = normalizeBlur(blur);
+    if (!spec) return "";
+    return `${spec.strength}:${spec.strokes.map(({ r, pts }) => `${r}/${pts.length}/${pts[0]}/${pts.at(-1)}`).join(";")}`;
+}
+
 export function isCropped(crop) {
     const c = normalizeCrop(crop);
     return Math.abs(c.x) > CROPPED_EPSILON || Math.abs(c.y) > CROPPED_EPSILON ||
@@ -736,6 +816,83 @@ export function transformedDimensions(width, height, item) {
         : { width, height };
 }
 
+// The two working surfaces paintBlur needs, kept and reused: a brush stroke
+// repaints on every pointer move, and allocating a pair of full-size canvases
+// per frame is what makes a painting tool feel heavy. Never nested, so one
+// pair is enough.
+const scratch = {};
+function scratchCanvas(name, width, height) {
+    const canvas = scratch[name] ||= document.createElement("canvas");
+    const w = Math.max(1, Math.round(width));
+    const h = Math.max(1, Math.round(height));
+    const ctx = canvas.getContext("2d");
+    if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+    } else {
+        ctx.clearRect(0, 0, w, h);
+    }
+    // Resizing does not reset these, and a reused surface must not inherit the
+    // filter and the compositing the last pass left behind.
+    ctx.filter = "none";
+    ctx.globalCompositeOperation = "source-over";
+    return canvas;
+}
+
+// Paints the blurred strokes of `blur` over whatever `ctx` already shows,
+// reading its pixels from `source`.
+//
+// `place` maps the transformed image onto the destination: an image pixel
+// lands at ((x - offsetX) * scale, (y - offsetY) * scale), and `width`/`height`
+// are the whole transformed image, which is what the coordinates are fractions
+// of. Only the destination rectangle is touched, so the editor can call this
+// for the part of a zoomed image it happens to be showing.
+export function paintBlur(ctx, source, blur, place) {
+    const spec = normalizeBlur(blur);
+    if (!spec) return;
+    const { width, height, scale, offsetX = 0, offsetY = 0, destW, destH } = place;
+    const sigma = Math.max(0.5, spec.strength * Math.max(width, height)) * scale;
+    const at = (x, y) => [(x * width - offsetX) * scale, (y * height - offsetY) * scale];
+
+    // The strokes, white on nothing, softened by a fraction of the blur: a
+    // hard edge makes the blur look pasted on. Mirrors _apply_blur's feather.
+    const mask = scratchCanvas("mask", destW, destH);
+    const maskCtx = mask.getContext("2d");
+    maskCtx.filter = `blur(${Math.min(8, sigma * 0.3)}px)`;
+    maskCtx.strokeStyle = maskCtx.fillStyle = "#fff";
+    maskCtx.lineCap = maskCtx.lineJoin = "round";
+    for (const { r, pts } of spec.strokes) {
+        const radius = Math.max(0.5, r * Math.max(width, height)) * scale;
+        maskCtx.lineWidth = radius * 2;
+        maskCtx.beginPath();
+        for (const [x, y] of pts) {
+            const [px, py] = at(x, y);
+            maskCtx.lineTo(px, py);
+        }
+        if (pts.length > 1) maskCtx.stroke();
+        // The dot a single tap leaves, and round ends on every stroke.
+        for (const [x, y] of pts) {
+            const [px, py] = at(x, y);
+            maskCtx.beginPath();
+            maskCtx.arc(px, py, radius, 0, Math.PI * 2);
+            maskCtx.fill();
+        }
+    }
+
+    const layer = scratchCanvas("layer", destW, destH);
+    const layerCtx = layer.getContext("2d");
+    layerCtx.filter = `blur(${sigma}px)`;
+    layerCtx.drawImage(
+        source,
+        offsetX, offsetY, destW / scale, destH / scale,
+        0, 0, layer.width, layer.height,
+    );
+    layerCtx.filter = "none";
+    layerCtx.globalCompositeOperation = "destination-in";
+    layerCtx.drawImage(mask, 0, 0);
+    ctx.drawImage(layer, 0, 0);
+}
+
 // maxSide > 0 bounds the result's long edge; 0 renders at the source's size,
 // which the crop editor needs for pixel-accurate handles.
 export function renderTransformedImage(source, item, maxSide = 0) {
@@ -756,28 +913,40 @@ export function renderTransformedImage(source, item, maxSide = 0) {
     ctx.rotate(rotation * Math.PI / 180);
     ctx.drawImage(source, -sw * scale / 2, -sh * scale / 2, sw * scale, sh * scale);
     ctx.restore();
+
+    // Only when the caller passed a whole item: the crop editor hands in a
+    // transform on its own, because it paints the strokes live over a clean
+    // picture instead of baking them into the one it edits.
+    if (item?.blur) {
+        paintBlur(ctx, canvas, item.blur, {
+            width: dims.width, height: dims.height, scale,
+            destW: canvas.width, destH: canvas.height,
+        });
+    }
     return canvas;
 }
 
 // One entry per file holding only the current transform, so cycling through
 // rotations does not accumulate a canvas per angle. `width`/`height` are the
 // true transformed size the resolution estimate needs; `image` is thumbnail
-// sized, and an untransformed image reuses the base canvas outright.
+// sized with the blur strokes painted in, and an image with neither a
+// transform nor a stroke reuses the base canvas outright.
 export function loadTransformedThumb(node, item) {
     const raw = loadThumb(node, item);
     if (!raw.ready || raw.failed) return raw;
 
     node._msTransformedCache ||= new Map();
     const t = normalizeTransform(item);
-    const transformKey = `r${t.rotation}:h${t.flip_h ? 1 : 0}:v${t.flip_v ? 1 : 0}`;
+    const transformKey = `r${t.rotation}:h${t.flip_h ? 1 : 0}:v${t.flip_v ? 1 : 0}:b${blurKey(item?.blur)}`;
     const key = thumbKey(item);
     const cached = node._msTransformedCache.get(key);
     if (cached && cached.transformKey === transformKey) return cached;
 
     const dims = transformedDimensions(raw.width, raw.height, t);
-    const identity = t.rotation === 0 && !t.flip_h && !t.flip_v;
+    const painted = { ...t, blur: item?.blur };
+    const identity = t.rotation === 0 && !t.flip_h && !t.flip_v && !isBlurred(item);
     const state = {
-        image: identity ? raw.image : renderTransformedImage(raw.image, t, THUMB_MAX_SIDE),
+        image: identity ? raw.image : renderTransformedImage(raw.image, painted, THUMB_MAX_SIDE),
         width: dims.width,
         height: dims.height,
         transformKey,

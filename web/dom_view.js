@@ -6,7 +6,7 @@
 // state through a DOM widget and routes every button to the same functions
 // the canvas UI calls; it is installed only while that mode is on, so the
 // classic canvas keeps its own drawing.
-import { columnsForWidth, cropPixelBox, isCropped, isTransformed, normalizeTransform, sizeText, THUMB_GAP } from "./shared.js";
+import { columnsForWidth, cropPixelBox, isBlurred, isCropped, isTransformed, normalizeTransform, sizeText, THUMB_GAP } from "./shared.js";
 import { formatTime } from "./frame_picker.js";
 
 // The "$$" prefix marks a widget the frontend must treat as a pseudo widget:
@@ -275,6 +275,7 @@ export function installDomView(node, actions) {
         };
         badge(String(index + 1));
         if (isCropped(item.crop)) badge("✂", "edit");
+        if (isBlurred(item)) badge("◍", "edit");
         if (isTransformed(item)) {
             const t = normalizeTransform(item);
             badge(`${t.rotation}°${t.flip_h ? "H" : ""}${t.flip_v ? "V" : ""}`, "edit");

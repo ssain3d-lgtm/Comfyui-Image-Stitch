@@ -18,6 +18,7 @@
 - 카드 **우클릭 → Edit · Duplicate · Copy to clipboard · Replace · Remove** — 사진 위에 버튼이 없어 썸네일이 가려지지 않습니다
 - **Duplicate**로 같은 이미지 한 장 더 넣기 — 사본은 따로 Crop·회전할 수 있습니다
 - **카드마다 해상도 표시** — Crop한 이미지는 Crop 후 크기까지, 편집기 헤더는 드래그 중에도 실시간
+- **블러 브러시** — 편집기에서 얼굴·번호판 등을 칠해서 가림. 두께/강도 조절, 원본 비파괴
 - **`⧉ Copy` 버튼 → 합성 결과를 Queue 없이 바로 클립보드 복사**
 - **동영상에서 장면 캡처** — 프레임 단위로 찾아 원본 해상도 PNG로 목록에 추가, 동영상은 저장 공간을 차지하지 않음. 브라우저가 못 여는 코덱은 서버(PyAV)가 디코딩
 - **기준 이미지 크기 출력** — `width`/`height` 출력 단자와 크기 패널: 기준 이미지 크기를 MP 목표로 조정하고 배수(기본 32)로 맞춤
@@ -40,6 +41,12 @@
 - 초대형 결과 생성 전 **Output Size Safety Guard**
 - 일반 `IMAGE` 출력 → `Preview Image`, `Save Image`, `VAE Encode` 등에 바로 연결
 - 추가 Python 패키지 불필요 — 동영상 서버 디코딩에만 PyAV가 쓰이고 최신 ComfyUI에는 이미 포함되어 있습니다(ComfyUI-Manager용 `requirements.txt`에도 적어 두었습니다)
+
+### 1.8에서 달라진 점
+
+- **블러 브러시** — 편집기에 `◍ Blur` 탭이 생겼습니다. 드래그해서 얼굴·번호판·워터마크 등을 가릴 수 있고, **Brush**로 두께, **Blur**로 강도를 조절합니다(둘 다 이미지 실제 픽셀 기준, 포인터의 원이 실제 브러시 크기). `Ctrl+Z`로 마지막 스트로크 취소, `Clear blur`로 전체 삭제.
+- **원본을 건드리지 않습니다** — Crop·회전처럼 **좌표로 저장**되므로 워크플로우에 남고, 편집기를 다시 열면 그대로 있고, 회전하면 그림과 함께 돌아가고, 갤러리에서 불러와도 유지됩니다. 카드 썸네일·미리보기·`⧉ Copy`에도 모두 반영됩니다.
+- 16비트 이미지도 안전합니다 — Pillow 필터가 16비트/float 모드를 거부해서, 그쪽을 쓰면 RGB로 변환하며 계조를 버려야 했습니다. 텐서에서 직접 가우시안을 돌립니다.
 
 ### 1.7에서 달라진 점
 
@@ -193,6 +200,7 @@ git pull
 - `Reset crop`
 - `Reset all`
 - **크기 표시**: 헤더가 `1080 × 1920 → 792 × 1411`처럼 **원본 크기와 지금 Crop의 크기**를 드래그하는 동안 계속 보여 줍니다
+- **`◍ Blur` 탭**: 드래그해서 블러 칠하기. **Brush**=두께, **Blur**=강도, `Ctrl+Z`=마지막 스트로크 취소, `Clear blur`=전체 삭제. Crop·회전과 마찬가지로 좌표로 저장되어 원본은 그대로입니다
 - **우클릭**: `Copy crop to clipboard`(Crop된 부분만 원본 해상도로) / `Copy whole image to clipboard` — 편집기의 격자나 테두리는 복사되지 않습니다
 - **확대 / 이동**: 휠(포인터 기준 확대), `+ / − / Fit` 버튼, 키보드 `+ / - / 0`. 이동은 **휠 버튼 드래그** 또는 **Space + 좌클릭 드래그**. 최대 16배까지 확대되며, 확대하면 핸들이 잡는 범위와 최소 Crop 크기도 함께 작아져 픽셀 단위로 다듬을 수 있습니다.
 
@@ -427,6 +435,7 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 - **Gallery** — every composition a run stitches is recorded with a preview and can be loaded back into a node; it also shows what the image folder holds and clears what nothing uses
 - **Duplicate an image** — the card menu adds the same file once more, right after it, croppable and rotatable on its own
 - **Pixel size on every card** — and what a crop leaves of it, counted live in the editor while you drag
+- **Blur brush** — paint over a face or a plate in the editor; adjustable width and strength, stored as coordinates, source untouched
 - **Reference-image size outputs** — `width`/`height` outputs and a size panel: the reference image's size rescaled to a megapixel target and snapped to a multiple (32 by default)
 - One toolbar row `+ Add · Clear · ⧉ Copy · ↶ ↷ · Preview · Options` — advanced options stay **folded**, only non-default ones show
 - Per-image **Crop / 90° Rotate / Flip H / Flip V**
@@ -446,6 +455,12 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 - **Output Size Safety Guard** before giant tensors are allocated
 - Standard `IMAGE` output → `Preview Image`, `Save Image`, `VAE Encode`, etc.
 - No extra Python packages required — only server-side video decoding uses PyAV, which current ComfyUI already installs (and `requirements.txt` lists it for ComfyUI-Manager)
+
+### What changed in 1.8
+
+- **A blur brush in the editor.** `◍ Blur` switches from cropping to painting: drag to blur a face, a plate, a watermark. **Brush** sets the width, **Blur** the strength, both in the picture's own pixels; `Ctrl+Z` takes back a stroke and `Clear blur` removes them all.
+- **Stored, not burnt in** — like the crop, the strokes are numbers on the item, so the source file is untouched, a rotation carries them round with the picture, and the cards, the preview and `⧉ Copy` all show them.
+- The blur runs on the tensor, not through Pillow's filters, which refuse the 16-bit and float modes the high-depth path exists to protect.
 
 ### What changed in 1.7
 
@@ -601,6 +616,7 @@ Single-click the thumbnail image area to open the editor.
 - `Reset crop`
 - `Reset all`
 - **The size, live**: the header shows the image's size and what the crop leaves of it — `1080 × 1920 → 792 × 1411` — updated while the crop is dragged
+- **`◍ Blur` tab**: drag to paint a blur. **Brush** is the width, **Blur** the strength, `Ctrl+Z` takes back a stroke, `Clear blur` removes them all. Stored as coordinates like the crop, so the source file is never modified
 - **Right-click**: `Copy crop to clipboard` (the crop alone, at full resolution) or `Copy whole image to clipboard` — never the grid and outline drawn over the picture
 - **Zoom and pan**: the wheel zooms around the pointer, `+ / − / Fit` and the keys `+ / - / 0` do the same from the keyboard. Pan with a **middle-button drag** or **space held with the left button**. Up to 16×, and zooming in shrinks the grab areas and the minimum crop with it, so a crop can be trimmed to the pixel.
 

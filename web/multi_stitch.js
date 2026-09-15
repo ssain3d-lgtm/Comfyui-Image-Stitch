@@ -32,6 +32,7 @@ import {
     hideWidget,
     historyOf,
     imageUrl,
+    isBlurred,
     isCropped,
     sizeText,
     isTransformed,
@@ -890,6 +891,14 @@ function drawCard(ctx, node, item, index, r) {
         badgeX += 28;
     }
 
+    if (isBlurred(item)) {
+        ctx.fillStyle = "rgba(0,0,0,.72)";
+        ctx.fillRect(badgeX, r.y + 3, 24, 19);
+        ctx.fillStyle = "#f6b73c";
+        ctx.fillText("◍", badgeX + 5, r.y + 17);
+        badgeX += 27;
+    }
+
     if (isTransformed(item)) {
         const t = normalizeTransform(item);
         ctx.fillStyle = "rgba(0,0,0,.72)";
@@ -1412,7 +1421,7 @@ async function renderComposite(node, planned, { width, height, onProgress, alive
         const { source, release } = await loadBoundedSource(item, neededSourceSize(node, item, dest));
         try {
             if (alive && !alive()) return null;
-            const view = isTransformed(item) ? renderTransformedImage(source, item, 0) : source;
+            const view = isTransformed(item) || isBlurred(item) ? renderTransformedImage(source, item, 0) : source;
             const size = mediaSize(view);
             const box = cropPixelBox(size.w, size.h, item.crop);
             drawImageScaled(ctx, view, box.x, box.y, box.w, box.h, dest.x, dest.y, dest.w, dest.h);

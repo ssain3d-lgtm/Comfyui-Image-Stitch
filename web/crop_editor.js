@@ -8,8 +8,13 @@ import {
     imageUrl,
     isModalKey,
     isTextEntry,
+    blurSourceToView,
+    MAX_BLUR_STROKES,
+    blurViewToSource,
+    normalizeBlur,
     normalizeCrop,
     normalizeTransform,
+    paintBlur,
     renderTransformedImage,
     sizeText,
     swallowKey,
@@ -40,6 +45,11 @@ function installStyles() {
 .ms-crop-zoom .zoom-level{font-size:12px;color:#cfcfcf;min-width:48px;text-align:center;font-variant-numeric:tabular-nums}
 .ms-crop-spacer{flex:1}.ms-crop-hint{font-size:12px;color:#aaa}.ms-transform-state{font-size:12px;color:#9aa0a6;min-width:130px}
 .ms-crop-hint.said{color:#8ab4f8}
+.ms-crop-tools{display:flex;align-items:center;gap:5px}
+.ms-crop-tools button{padding:7px 12px}
+.ms-crop-brush{display:flex;align-items:center;gap:8px;color:#cfcfcf;font-size:12px}
+.ms-crop-brush input[type=range]{width:96px;accent-color:#8ab4f8}
+.ms-crop-brush .value{min-width:42px;text-align:right;font-variant-numeric:tabular-nums}
 .ms-crop-menu{position:fixed;z-index:100001;background:#2b2b2b;border:1px solid #4a4a4a;border-radius:6px;padding:3px;display:flex;flex-direction:column;min-width:190px;box-shadow:0 6px 20px rgba(0,0,0,.55);font-size:13px}
 .ms-crop-menu button{background:transparent;border:0;color:#e6e6e6;text-align:left;padding:6px 10px;border-radius:4px;cursor:pointer;font:inherit}
 .ms-crop-menu button:hover{background:#3d5a80}
@@ -134,6 +144,16 @@ export async function openCropEditor(node, index) {
               <option>9:16</option>
             </select>
           </label>
+          <span class="ms-crop-tools">
+            <button class="tool-crop active" title="Crop, rotate and flip">✂ Crop</button>
+            <button class="tool-blur" title="Paint a blur over part of the picture">◍ Blur</button>
+          </span>
+          <span class="ms-crop-brush" hidden>
+            <label>Brush <input type="range" class="brush-size" min="2" max="100" step="1"><span class="value size-value"></span></label>
+            <label>Blur <input type="range" class="brush-strength" min="1" max="100" step="1"><span class="value strength-value"></span></label>
+            <button class="blur-undo" title="Undo the last stroke (Ctrl+Z)">↶ Stroke</button>
+            <button class="blur-clear" title="Remove every stroke">Clear blur</button>
+          </span>
           <span class="ms-crop-zoom">
             <button class="zoom-out" title="Zoom out">−</button>
             <span class="zoom-level">100%</span>
@@ -157,7 +177,16 @@ export async function openCropEditor(node, index) {
     const dimensions = overlay.querySelector(".dimensions");
     const transformState = overlay.querySelector(".ms-transform-state");
     const hint = overlay.querySelector(".ms-crop-hint");
-    const hintText = hint.textContent;
+    const brushBar = overlay.querySelector(".ms-crop-brush");
+    const cropButton = overlay.querySelector(".tool-crop");
+    const blurButton = overlay.querySelector(".tool-blur");
+    const sizeSlider = overlay.querySelector(".brush-size");
+    const strengthSlider = overlay.querySelector(".brush-strength");
+    const sizeValue = overlay.querySelector(".size-value");
+    const strengthValue = overlay.querySelector(".strength-value");
+    const CROP_HINT = hint.textContent;
+    const BLUR_HINT = "Drag to paint a blur • Ctrl+Z takes a stroke back • the crop and the rotation still apply";
+    let hintText = CROP_HINT;
     // The row wraps around this text, so a short message in its place would
     // move Cancel and Apply. Freeze the box at the width the hint already has.
     hint.style.minWidth = `${Math.round(hint.getBoundingClientRect?.().width || 0)}px`;
@@ -181,6 +210,15 @@ export async function openCropEditor(node, index) {
     // from. `spaceHeld` is the other way into one.
     let pan = null;
     let spaceHeld = false;
+    // The blur brush. Strokes are fractions of the transformed image, as the
+    // crop is, and radii fractions of its longest side, which a quarter turn
+    // leaves alone. `painting` is the stroke being drawn.
+    let tool = "crop";
+    let strokes = (normalizeBlur(item.blur)?.strokes || []).map((stroke) => ({ r: stroke.r, pts: [...stroke.pts] }));
+    let painting = null;
+    let brushAt = null;
+    let brushRadius = 0;
+    let blurStrength = 0;
     let handleRadius = 10;
     let edgeHit = 12;
     let minSize = 4;
@@ -240,6 +278,35 @@ export async function openCropEditor(node, index) {
         return { x: 0, y: 0, w: working.width, h: working.height };
     }
 
+    // A pointer position as the item stores it.
+    function normalizedPoint(p) {
+        return [+(p.x / working.width).toFixed(4), +(p.y / working.height).toFixed(4)];
+    }
+
+    // Radii are stored against the longest side, so they survive a rotation.
+    function longSide() {
+        return Math.max(working.width, working.height);
+    }
+
+    // The sliders speak image pixels; the item stores fractions.
+    function readBrush() {
+        brushRadius = longSide() * (Number(sizeSlider.value) / 1000);
+        blurStrength = longSide() * (Number(strengthSlider.value) / 2000);
+        sizeValue.textContent = `${Math.round(brushRadius * 2)}px`;
+        strengthValue.textContent = `${Math.round(blurStrength)}px`;
+    }
+
+    function blurValue() {
+        return strokes.length ? { strength: blurStrength / longSide(), strokes } : null;
+    }
+
+    // The strokes plus whatever is being painted right now, so a stroke shows
+    // its blur as it is drawn rather than when the button comes up.
+    function liveBlur() {
+        const live = painting ? [...strokes, painting] : strokes;
+        return live.length ? { strength: blurStrength / longSide(), strokes: live } : null;
+    }
+
     // The crop as the item stores it: a fraction of the working image.
     function cropFraction() {
         return {
@@ -250,8 +317,15 @@ export async function openCropEditor(node, index) {
         };
     }
 
+    const storedBlur = normalizeBlur(item.blur);
+    // A brush a thirtieth of the picture across, and a blur strong enough to
+    // take a face out at that size: both adjustable, neither needing to be.
+    sizeSlider.value = String(Math.round((storedBlur?.strokes[0]?.r ?? 0.03) * 1000));
+    strengthSlider.value = String(Math.round((storedBlur?.strength ?? 0.01) * 2000));
+
     const initialCrop = normalizeCrop(item.crop);
     setCanvasSize();
+    readBrush();
     rect = {
         x: initialCrop.x * working.width,
         y: initialCrop.y * working.height,
@@ -325,6 +399,13 @@ export async function openCropEditor(node, index) {
 
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(working, view.x, view.y, view.w, view.h, 0, 0, canvas.width, canvas.height);
+        // Over a clean picture, never baked into it: a stroke can still be
+        // taken back, and a rotation re-renders from the untouched source.
+        paintBlur(ctx, working, liveBlur(), {
+            width: working.width, height: working.height,
+            scale: canvas.width / view.w, offsetX: view.x, offsetY: view.y,
+            destW: canvas.width, destH: canvas.height,
+        });
         zoomLevel.textContent = `${Math.round(working.width / view.w * 100)}%`;
         // The size the image is, and the size this crop makes it: the question
         // the editor is open to answer, answered while the crop is dragged.
@@ -353,6 +434,20 @@ export async function openCropEditor(node, index) {
         ctx.lineTo(x + w, y + 2 * h / 3);
         ctx.stroke();
 
+        if (tool === "blur" && brushAt) {
+            const scale = canvas.width / view.w;
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc((brushAt.x - view.x) * scale, (brushAt.y - view.y) * scale, brushRadius * scale, 0, Math.PI * 2);
+            ctx.strokeStyle = "rgba(255,255,255,.85)";
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+            ctx.strokeStyle = "rgba(0,0,0,.6)";
+            ctx.lineWidth = 0.75;
+            ctx.stroke();
+            ctx.restore();
+        }
+
         const barLong = Math.max(34, Math.min(48, Math.min(w, h) * 0.18));
         const barThick = 9;
         const inset = 5;
@@ -378,6 +473,8 @@ export async function openCropEditor(node, index) {
         // back to the source image, then forward into the new view.
         const previous = transform;
         const sourceCrop = cropViewToSource(cropFraction(), previous);
+        // The strength is only along for the ride; the points are what move.
+        const sourceStrokes = strokes.length ? blurViewToSource({ strength: 1, strokes }, previous) : null;
 
         transform = normalizeTransform(next);
         working = renderTransformedImage(source, transform);
@@ -390,6 +487,9 @@ export async function openCropEditor(node, index) {
             w: mapped.w * working.width,
             h: mapped.h * working.height,
         });
+
+        strokes = sourceStrokes ? (blurSourceToView(sourceStrokes, transform)?.strokes || []) : [];
+        readBrush();
 
         // A quarter turn swaps the axes, so a locked aspect no longer applies.
         if ((previous.rotation - transform.rotation) % 180 !== 0) ratioSelect.value = "free";
@@ -431,6 +531,15 @@ export async function openCropEditor(node, index) {
         }
 
         const p = point(event);
+        if (tool === "blur") {
+            painting = { r: brushRadius / longSide(), pts: [normalizedPoint(p)] };
+            brushAt = p;
+            canvas.setPointerCapture(event.pointerId);
+            event.preventDefault();
+            render();
+            return;
+        }
+
         const mode = hit(p);
         drag = { mode, start: p, original: { ...rect } };
 
@@ -455,6 +564,19 @@ export async function openCropEditor(node, index) {
         }
 
         const p = point(event);
+
+        if (tool === "blur") {
+            brushAt = p;
+            // One point per third of a brush width: a stroke is a shape, not a
+            // recording of the mouse, and the workflow stores what is kept.
+            if (painting) {
+                const [lastX, lastY] = painting.pts.at(-1);
+                const gap = Math.hypot(p.x / working.width - lastX, p.y / working.height - lastY) * longSide();
+                if (gap >= brushRadius / 3) painting.pts.push(normalizedPoint(p));
+            }
+            render();
+            return;
+        }
 
         if (!drag) {
             canvas.style.cursor = cursorForMode(hit(p));
@@ -496,6 +618,12 @@ export async function openCropEditor(node, index) {
         if (event?.pointerId != null && canvas.hasPointerCapture?.(event.pointerId)) {
             try { canvas.releasePointerCapture(event.pointerId); } catch (_) {}
         }
+        if (painting) {
+            strokes.push(painting);
+            painting = null;
+            if (strokes.length > MAX_BLUR_STROKES) strokes = strokes.slice(-MAX_BLUR_STROKES);
+            render();
+        }
         drag = null;
         if (pan) {
             pan = null;
@@ -507,11 +635,20 @@ export async function openCropEditor(node, index) {
 
     canvas.addEventListener("pointerup", endDrag);
     canvas.addEventListener("pointercancel", () => {
+        painting = null;
         drag = null;
         pan = null;
         canvas.style.cursor = spaceHeld ? "grab" : "crosshair";
     });
     canvas.addEventListener("pointerleave", (event) => {
+        if (tool === "blur") {
+            // The ring belongs to the pointer, so it leaves with it.
+            if (!painting) {
+                brushAt = null;
+                render();
+            }
+            return;
+        }
         if (!drag && !pan) canvas.style.cursor = cursorForMode(hit(point(event)));
     });
     // Middle-click otherwise starts the browser's scroll-by-drag.
@@ -594,6 +731,38 @@ export async function openCropEditor(node, index) {
         if (menu && !menu.contains(event.target)) closeMenu();
     });
 
+    function setTool(next) {
+        tool = next;
+        cropButton.classList.toggle("active", next === "crop");
+        blurButton.classList.toggle("active", next === "blur");
+        brushBar.hidden = next !== "blur";
+        brushAt = null;
+        canvas.style.cursor = next === "blur" ? "none" : "crosshair";
+        hintText = next === "blur" ? BLUR_HINT : CROP_HINT;
+        say(null);
+        render();
+    }
+    cropButton.onclick = () => setTool("crop");
+    blurButton.onclick = () => setTool("blur");
+    sizeSlider.oninput = () => {
+        readBrush();
+        render();
+    };
+    strengthSlider.oninput = () => {
+        readBrush();
+        render();
+    };
+    const undoStroke = () => {
+        if (!strokes.length) return;
+        strokes = strokes.slice(0, -1);
+        render();
+    };
+    overlay.querySelector(".blur-undo").onclick = undoStroke;
+    overlay.querySelector(".blur-clear").onclick = () => {
+        strokes = [];
+        render();
+    };
+
     overlay.querySelector(".zoom-in").onclick = () => zoomBy(1.5, null);
     overlay.querySelector(".zoom-out").onclick = () => zoomBy(1 / 1.5, null);
     overlay.querySelector(".zoom-fit").onclick = () => fitView();
@@ -642,6 +811,9 @@ export async function openCropEditor(node, index) {
         if (saved.rotation !== transform.rotation || saved.flip_h !== transform.flip_h || saved.flip_v !== transform.flip_v) {
             return true;
         }
+        if (JSON.stringify(normalizeBlur(item.blur)) !== JSON.stringify(normalizeBlur(blurValue()))) {
+            return true;
+        }
         const crop = normalizeCrop(item.crop);
         const now = cropFraction();
         return ["x", "y", "w", "h"].some((k) => Math.abs(crop[k] - now[k]) > CROPPED_EPSILON);
@@ -683,6 +855,11 @@ export async function openCropEditor(node, index) {
         item.rotation = transform.rotation;
         item.flip_h = transform.flip_h;
         item.flip_v = transform.flip_v;
+        // Through the same check the server applies, so what is stored is
+        // exactly what will be painted — capped, clamped and no more.
+        const blur = normalizeBlur(blurValue());
+        if (blur) item.blur = { strength: +blur.strength.toFixed(6), strokes: blur.strokes };
+        else delete item.blur;
         const fraction = cropFraction();
         item.crop = {
             x: +fraction.x.toFixed(6),
@@ -716,7 +893,11 @@ export async function openCropEditor(node, index) {
             }
             return;
         }
-        if (event.key === "+" || event.key === "=" || event.key === "-" || event.key === "_" || event.key === "0") {
+        if ((event.ctrlKey || event.metaKey) && /^z$/i.test(event.key) && strokes.length) {
+            swallowKey(event);
+            event.preventDefault();
+            undoStroke();
+        } else if (event.key === "+" || event.key === "=" || event.key === "-" || event.key === "_" || event.key === "0") {
             swallowKey(event);
             event.preventDefault();
             if (event.key === "0") fitView();

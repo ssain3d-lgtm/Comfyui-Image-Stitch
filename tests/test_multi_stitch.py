@@ -136,6 +136,85 @@ class MultiStitchTests(unittest.TestCase):
         self.assertRgb(up[0, 0, 0], (0, 1, 0))
         self.assertRgb(up[0, -1, 0], (1, 0, 0))
 
+    def _checkerboard(self, name="check.png", size=(200, 200), block=8, deep=False):
+        """A file whose every neighbourhood is high-contrast, so a blur shows."""
+        squares = (np.indices(size[::-1]).sum(0) // block % 2 * 255).astype(np.uint8)
+        path = self.root / name
+        if not deep:
+            Image.fromarray(np.dstack([squares] * 3), "RGB").save(path)
+        else:
+            # uint16 gives I;16 on its own; naming the mode is deprecated.
+            Image.fromarray(squares.astype(np.uint16) * 200 + 1000).save(path)
+        return {"filename": name, "type": "input", "crop": {"x": 0, "y": 0, "w": 1, "h": 1},
+                "rotation": 0, "flip_h": False, "flip_v": False}
+
+    def test_a_blur_stroke_softens_only_what_it_covers(self):
+        item = self._checkerboard()
+        stroke = {"strength": 0.02, "strokes": [{"r": 0.08, "pts": [[0.35, 0.5], [0.65, 0.5]]}]}
+        plain = ms._load_image(item)
+        painted = ms._load_image(dict(item, blur=stroke))
+
+        self.assertEqual(tuple(painted.shape), tuple(plain.shape))
+        centre = (slice(90, 110), slice(90, 110))
+        self.assertGreater(float(plain[0][centre].std()), 0.4, "the source really is high contrast there")
+        self.assertLess(float(painted[0][centre].std()), 0.1, "and the stroke took it out")
+        self.assertTrue(torch.equal(plain[0, 0:20, 0:20], painted[0, 0:20, 0:20]),
+                        "a corner the stroke never reached is untouched, to the bit")
+
+    def test_a_blur_stroke_follows_the_crop_and_the_rotation(self):
+        item = self._checkerboard()
+        stroke = {"strength": 0.02, "strokes": [{"r": 0.08, "pts": [[0.35, 0.5], [0.65, 0.5]]}]}
+        centre = (slice(40, 60), slice(40, 60))
+
+        # Strokes are stored against the transformed picture, as the crop is, so
+        # a quarter turn carries them with it rather than leaving them behind.
+        turned = ms._load_image(dict(item, blur=stroke, rotation=90))
+        self.assertLess(float(turned[0][slice(90, 110), slice(90, 110)].std()), 0.1)
+
+        # And the middle of the picture is still the middle of a centred crop.
+        cropped = ms._load_image(dict(item, blur=stroke, crop={"x": 0.25, "y": 0.25, "w": 0.5, "h": 0.5}))
+        self.assertEqual(tuple(cropped.shape), (1, 100, 100, 3))
+        self.assertLess(float(cropped[0][centre].std()), 0.1)
+
+        # A stroke outside the frame paints nothing at all.
+        away = dict(item, blur={"strength": 0.02, "strokes": [{"r": 0.02, "pts": [[1.4, 1.4]]}]})
+        self.assertTrue(torch.equal(ms._load_image(away), ms._load_image(item)))
+
+    def test_a_blur_keeps_a_high_depth_file_high_depth(self):
+        # Pillow refuses to filter I;16, so blurring through it would have meant
+        # convert("RGB") first — which is exactly what _high_depth_array exists
+        # to avoid, and would turn a mid-grey 16-bit file white.
+        item = self._checkerboard("deep.png", size=(100, 100), deep=True)
+        stroke = {"strength": 0.03, "strokes": [{"r": 0.1, "pts": [[0.5, 0.5]]}]}
+        plain = ms._load_image(item)
+        painted = ms._load_image(dict(item, blur=stroke))
+        self.assertLess(float(plain.max()), 0.95, "a 16-bit mid-grey is not white")
+        self.assertAlmostEqual(float(plain.mean()), float(painted.mean()), delta=0.01)
+        self.assertTrue(torch.equal(plain[0, 0:5, 0:5], painted[0, 0:5, 0:5]))
+
+    def test_blur_strokes_from_a_workflow_are_checked_not_trusted(self):
+        for junk in (None, 5, {}, {"strength": 0.02}, {"strength": "x", "strokes": []},
+                     {"strength": float("nan"), "strokes": [{"r": 1, "pts": [[0, 0]]}]},
+                     {"strength": 0, "strokes": [{"r": 1, "pts": [[0, 0]]}]},
+                     {"strength": 0.02, "strokes": "no"},
+                     {"strength": 0.02, "strokes": [{"r": 0.1, "pts": [[0, "x"], [None, 1]]}]},
+                     {"strength": 0.02, "strokes": [{"pts": [[0, 0]]}]}):
+            self.assertIsNone(ms._normalize_blur({"blur": junk}), repr(junk))
+
+        # What survives is clamped rather than refused: a radius past the cap, a
+        # point far off the canvas, more strokes and points than anyone drew.
+        spec = ms._normalize_blur({"blur": {
+            "strength": 99, "strokes": [{"r": 9, "pts": [[-40, 40]]}] * (ms._MAX_BLUR_STROKES + 30),
+        }})
+        self.assertEqual(spec["strength"], ms._MAX_BLUR_STRENGTH)
+        self.assertEqual(len(spec["strokes"]), ms._MAX_BLUR_STROKES)
+        self.assertEqual(spec["strokes"][0], {"r": ms._MAX_BLUR_RADIUS, "pts": [(-0.5, 1.5)]})
+
+        crowded = ms._normalize_blur({"blur": {
+            "strength": 0.02, "strokes": [{"r": 0.1, "pts": [[0.5, 0.5]] * 9000}] * 4,
+        }})
+        self.assertEqual(sum(len(s["pts"]) for s in crowded["strokes"]), ms._MAX_BLUR_POINTS)
+
     def test_grid_positions_are_unique_and_in_bounds(self):
         rows, cols, count = 2, 3, 5
         for direction in ("right", "left", "down", "up"):

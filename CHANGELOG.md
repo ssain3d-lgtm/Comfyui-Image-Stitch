@@ -2,6 +2,14 @@
 
 All notable changes to **Multi Stitch Images**. The version is the one in `pyproject.toml`; each release is tagged `v<version>` on `main`.
 
+## 1.8.0 — 2026-09-15
+
+### Added
+- **A blur brush in the image editor.** `◍ Blur` switches the editor from cropping to painting: drag to blur a face, a licence plate, a watermark, anything that should be in the picture without being readable. **Brush** sets the width and **Blur** the strength, both in the picture's own pixels; the ring under the pointer is the brush at its real size. `Ctrl+Z` (or `↶ Stroke`) takes back the last stroke and `Clear blur` removes them all.
+- **The strokes are stored, not burnt in.** Like the crop and the rotation, an item carries its strokes as numbers — fractions of the transformed picture, with radii against its longest side — so the source file is never touched, the editor reopens on what you painted, a quarter turn carries the strokes round with the picture, and a gallery entry brings them back. The cards, the in-node preview and `⧉ Copy` all show them.
+- The blur runs on the tensor rather than through Pillow's filters, which refuse the 16-bit and float modes the high-depth path exists to keep intact — painting a stroke on such a file would otherwise have thrown its depth away. It is a separable Gaussian, and a wide one is taken on a reduced copy so a strong blur on a large picture costs the same as a weak one. The mask is feathered by a fraction of the blur so the edge does not read as pasted on, and strokes are painted after the crop, so only the pixels that survive it are ever touched.
+- Numbers arriving from a workflow are checked rather than trusted: strokes, points, radii and strength are all bounded, and anything that is not a real number is dropped on both sides — `Number(null)` is `0` in JavaScript, which would have turned a broken coordinate into a real one.
+
 ## 1.7.1 — 2026-09-14
 
 ### Fixed

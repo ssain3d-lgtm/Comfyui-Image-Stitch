@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn.functional as F
-from PIL import Image
+from PIL import Image, ImageDraw
 
 import folder_paths
 
@@ -296,6 +296,156 @@ def _source_crop_box(
     return box
 
 
+# Bounds on what a stored blur may ask for. A workflow is a file someone can
+# edit or receive, so the numbers in it are checked rather than trusted: these
+# keep a malformed one from drawing for ever or allocating something huge.
+_MAX_BLUR_STROKES = 200
+_MAX_BLUR_POINTS = 20_000
+_MAX_BLUR_RADIUS = 0.5
+_MAX_BLUR_STRENGTH = 0.25
+
+
+def _blur_number(value: object) -> float | None:
+    """A real number, or None for anything else — a string, a null, a NaN."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if math.isfinite(value) else None
+
+
+def _blur_point(point: object) -> tuple[float, float] | None:
+    if not isinstance(point, (list, tuple)) or len(point) != 2:
+        return None
+    x, y = _blur_number(point[0]), _blur_number(point[1])
+    if x is None or y is None:
+        return None
+    # A stroke drawn off the edge keeps going: only absurd values are cut.
+    return min(max(x, -0.5), 1.5), min(max(y, -0.5), 1.5)
+
+
+def _normalize_blur(item: object) -> dict | None:
+    """The blur strokes an item carries, or None when there are none to paint.
+
+    Coordinates are fractions of the *transformed* image, exactly like the
+    crop, so a rotation carries them with the picture. Radii are fractions of
+    its longest side, which a quarter turn leaves alone.
+    """
+    blur = item.get("blur") if isinstance(item, dict) else None
+    if not isinstance(blur, dict) or not isinstance(blur.get("strokes"), list):
+        return None
+    strength = _blur_number(blur.get("strength"))
+    if strength is None or strength <= 0:
+        return None
+
+    budget = _MAX_BLUR_POINTS
+    strokes = []
+    for raw in blur["strokes"][:_MAX_BLUR_STROKES]:
+        if not isinstance(raw, dict) or not isinstance(raw.get("pts"), list):
+            continue
+        radius = _blur_number(raw.get("r"))
+        if radius is None or radius <= 0:
+            continue
+        points = []
+        for point in raw["pts"][:budget]:
+            mapped = _blur_point(point)
+            if mapped is not None:
+                points.append(mapped)
+        budget -= len(points)
+        if points:
+            strokes.append({"r": min(radius, _MAX_BLUR_RADIUS), "pts": points})
+        if budget <= 0:
+            break
+    if not strokes:
+        return None
+    return {"strength": min(strength, _MAX_BLUR_STRENGTH), "strokes": strokes}
+
+
+def _gaussian_blur(planes: torch.Tensor, sigma: float) -> torch.Tensor:
+    """A separable Gaussian over [N, C, H, W], at any radius, in bounded time.
+
+    A wide blur is done on a reduced copy and scaled back up — the kernel would
+    otherwise grow with the radius until one stroke cost billions of taps — and
+    the reduction is invisible precisely because the result is blurred.
+    """
+    if sigma < 0.5:
+        return planes
+    factor = max(1, int(sigma // 8))
+    if factor > 1:
+        height = max(1, planes.shape[2] // factor)
+        width = max(1, planes.shape[3] // factor)
+        small = F.interpolate(planes, size=(height, width), mode="area")
+        small = _gaussian_blur(small, sigma / factor)
+        return F.interpolate(small, size=planes.shape[2:], mode="bilinear", align_corners=False)
+
+    half = max(1, math.ceil(sigma * 3))
+    offsets = torch.arange(-half, half + 1, dtype=planes.dtype, device=planes.device)
+    kernel = torch.exp(-(offsets ** 2) / (2 * sigma * sigma))
+    kernel /= kernel.sum()
+    channels = planes.shape[1]
+    # Edge pixels borrow their neighbours rather than fading into black, which
+    # zero padding would do at every border the mask touches.
+    wide = F.pad(planes, (half, half, 0, 0), mode="reflect")
+    wide = F.conv2d(wide, kernel.view(1, 1, 1, -1).expand(channels, 1, 1, -1), groups=channels)
+    tall = F.pad(wide, (0, 0, half, half), mode="reflect")
+    return F.conv2d(tall, kernel.view(1, 1, -1, 1).expand(channels, 1, -1, 1), groups=channels)
+
+
+def _blur_mask(
+    spec: dict,
+    shape: tuple[int, int],
+    size: tuple[int, int],
+    box: tuple[int, int, int, int],
+) -> Image.Image:
+    """The strokes painted white on black, in the cropped picture's pixels.
+
+    `size` is the whole transformed image and `box` the crop taken out of it,
+    so a stroke drawn anywhere lands in the right place on the piece kept, and
+    one drawn outside it simply falls off the mask.
+    """
+    long_side = max(max(size), 1)
+    mask = Image.new("L", shape, 0)
+    draw = ImageDraw.Draw(mask)
+    for stroke in spec["strokes"]:
+        radius = max(0.5, stroke["r"] * long_side)
+        points = [(x * size[0] - box[0], y * size[1] - box[1]) for x, y in stroke["pts"]]
+        if len(points) > 1:
+            draw.line(points, fill=255, width=max(1, round(radius * 2)), joint="curve")
+        # Round caps, which ImageDraw.line does not give its ends, and the dot
+        # a single tap leaves behind.
+        for x, y in points:
+            draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=255)
+    return mask
+
+
+def _apply_blur(
+    image: torch.Tensor,
+    spec: dict,
+    size: tuple[int, int],
+    box: tuple[int, int, int, int],
+) -> torch.Tensor:
+    """`image` — one cropped, transformed picture — with the strokes blurred out.
+
+    It runs on the tensor rather than through Pillow's filters because those
+    refuse the 16-bit and float modes _high_depth_array exists to keep intact;
+    converting to RGB first would throw that depth away for anyone who painted
+    a stroke on such a file.
+    """
+    long_side = max(max(size), 1)
+    sigma = max(0.5, spec["strength"] * long_side)
+    height, width = image.shape[1], image.shape[2]
+    mask = _blur_mask(spec, (width, height), size, box)
+    weights = torch.from_numpy(np.array(mask, dtype=np.float32) / 255.0)
+    if not float(weights.max()):
+        return image
+
+    planes = image.movedim(-1, 1)
+    blurred = _gaussian_blur(planes, sigma)
+    # A hard-edged mask makes the blur look pasted on; feathering it by a
+    # fraction of the blur itself hides the seam without smearing the shape.
+    weights = _gaussian_blur(weights.view(1, 1, height, width), min(8.0, sigma * 0.3))
+    mixed = blurred * weights + planes * (1.0 - weights)
+    return mixed.movedim(1, -1).clamp_(0.0, 1.0)
+
+
 def _crop_box(width: int, height: int, crop: object) -> tuple[int, int, int, int]:
     x, y, w, h = _normalize_crop(crop)
     left = max(0, min(width - 1, int(round(x * width))))
@@ -500,7 +650,9 @@ def _load_image(
             image = image.transpose(method)
         array = _image_array(image, background)
 
-    return torch.from_numpy(array).unsqueeze(0)
+    tensor = torch.from_numpy(array).unsqueeze(0)
+    blur = _normalize_blur(item)
+    return tensor if blur is None else _apply_blur(tensor, blur, (width, height), box)
 
 
 def _resize_exact(image: torch.Tensor, height: int, width: int) -> torch.Tensor:

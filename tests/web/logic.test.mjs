@@ -1709,6 +1709,59 @@ describe("native-reference refinements", () => {
         assert.equal(shared.normalizeTransform({ rotation: Infinity }).rotation, 0);
         assert.deepEqual(shared.normalizeCrop({ x: null, w: null }), shared.defaultCrop());
     });
+    it("checks blur strokes rather than trusting them, and clamps what survives", () => {
+        const good = { strength: 0.02, strokes: [{ r: 0.1, pts: [[0.2, 0.3], [0.4, 0.5]] }] };
+        assert.deepEqual(shared.normalizeBlur(good), good);
+        for (const junk of [null, 5, {}, { strength: 0.02 }, { strength: "x", strokes: [] },
+            { strength: NaN, strokes: [{ r: 1, pts: [[0, 0]] }] },
+            { strength: 0, strokes: [{ r: 1, pts: [[0, 0]] }] },
+            { strength: 0.02, strokes: "no" },
+            { strength: 0.02, strokes: [{ pts: [[0, 0]] }] },
+            { strength: 0.02, strokes: [{ r: 0.1, pts: [[0, "x"], [null, 1]] }] }]) {
+            assert.equal(shared.normalizeBlur(junk), null, JSON.stringify(junk));
+        }
+        // Clamped, not refused — and to the same numbers the server clamps to.
+        const wild = shared.normalizeBlur({ strength: 99, strokes: [{ r: 9, pts: [[-40, 40]] }] });
+        assert.equal(wild.strength, shared.MAX_BLUR_STRENGTH);
+        assert.deepEqual(wild.strokes[0], { r: shared.MAX_BLUR_RADIUS, pts: [[-0.5, 1.5]] });
+        assert.equal(shared.isBlurred({ blur: good }), true);
+        assert.equal(shared.isBlurred({ blur: { strength: 1, strokes: [] } }), false);
+    });
+
+    it("carries blur strokes through a rotation exactly as it carries a crop", () => {
+        const transform = { rotation: 90, flip_h: true, flip_v: false };
+        const blur = { strength: 0.02, strokes: [{ r: 0.1, pts: [[0.25, 0.75], [1, 0]] }] };
+        // A point is a rectangle with no size, so it takes the crop's own path.
+        const viewed = shared.blurSourceToView(blur, transform);
+        const corner = shared.cropSourceToView({ x: 0.25, y: 0.75, w: 0, h: 0 }, transform);
+        assert.deepEqual(viewed.strokes[0].pts[0], [corner.x, corner.y]);
+        // And back again, so a rotate-and-rotate-back leaves the stroke put.
+        const back = shared.blurViewToSource(viewed, transform);
+        const round = back.strokes[0].pts.map(([x, y]) => [Math.round(x * 1e6) / 1e6, Math.round(y * 1e6) / 1e6]);
+        assert.deepEqual(round, blur.strokes[0].pts);
+        assert.equal(shared.blurSourceToView(null, transform), null);
+    });
+
+    it("renders a blurred thumbnail rather than reusing the untouched one", () => {
+        const blur = { strength: 0.02, strokes: [{ r: 0.1, pts: [[0.4, 0.4], [0.6, 0.6]] }] };
+        const source = { width: 40, height: 20, naturalWidth: 40, naturalHeight: 20 };
+        // The picture, and then the blur layer over it: the strokes are painted
+        // into the thumbnail, so every card and the preview show them.
+        assert.equal(shared.renderTransformedImage(source, { rotation: 0 }).draws, 1);
+        assert.equal(shared.renderTransformedImage(source, { rotation: 0, blur }).draws, 2);
+        // A transform on its own carries no strokes — which is how the crop
+        // editor keeps an unpainted picture to paint over.
+        assert.equal(shared.renderTransformedImage(source, shared.normalizeTransform({ rotation: 90, blur })).draws, 1);
+    });
+
+    it("gives a thumbnail cache key that a new stroke changes", () => {
+        const one = { strength: 0.02, strokes: [{ r: 0.1, pts: [[0.2, 0.3]] }] };
+        const two = { strength: 0.02, strokes: [{ r: 0.1, pts: [[0.2, 0.3], [0.9, 0.9]] }] };
+        assert.equal(shared.blurKey(null), "");
+        assert.notEqual(shared.blurKey(one), shared.blurKey(two));
+        assert.equal(shared.blurKey(one), shared.blurKey({ ...one }));
+    });
+
     it("says what an image measures, and what a crop leaves of it", () => {
         assert.equal(shared.sizeText(1024, 768, null), "1024 × 768");
         assert.equal(shared.sizeText(1024, 768, { x: 0, y: 0, w: 1, h: 1 }), "1024 × 768");

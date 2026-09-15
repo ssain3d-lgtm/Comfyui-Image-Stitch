@@ -45,7 +45,7 @@ SETTING_KEYS = (
     "minimum_image_side", "match_reference", "size_reference", "size_megapixels",
     "size_divisible_by", "size_aspect", "grid_target_aspect",
 )
-_ITEM_KEYS = ("filename", "subfolder", "type", "crop", "rotation", "flip_h", "flip_v", "source")
+_ITEM_KEYS = ("filename", "subfolder", "type", "crop", "rotation", "flip_h", "flip_v", "source", "blur")
 # What makes one image in a composition itself: the picture, and the edits on
 # it. The name is not among them — see composition_key.
 _EDIT_KEYS = ("crop", "rotation", "flip_h", "flip_v")

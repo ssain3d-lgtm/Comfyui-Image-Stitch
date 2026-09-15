@@ -340,6 +340,111 @@ describe("crop editor", () => {
         await page.close();
     });
 
+    it("paints a blur only where the brush goes, and keeps it through a rotation", async () => {
+        const { page, errors } = await openPage();
+        await page.evaluate(() => {
+            // A checkerboard, because a blur is invisible on a gradient.
+            window.__node = window.__makeNode("check.png");
+            window.__openCropEditor(window.__node, 0);
+        });
+        const canvas = page.locator(".ms-crop-canvas");
+        await canvas.waitFor();
+        await page.click(".tool-blur");
+        const box = await canvas.boundingBox();
+
+        const spread = () => page.evaluate(() => {
+            const target = document.querySelector(".ms-crop-canvas");
+            const ctx = target.getContext("2d");
+            const deviation = (fx, fy) => {
+                const data = ctx.getImageData(
+                    Math.round(target.width * fx), Math.round(target.height * fy),
+                    Math.round(target.width * 0.1), Math.round(target.height * 0.1),
+                ).data;
+                const greys = [];
+                for (let i = 0; i < data.length; i += 4) greys.push(data[i]);
+                const mean = greys.reduce((a, b) => a + b, 0) / greys.length;
+                return Math.sqrt(greys.reduce((a, b) => a + (b - mean) ** 2, 0) / greys.length);
+            };
+            return { middle: deviation(0.45, 0.45), corner: deviation(0.15, 0.15) };
+        });
+        const before = await spread();
+        assert.ok(before.middle > 90, `the checkerboard really is sharp there (${before.middle})`);
+
+        // Straight across the middle, well clear of the corner sampled below.
+        await page.mouse.move(box.x + box.width * 0.35, box.y + box.height * 0.5);
+        await page.mouse.down();
+        await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.5, { steps: 6 });
+        await page.mouse.move(box.x + box.width * 0.65, box.y + box.height * 0.5, { steps: 6 });
+        await page.mouse.up();
+
+        const after = await spread();
+        assert.ok(after.middle < before.middle * 0.6, `the stroke softened it (${before.middle} → ${after.middle})`);
+        assert.ok(Math.abs(after.corner - before.corner) < 3, `and left the rest alone (${before.corner} → ${after.corner})`);
+
+        // Strokes ride along with a quarter turn, as the crop does.
+        await page.click(".rotate-right");
+        const turned = await page.evaluate(() => {
+            const target = document.querySelector(".ms-crop-canvas");
+            const ctx = target.getContext("2d");
+            const data = ctx.getImageData(
+                Math.round(target.width * 0.45), Math.round(target.height * 0.45),
+                Math.round(target.width * 0.1), Math.round(target.height * 0.1),
+            ).data;
+            const greys = [];
+            for (let i = 0; i < data.length; i += 4) greys.push(data[i]);
+            const mean = greys.reduce((a, b) => a + b, 0) / greys.length;
+            return Math.sqrt(greys.reduce((a, b) => a + (b - mean) ** 2, 0) / greys.length);
+        });
+        assert.ok(turned < before.middle * 0.6, `still blurred after the turn (${turned})`);
+
+        await page.click(".apply");
+        const item = await page.evaluate(() => window.__node._msImages[0]);
+        assert.equal(item.rotation, 90);
+        assert.equal(item.blur.strokes.length, 1);
+        assert.ok(item.blur.strength > 0 && item.blur.strokes[0].r > 0);
+        assert.ok(item.blur.strokes[0].pts.length >= 2, "the drag became a polyline, not one dot");
+        for (const [x, y] of item.blur.strokes[0].pts) {
+            assert.ok(x >= 0 && x <= 1 && y >= 0 && y <= 1, `${x},${y} is inside the picture`);
+        }
+        assert.deepEqual(errors, []);
+        await page.close();
+    });
+
+    it("takes a stroke back with Ctrl+Z and drops them all with Clear blur", async () => {
+        const { page, errors } = await openPage();
+        await page.evaluate(() => {
+            window.__node = window.__makeNode("check.png");
+            window.__openCropEditor(window.__node, 0);
+        });
+        const canvas = page.locator(".ms-crop-canvas");
+        await canvas.waitFor();
+        await page.click(".tool-blur");
+        const box = await canvas.boundingBox();
+        const dab = async (fx) => {
+            await page.mouse.move(box.x + box.width * fx, box.y + box.height * 0.5);
+            await page.mouse.down();
+            await page.mouse.move(box.x + box.width * (fx + 0.08), box.y + box.height * 0.5, { steps: 4 });
+            await page.mouse.up();
+        };
+        await dab(0.2);
+        await dab(0.5);
+        await page.keyboard.press("Control+z");
+        await page.click(".apply");
+        assert.equal((await page.evaluate(() => window.__node._msImages[0].blur)).strokes.length, 1,
+            "Ctrl+Z took back the second stroke, not both");
+
+        await page.evaluate(() => window.__openCropEditor(window.__node, 0));
+        await canvas.waitFor();
+        await page.click(".tool-blur");
+        assert.equal(await page.locator(".ms-crop-brush").isVisible(), true, "the brush row shows with the tool");
+        await page.click(".blur-clear");
+        await page.click(".apply");
+        assert.equal(await page.evaluate(() => "blur" in window.__node._msImages[0]), false,
+            "with no strokes left the item carries no blur at all");
+        assert.deepEqual(errors, []);
+        await page.close();
+    });
+
     it("closes on Escape without applying", async () => {
         const { page, errors } = await openPage();
         await page.evaluate(() => {

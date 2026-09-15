@@ -137,6 +137,17 @@ describe("dom view", () => {
         handle.destroy();
     });
 
+    it("marks a painted card the way it marks a cropped one", () => {
+        const blur = { strength: 0.02, strokes: [{ r: 0.1, pts: [[0.4, 0.4], [0.6, 0.6]] }] };
+        const node = fakeNode([item("a.png"), item("b.png", { blur })]);
+        const handle = view.installDomView(node, actionSpy().actions);
+        const badges = (index) => cards(handle.root)[index].children
+            .find((child) => child.className === "badges").children.map((span) => span.textContent);
+        assert.deepEqual(badges(0), ["1"]);
+        assert.deepEqual(badges(1), ["2", "◍"], "a stroke says so on the card, like ✂ does");
+        handle.destroy();
+    });
+
     it("leaves the size off a card whose image has not loaded", () => {
         const node = fakeNode([item("a.png", { pending: true })]);
         const handle = view.installDomView(node, actionSpy().actions);
