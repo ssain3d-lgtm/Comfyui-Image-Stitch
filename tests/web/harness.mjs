@@ -255,6 +255,22 @@ export function makeNode(nodeType, overrides = {}) {
         },
         setDirtyCanvas() {},
         inputs: [{ name: "images", link: null }],
+        // The four named sockets a fresh node carries; the numbered ones are
+        // added and taken away exactly as LiteGraph does it.
+        outputs: [
+            { name: "image", type: "IMAGE", links: null },
+            { name: "cells", type: "IMAGE", links: null },
+            { name: "width", type: "INT", links: null },
+            { name: "height", type: "INT", links: null },
+        ],
+        addOutput(name, type) {
+            const slot = { name, type, links: null };
+            node.outputs.push(slot);
+            return slot;
+        },
+        removeOutput(index) {
+            node.outputs.splice(index, 1);
+        },
         ...overrides,
     };
     nodeType.prototype.onNodeCreated.call(node);

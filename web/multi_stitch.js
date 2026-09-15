@@ -43,6 +43,8 @@ import {
     loadThumb,
     loadTransformedThumb,
     MAX_IMAGES,
+    MAX_SEPARATE,
+    NAMED_OUTPUTS,
     NODE_MIN_WIDTH,
     normalizeCrop,
     normalizeTransform,
@@ -2527,7 +2529,32 @@ function setWidgetVisible(widget, visible) {
     setWidgetHidden(widget, hidden);
 }
 
+// The numbered sockets exist on the node type up to MAX_SEPARATE, but a node
+// holding two pictures has no use for eight. Show one per image, and only when
+// output_cells is on, since that is the switch that fills them; a connected
+// IMAGE input adds frames whose number is unknown until the run, so that shows
+// the lot. A socket someone has wired is never taken away: the link would go
+// with it.
+function syncSeparateOutputs(node) {
+    if (!Array.isArray(node?.outputs) || typeof node.addOutput !== "function") return;
+    const on = !!getWidget(node, "output_cells")?.value;
+    let want = !on ? 0
+        : imageInputConnected(node) ? MAX_SEPARATE
+            : Math.min(node._msImages?.length || 0, MAX_SEPARATE);
+    for (let slot = MAX_SEPARATE; slot > want; slot--) {
+        if (node.outputs[NAMED_OUTPUTS + slot - 1]?.links?.length) {
+            want = slot;
+            break;
+        }
+    }
+    while (node.outputs.length > NAMED_OUTPUTS + want) node.removeOutput(node.outputs.length - 1);
+    while (node.outputs.length < NAMED_OUTPUTS + want) {
+        node.addOutput(`image_${node.outputs.length - NAMED_OUTPUTS + 1}`, "IMAGE");
+    }
+}
+
 function syncConditionalWidgets(node) {
+    syncSeparateOutputs(node);
     const layout = getWidget(node, "layout_mode")?.value || "strip";
     const spacingColor = getWidget(node, "spacing_color")?.value || "white";
     setWidgetVisible(getWidget(node, "grid_columns"), layout === "grid");

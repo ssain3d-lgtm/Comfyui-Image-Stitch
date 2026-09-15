@@ -3,6 +3,11 @@ import { api } from "../../scripts/api.js";
 export const CROPPED_EPSILON = 0.0005;
 // Mirrored by _MAX_IMAGES in multi_stitch.py; a backend test checks they agree.
 export const MAX_IMAGES = 256;
+// Mirrored by _MAX_SEPARATE: how many images can leave on sockets of their
+// own. The node type carries them all; the view shows one per image.
+export const MAX_SEPARATE = 8;
+// image, cells, width, height — the numbered sockets start after these.
+export const NAMED_OUTPUTS = 4;
 // Longest side kept for a thumbnail. Cards are ~130 CSS px wide, so this stays
 // crisp on a 2x display at 2x canvas zoom while bounding memory to about
 // 1 MiB per image instead of a full-resolution canvas each.

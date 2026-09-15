@@ -459,7 +459,7 @@ class MultiStitchTests(unittest.TestCase):
             refs.clear(); order.clear(); alive_at_call.clear()
             with self.subTest(layout=layout, direction=direction):
                 loaders = [loader(i, w, h) for i, (w, h) in enumerate(dims)]
-                streamed, _ = ms._compose_from(loaders, dims, layout, direction, True, 3, 1, "white", "#808080")
+                streamed, _, _ = ms._compose_from(loaders, dims, layout, direction, True, 3, 1, "white", "#808080")
                 eager = ms._compose(
                     [torch.full((1, h, w, 3), i / 10) for i, (w, h) in enumerate(dims)],
                     layout, direction, True, 3, 1, "white", "#808080",
@@ -485,6 +485,12 @@ class MultiStitchTests(unittest.TestCase):
         match = re.search(r"export const MAX_IMAGES = (\d+);", shared_js)
         self.assertIsNotNone(match, "web/shared.js must export MAX_IMAGES")
         self.assertEqual(int(match.group(1)), ms._MAX_IMAGES)
+        separate = re.search(r"export const MAX_SEPARATE = (\d+);", shared_js)
+        self.assertIsNotNone(separate, "web/shared.js must export MAX_SEPARATE")
+        self.assertEqual(int(separate.group(1)), ms._MAX_SEPARATE,
+                         "the view shows exactly the sockets the node type carries")
+        named = re.search(r"export const NAMED_OUTPUTS = (\d+);", shared_js)
+        self.assertEqual(int(named.group(1)), len(ms.MultiStitchImages.RETURN_TYPES) - ms._MAX_SEPARATE)
 
     def test_node_loads_as_a_comfyui_package(self):
         """A broken __init__ or RETURN_TYPES must fail here, not in ComfyUI."""
@@ -502,8 +508,11 @@ class MultiStitchTests(unittest.TestCase):
         )
         self.assertEqual(package.WEB_DIRECTORY, "./web")
         node = package.NODE_CLASS_MAPPINGS["MultiStitchImages"]
-        self.assertEqual(node.RETURN_TYPES, ("IMAGE", "IMAGE", "INT", "INT"))
-        self.assertEqual(node.RETURN_NAMES, ("image", "cells", "width", "height"))
+        self.assertEqual(node.RETURN_TYPES[:4], ("IMAGE", "IMAGE", "INT", "INT"))
+        self.assertEqual(node.RETURN_TYPES[4:], ("IMAGE",) * ms._MAX_SEPARATE,
+                         "the numbered sockets come last, so no saved workflow's links shift")
+        self.assertEqual(node.RETURN_NAMES[:4], ("image", "cells", "width", "height"))
+        self.assertEqual(node.RETURN_NAMES[4:], tuple(f"image_{n}" for n in range(1, ms._MAX_SEPARATE + 1)))
         self.assertEqual(node.FUNCTION, "stitch")
         self.assertTrue(callable(getattr(node, node.FUNCTION)))
         for name in package.__all__:
@@ -574,7 +583,7 @@ class MultiStitchTests(unittest.TestCase):
         """Covers the actual node entry point, not just the helpers."""
         red = self.write_png("r.png", (255, 0, 0))
         blue = self.write_png("b.png", (0, 0, 255))
-        output, cells, width, height = ms.MultiStitchImages().stitch(
+        output, cells, width, height, *_separate = ms.MultiStitchImages().stitch(
             direction="right",
             match_image_size=True,
             spacing_width=0,
@@ -600,29 +609,29 @@ class MultiStitchTests(unittest.TestCase):
             images_json=json.dumps([small, big]), layout_mode="strip", grid_columns=3,
             custom_spacing_color="#808080",
         )
-        image, _, width, height = ms.MultiStitchImages().stitch(**common)
+        image, _, width, height, *_ = ms.MultiStitchImages().stitch(**common)
         self.assertEqual(tuple(image.shape), (1, 20, 63, 3), "the strip itself is unchanged")
         self.assertEqual((width, height), (32, 32), "first image, 30×20 snapped to 32s")
         self.assertIsInstance(width, int)
         self.assertIsInstance(height, int)
-        _, _, width, height = ms.MultiStitchImages().stitch(**common, size_reference=2, size_divisible_by=4)
+        _, _, width, height, *_ = ms.MultiStitchImages().stitch(**common, size_reference=2, size_divisible_by=4)
         self.assertEqual((width, height), (100, 60))
-        _, _, width, height = ms.MultiStitchImages().stitch(
+        _, _, width, height, *_ = ms.MultiStitchImages().stitch(
             **common, size_reference=2, size_megapixels=1.0, size_divisible_by=32,
         )
         self.assertEqual((width, height), (1280, 768), "100×60 scaled to 1 MP keeps its 5:3 shape")
         # Crop and rotation count: the size is the image's footprint on the canvas.
         edited = dict(small, rotation=90, crop={"x": 0, "y": 0, "w": 1, "h": 0.5})
-        _, _, width, height = ms.MultiStitchImages().stitch(
+        _, _, width, height, *_ = ms.MultiStitchImages().stitch(
             **dict(common, images_json=json.dumps([edited, big])), size_divisible_by=1,
         )
         self.assertEqual((width, height), (20, 15))
         # Frames from the IMAGE input are candidates too.
-        _, _, width, height = ms.MultiStitchImages().stitch(
+        _, _, width, height, *_ = ms.MultiStitchImages().stitch(
             **common, images=torch.zeros(1, 200, 300, 3), size_reference=3, size_divisible_by=1,
         )
         self.assertEqual((width, height), (300, 200), "IMAGE-input frames count after the pasted images")
-        _, _, width, height = ms.MultiStitchImages().stitch(**common, size_reference=7, size_divisible_by=1)
+        _, _, width, height, *_ = ms.MultiStitchImages().stitch(**common, size_reference=7, size_divisible_by=1)
         self.assertEqual((width, height), (100, 60), "a number past the end means the last image")
         with self.assertRaisesRegex(ValueError, "size_reference must be an image number"):
             ms.MultiStitchImages().stitch(**common, size_reference="biggest")
@@ -1041,7 +1050,7 @@ class MultiStitchTests(unittest.TestCase):
     def test_cells_output_is_a_uniform_batch_on_the_background(self):
         red = solid((1.0, 0.0, 0.0), 4, 4)
         blue = solid((0.0, 0.0, 1.0), 2, 6)
-        image, cells = ms._compose_from(
+        image, cells, _frames = ms._compose_from(
             [lambda: red, lambda: blue], [(4, 4), (6, 2)], "strip", "right", False, 3, 1, "white", "#808080",
             output_cells=True,
         )
@@ -1054,12 +1063,65 @@ class MultiStitchTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "cells output would be"):
             ms._validate_cells_output(300, 10000, 10000)
 
+    def test_numbered_outputs_carry_each_image_whole(self):
+        red = solid((1.0, 0.0, 0.0), 4, 4)
+        blue = solid((0.0, 0.0, 1.0), 2, 6)
+        _, cells, frames = ms._compose_from(
+            [lambda: red, lambda: blue], [(4, 4), (6, 2)], "strip", "right", False, 3, 1, "white", "#808080",
+            output_cells=True,
+        )
+        # The batch has to pad every frame to one size; a socket of its own
+        # does not, which is the whole reason these exist.
+        self.assertEqual(tuple(cells.shape), (2, 4, 6, 3))
+        self.assertEqual([tuple(f.shape) for f in frames], [(1, 4, 4, 3), (1, 2, 6, 3)])
+        self.assertRgb(frames[0][0, 0, 0], (1, 0, 0))
+        self.assertRgb(frames[1][0, 0, 0], (0, 0, 1))
+        self.assertRgb(frames[1][0, 1, 5], (0, 0, 1), atol=1e-6)
+
+        # And they follow the size matching, so what comes out is the picture
+        # as it sits in the stitched result.
+        _, _, matched = ms._compose_from(
+            [lambda: red, lambda: blue], [(4, 4), (6, 2)], "strip", "right", True, 3, 1, "white", "#808080",
+            output_cells=True, match_reference="first",
+        )
+        self.assertEqual([tuple(f.shape) for f in matched], [(1, 4, 4, 3), (1, 4, 12, 3)])
+
+        # Nothing asked for, nothing built.
+        self.assertEqual(ms._compose_from(
+            [lambda: red], [(4, 4)], "strip", "right", False, 3, 0, "white", "#000000")[2], [])
+
+    def test_numbered_outputs_stop_at_the_socket_count(self):
+        many = [solid((0.0, 1.0, 0.0), 2, 2) for _ in range(ms._MAX_SEPARATE + 3)]
+        _, _, frames = ms._compose_from(
+            [(lambda img=img: img) for img in many], [(2, 2)] * len(many),
+            "grid", "right", False, 4, 0, "white", "#000000", output_cells=True,
+        )
+        self.assertEqual(len(frames), ms._MAX_SEPARATE, "there is nowhere to put the rest")
+
+    def test_stitch_fills_the_numbered_outputs_and_pads_the_spare_ones(self):
+        for name, colour in (("one.png", (255, 0, 0)), ("two.png", (0, 0, 255))):
+            Image.new("RGB", (4, 2), colour).save(self.root / name)
+        result = ms.MultiStitchImages().stitch(
+            direction="right", match_image_size=False, spacing_width=0, spacing_color="white",
+            layout_mode="strip", grid_columns=2, custom_spacing_color="#000000",
+            images_json=json.dumps([{"filename": "one.png"}, {"filename": "two.png"}]),
+            output_cells=True,
+        )
+        self.assertEqual(len(result), 4 + ms._MAX_SEPARATE)
+        first, second = result[4], result[5]
+        self.assertEqual(tuple(first.shape), (1, 2, 4, 3))
+        self.assertRgb(first[0, 0, 0], (1, 0, 0))
+        self.assertRgb(second[0, 0, 0], (0, 0, 1))
+        for spare in result[6:]:
+            self.assertEqual(tuple(spare.shape), (1, 1, 1, 3), "a spare socket answers with one black pixel")
+            self.assertRgb(spare[0, 0, 0], (0, 0, 0))
+
     def test_placed_cells_follow_the_output_limit(self):
         """placed means "the size the image has in the stitched result", which
         the output limit shrinks; the cells used to keep the pre-limit size."""
         red = solid((1.0, 0.0, 0.0), 40, 40)
         blue = solid((0.0, 0.0, 1.0), 20, 60)
-        image, cells = ms._compose_from(
+        image, cells, _frames = ms._compose_from(
             [lambda: red, lambda: blue], [(40, 40), (60, 20)], "strip", "right", False, 3, 0,
             "white", "#808080", output_limit="max_long_side", output_limit_px=50, output_cells=True,
         )
@@ -1072,13 +1134,13 @@ class MultiStitchTests(unittest.TestCase):
         self.assertRgb(cells[1, 1, 15], (1.0, 1.0, 1.0))
 
         # Without a limit the cells keep the placed size, as before.
-        _, cells = ms._compose_from(
+        _, cells, _frames = ms._compose_from(
             [lambda: red, lambda: blue], [(40, 40), (60, 20)], "strip", "right", False, 3, 0,
             "white", "#808080", output_cells=True,
         )
         self.assertEqual(tuple(cells.shape), (2, 40, 60, 3))
         # And a cell never disappears, however hard the canvas is squeezed.
-        _, cells = ms._compose_from(
+        _, cells, _frames = ms._compose_from(
             [lambda: solid((1.0, 0.0, 0.0), 2, 2)], [(2, 2)], "strip", "right", False, 3, 0,
             "white", "#808080", output_limit="max_long_side", output_limit_px=1, output_cells=True,
         )

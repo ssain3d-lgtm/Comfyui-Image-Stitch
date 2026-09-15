@@ -23,6 +23,7 @@
 - **동영상에서 장면 캡처** — 프레임 단위로 찾아 원본 해상도 PNG로 목록에 추가, 동영상은 저장 공간을 차지하지 않음. 브라우저가 못 여는 코덱은 서버(PyAV)가 디코딩
 - **기준 이미지 크기 출력** — `width`/`height` 출력 단자와 크기 패널: 기준 이미지 크기를 MP 목표로 조정하고 배수(기본 32)로 맞춤
 - **갤러리** — 실행한 구성(이미지·Crop·순서·설정)이 미리보기와 함께 기록되어 언제든 다시 불러오기, 안 쓰는 파일 정리까지
+- **이미지별 개별 출력 단자** — `output_cells`를 켜면 `image_1`…`image_8`로 한 장씩 따로, 여백 없이
 - 툴바 한 줄 `+ Add · Clear · ⧉ Copy · ↶ ↷ · Preview · Options` — 고급 옵션은 **접혀 있고** 기본값이 아닌 것만 표시
 - 이미지별 **Crop / 90° Rotate / Flip H / Flip V**
 - Free Crop용 **상/하/좌/우 + 모서리 핸들**
@@ -41,6 +42,13 @@
 - 초대형 결과 생성 전 **Output Size Safety Guard**
 - 일반 `IMAGE` 출력 → `Preview Image`, `Save Image`, `VAE Encode` 등에 바로 연결
 - 추가 Python 패키지 불필요 — 동영상 서버 디코딩에만 PyAV가 쓰이고 최신 ComfyUI에는 이미 포함되어 있습니다(ComfyUI-Manager용 `requirements.txt`에도 적어 두었습니다)
+
+### 1.10에서 달라진 점
+
+- **이미지마다 개별 출력 단자** — `output_cells`를 켜면 **`image_1` … `image_8`** 단자가 생겨 이미지를 한 장씩 따로 뺄 수 있습니다. 노드에는 **가지고 있는 이미지 수만큼만** 표시되고, 연결된 단자는 절대 사라지지 않습니다. 레퍼런스를 한 장씩 따로 넣어야 하는 모델에 바로 연결할 수 있습니다.
+- **여백이 붙지 않습니다** — ComfyUI의 `IMAGE` 배치는 크기가 같아야 해서 `cells`는 모든 프레임을 같은 셀에 담고 나머지를 배경색으로 채웁니다. 개별 단자는 그럴 필요가 없어서, `image_2`는 **합성 결과에서 가지는 크기 그대로**(`cells_resolution = source`면 원본 크기) 나옵니다.
+- `IMAGE` 입력을 연결하면 실행 전에는 장수를 알 수 없으므로 단자 8개가 전부 보입니다. 이미지 수보다 뒤쪽 단자는 1픽셀 검정 이미지를 냅니다(빈 값이 흘러가면 엉뚱한 노드에서 터지기 때문입니다).
+- 새 단자는 `image`·`cells`·`width`·`height` **뒤**에 붙어서 기존 워크플로우의 연결이 밀리지 않습니다.
 
 ### 1.9에서 달라진 점
 
@@ -441,6 +449,7 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 - **`⧉ Copy` button → the stitched result on the clipboard without queueing**
 - **Capture frames from a video** — find the moment frame by frame, add it as a native-resolution PNG; the video takes no storage, and the server (PyAV) decodes codecs the browser cannot
 - **Gallery** — every composition a run stitches is recorded with a preview and can be loaded back into a node; it also shows what the image folder holds and clears what nothing uses
+- **A socket per image** — `output_cells` also fills `image_1`…`image_8`, one picture each, unpadded
 - **Duplicate an image** — the card menu adds the same file once more, right after it, croppable and rotatable on its own
 - **Pixel size on every card** — and what a crop leaves of it, counted live in the editor while you drag
 - **Blur brush** — paint over a face or a plate in the editor; adjustable width and strength, stored as coordinates, source untouched
@@ -463,6 +472,12 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 - **Output Size Safety Guard** before giant tensors are allocated
 - Standard `IMAGE` output → `Preview Image`, `Save Image`, `VAE Encode`, etc.
 - No extra Python packages required — only server-side video decoding uses PyAV, which current ComfyUI already installs (and `requirements.txt` lists it for ComfyUI-Manager)
+
+### What changed in 1.10
+
+- **Each image can leave on its own socket** — `output_cells` also fills **`image_1` … `image_8`**, and the node shows exactly as many as it holds images, never dropping one that is wired. For a model that wants its references one at a time rather than as a batch.
+- **No padding** — a ComfyUI `IMAGE` batch must be one size, so `cells` pads; a socket of its own does not. `image_2` is image 2 at the size it has in the stitched result, or its own with `cells_resolution = source`.
+- The numbered sockets come after the existing four, so no saved workflow's links shift.
 
 ### What changed in 1.9
 

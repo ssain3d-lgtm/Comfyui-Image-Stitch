@@ -1773,6 +1773,58 @@ describe("native-reference refinements", () => {
         assert.equal(shared.blurKey(one), shared.blurKey({ ...one }));
     });
 
+    it("shows one numbered socket per image, and only when the cells are asked for", async () => {
+        const node = plainNode(nodeType);
+        for (let i = 0; i < 8; i++) dom.imageSizes.set(`${i}.png`, [40, 20]);
+        const names = () => node.outputs.map((slot) => slot.name).slice(shared.NAMED_OUTPUTS);
+        // Drawing the node is what keeps its sockets in step, and it happens
+        // on every frame, so this is the path the real thing takes.
+        const load = async (count) => {
+            setImages(node, Array.from({ length: count }, (_, i) => item(`${i}.png`)));
+            paintedCalls(nodeType, node);
+            // Let the thumbnails this asked for finish, so the shared loader is
+            // idle again for whatever runs next.
+            await waitForThumbs(node);
+        };
+        const setCells = (on) => {
+            widget(node, "output_cells").value = on;
+            nodeType.prototype.onWidgetChanged.call(node, "output_cells", on, !on, widget(node, "output_cells"));
+        };
+        assert.equal(shared.NAMED_OUTPUTS, 4);
+        assert.deepEqual(node.outputs.map((slot) => slot.name),
+            ["image", "cells", "width", "height"], "four sockets and no more to start");
+
+        await load(3);
+        assert.deepEqual(names(), [], "the pictures alone do not add sockets");
+
+        // output_cells is the switch that fills them, so it is the one that
+        // shows them: one per image, not the whole set the node type carries.
+        setCells(true);
+        assert.deepEqual(names(), ["image_1", "image_2", "image_3"]);
+
+        await load(1);
+        assert.deepEqual(names(), ["image_1"], "and they go away with the pictures");
+
+        // Never one that is wired, though: removing it would take the link.
+        await load(3);
+        node.outputs[6].links = [42];
+        await load(1);
+        assert.deepEqual(names(), ["image_1", "image_2", "image_3"]);
+        node.outputs[6].links = null;
+        await load(1);
+        assert.deepEqual(names(), ["image_1"]);
+
+        // A connected IMAGE input brings frames whose number nobody knows until
+        // the run, so the whole set shows.
+        node.inputs[0].link = 7;
+        await load(1);
+        assert.equal(names().length, shared.MAX_SEPARATE);
+
+        node.inputs[0].link = null;
+        setCells(false);
+        assert.deepEqual(names(), [], "no cells, no numbered sockets");
+    });
+
     it("says what an image measures, and what a crop leaves of it", () => {
         assert.equal(shared.sizeText(1024, 768, null), "1024 × 768");
         assert.equal(shared.sizeText(1024, 768, { x: 0, y: 0, w: 1, h: 1 }), "1024 × 768");

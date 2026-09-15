@@ -53,6 +53,12 @@ _COLOR_MAP = {
 # bounds each original as it is decoded: composition streams the sources one
 # at a time into the canvas, so one decoded original plus the canvas is the
 # whole working set, however many images the node holds.
+# How many images can come out on their own sockets. A node cannot grow its
+# outputs per workflow — RETURN_TYPES is read once, for the node type — so the
+# sockets exist up to here and the frontend shows only as many as there are
+# images. Nine is what MiniMax H3 accepts as references; eight plus the
+# stitched image is the same handful.
+_MAX_SEPARATE = 8
 _MAX_OUTPUT_PIXELS = 128 * 1024 * 1024
 _MAX_OUTPUT_SIDE = 131_072
 _MAX_SOURCE_PIXELS = 128 * 1024 * 1024
@@ -1117,13 +1123,16 @@ def _compose_from(
     cells_resolution: str = "placed",
     minimum_image_side: int = 0,
     match_reference: str = "first",
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, list[torch.Tensor]]:
     """Compose from lazy sources: each loader is called once, in list order.
 
-    Returns (image, cells). `image` is the stitched canvas, optionally scaled
-    down by output_limit. `cells` is a batch with one frame per source, each
-    centred in a uniform cell on the background colour — or, when
+    Returns (image, cells, frames). `image` is the stitched canvas, optionally
+    scaled down by output_limit. `cells` is a batch with one frame per source,
+    each centred in a uniform cell on the background colour — or, when
     output_cells is off, the image itself, so the output is never empty.
+    `frames` holds those same pictures without the padding a batch forces on
+    them, one tensor each, for the numbered outputs; it is empty unless
+    output_cells asked for them.
     Validation happens before any loader runs. Every tensor is CPU float32
     [N, H, W, 3] as ComfyUI expects.
     """
@@ -1149,6 +1158,7 @@ def _compose_from(
     scale_x, scale_y = final_w / out_w, final_h / out_h
     if minimum_image_side and any(min(w * scale_x, h * scale_y) < minimum_image_side for _, _, w, h in placements):
         raise ValueError("Multi Stitch Images: a placed image is below minimum_image_side. Increase output size, disable size matching, or lower the minimum.")
+    frames: list[torch.Tensor] = []
     cells = None
     if output_cells:
         if cells_resolution == "source":
@@ -1180,12 +1190,16 @@ def _compose_from(
             cx = (cells.shape[2] - cell_w) // 2
             cy = (cells.shape[1] - cell_h) // 2
             cells[index:index + 1, cy:cy + cell_h, cx:cx + cell_w, :] = cell_image
+            # The very same picture, kept whole: a batch has to pad every frame
+            # to one size, and a socket of its own does not.
+            if index < _MAX_SEPARATE:
+                frames.append(cell_image.clone() if cell_image is image or cell_image is source else cell_image)
             del cell_image
         del source, image  # release this source before the next one is decoded
 
     if (final_w, final_h) != (out_w, out_h):
         output = _resize_exact(output, final_h, final_w)
-    return output, (cells if cells is not None else output)
+    return output, (cells if cells is not None else output), frames
 
 
 def _compose(
@@ -1202,7 +1216,7 @@ def _compose(
     """Compose already-decoded tensors; the same path stitch() streams through."""
     dimensions = [(int(img.shape[2]), int(img.shape[1])) for img in images]
     loaders: list[Loader] = [functools.partial(lambda tensor: tensor, img) for img in images]
-    image, _ = _compose_from(
+    image, _, _ = _compose_from(
         loaders,
         dimensions,
         layout_mode,
@@ -1310,7 +1324,9 @@ class MultiStitchImages:
                 "output_cells": ("BOOLEAN", {
                     "default": False,
                     "tooltip": "Also fill the cells output with one frame per image, each centred in a uniform "
-                               "cell, for using the references separately. Off: cells repeats the stitched image.",
+                               "cell, and the numbered image_N outputs with the same pictures on sockets of "
+                               "their own, unpadded. For using the references separately. Off: cells repeats "
+                               "the stitched image and the numbered outputs are one black pixel.",
                 }),
             },
             "optional": {
@@ -1383,8 +1399,11 @@ class MultiStitchImages:
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "IMAGE", "INT", "INT")
-    RETURN_NAMES = ("image", "cells", "width", "height")
+    # The numbered outputs come last so no saved workflow's links shift.
+    RETURN_TYPES = ("IMAGE", "IMAGE", "INT", "INT") + ("IMAGE",) * _MAX_SEPARATE
+    RETURN_NAMES = ("image", "cells", "width", "height") + tuple(
+        f"image_{number}" for number in range(1, _MAX_SEPARATE + 1)
+    )
     FUNCTION = "stitch"
     CATEGORY = "image/transform"
     DESCRIPTION = (
@@ -1399,6 +1418,11 @@ class MultiStitchImages:
         "snapped to size_divisible_by — for an Empty Latent or a resize node downstream.",
         "Height of image number size_reference (1 = the first), rescaled to size_megapixels and "
         "snapped to size_divisible_by — for an Empty Latent or a resize node downstream.",
+    ) + tuple(
+        f"Image {number} on its own, the size it has in the stitched result (or its own, with "
+        f"cells_resolution = source) and without the padding a batch would add. Needs output_cells; "
+        f"one black pixel when the list is shorter than {number}."
+        for number in range(1, _MAX_SEPARATE + 1)
     )
 
     def stitch(
@@ -1477,7 +1501,7 @@ class MultiStitchImages:
 
         # Decode pass: _compose_from validates the canvas first, then pulls
         # each source through its loader one at a time.
-        image, cells = _compose_from(
+        image, cells, frames = _compose_from(
             loaders,
             dimensions,
             layout_mode,
@@ -1515,7 +1539,12 @@ class MultiStitchImages:
             image,
             input_frames=len(frames),
         )
-        return image, cells, width, height
+        # A socket past the end of the list answers with one black pixel
+        # rather than nothing: a None travelling down a link fails far from
+        # here, in whatever node tried to read it.
+        blank = torch.zeros((1, 1, 1, 3), dtype=torch.float32)
+        separate = tuple((frames[i] if i < len(frames) else blank) for i in range(_MAX_SEPARATE))
+        return (image, cells, width, height, *separate)
 
     @classmethod
     def VALIDATE_INPUTS(cls, images_json="[]"):

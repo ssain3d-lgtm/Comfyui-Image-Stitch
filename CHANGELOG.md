@@ -2,6 +2,14 @@
 
 All notable changes to **Multi Stitch Images**. The version is the one in `pyproject.toml`; each release is tagged `v<version>` on `main`.
 
+## 1.10.0 — 2026-09-15
+
+### Added
+- **Every image can leave on a socket of its own.** `output_cells` now also fills **`image_1` … `image_8`**, one picture each, and the node shows exactly as many of those sockets as it holds images — no more, and never one that is wired. A model that wants its references handed over one at a time, rather than as a batch, can be fed straight from here.
+- **They carry no padding.** A ComfyUI `IMAGE` batch has to be one size, so `cells` centres every frame in a uniform cell and fills the rest with the background colour. A socket of its own has no such rule: `image_2` is image 2, at the size it has in the stitched result — or at its own, with `cells_resolution = source` — and nothing else.
+- A connected `IMAGE` input brings frames whose number is unknown until the run, so that shows the whole set. A socket past the end of the list answers with one black pixel rather than nothing, since a `None` travelling down a link fails far from here, in whatever node tried to read it.
+- The numbered sockets come **after** `image`, `cells`, `width` and `height`, so no saved workflow's links shift.
+
 ## 1.9.1 — 2026-09-15
 
 ### Fixed
