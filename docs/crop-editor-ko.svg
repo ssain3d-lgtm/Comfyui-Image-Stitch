@@ -29,6 +29,8 @@
     <rect x="985" y="520" width="42" height="31" rx="7" fill="#303134" stroke="#5f6368"/><text x="1006" y="540" text-anchor="middle">Fit</text>
     <rect x="72" y="566" width="92" height="31" rx="7" fill="#303134" stroke="#5f6368"/><text x="118" y="586" text-anchor="middle">Crop 초기화</text>
     <rect x="172" y="566" width="92" height="31" rx="7" fill="#303134" stroke="#5f6368"/><text x="218" y="586" text-anchor="middle">전체 초기화</text>
+    <rect x="800" y="566" width="34" height="31" rx="7" fill="#303134" stroke="#5f6368"/><text x="817" y="586" text-anchor="middle">‹</text>
+    <rect x="842" y="566" width="34" height="31" rx="7" fill="#303134" stroke="#5f6368"/><text x="859" y="586" text-anchor="middle">›</text>
     <rect x="900" y="566" width="72" height="31" rx="7" fill="#303134" stroke="#5f6368"/><text x="936" y="586" text-anchor="middle">취소</text>
     <rect x="982" y="566" width="126" height="31" rx="7" fill="#1a73e8"/><text x="1045" y="586" fill="#fff" text-anchor="middle">적용</text>
   </g>

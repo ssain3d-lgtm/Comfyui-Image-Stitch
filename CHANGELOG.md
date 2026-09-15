@@ -2,6 +2,16 @@
 
 All notable changes to **Multi Stitch Images**. The version is the one in `pyproject.toml`; each release is tagged `v<version>` on `main`.
 
+## 1.9.0 — 2026-09-15
+
+### Added
+- **The editor walks the list.** `‹` and `›` beside Cancel and Apply — or the **arrow keys** — keep the edit and move to the next image without closing the panel. Editing several cards was `Apply → the editor closes → find the next card → click → wait for it to load → edit`, and most of that was the closing and the finding. The whole panel stays put; only the picture in it changes.
+- **Walking past an image costs nothing.** The step commits only when something was actually changed, so browsing the list adds no undo steps and touches no card. The header counts where you are (`Edit image 2 of 5`) and the arrows stop at either end rather than wrapping.
+- Each image is still its own undo step, and a second press while a picture is still loading cannot leave the slower load to land last.
+
+### Fixed
+- The brush row showed while the crop tool was out: an author rule that sets `display` outranks the browser's own `[hidden]` rule whatever its specificity, so hiding it by attribute did nothing.
+
 ## 1.8.0 — 2026-09-15
 
 ### Added

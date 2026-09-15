@@ -349,6 +349,8 @@ describe("crop editor", () => {
         });
         const canvas = page.locator(".ms-crop-canvas");
         await canvas.waitFor();
+        assert.equal(await page.locator(".ms-crop-brush").isVisible(), false,
+            "the brush row belongs to the blur tool, not to cropping");
         await page.click(".tool-blur");
         const box = await canvas.boundingBox();
 
@@ -441,6 +443,56 @@ describe("crop editor", () => {
         await page.click(".apply");
         assert.equal(await page.evaluate(() => "blur" in window.__node._msImages[0]), false,
             "with no strokes left the item carries no blur at all");
+        assert.deepEqual(errors, []);
+        await page.close();
+    });
+
+    it("walks the list without closing, keeping an edit only where one was made", async () => {
+        const { page, errors } = await openPage();
+        await page.evaluate(() => {
+            window.__node = window.__makeNode("editor.png");
+            const card = (filename) => ({
+                filename, type: "input", crop: { x: 0, y: 0, w: 1, h: 1 },
+                rotation: 0, flip_h: false, flip_v: false,
+            });
+            window.__node._msImages = [card("editor.png"), card("check.png"), card("green.png")];
+            window.__openCropEditor(window.__node, 0);
+        });
+        const canvas = page.locator(".ms-crop-canvas");
+        await canvas.waitFor();
+        const title = () => page.locator(".ms-crop-title").textContent();
+        assert.equal(await title(), "Edit image 1 of 3");
+        assert.equal(await page.locator(".step-prev").isDisabled(), true, "nothing before the first");
+
+        // Trim the first image, then move on: the edit goes in by itself.
+        const box = await canvas.boundingBox();
+        await page.mouse.move(box.x + box.width - 3, box.y + box.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(box.x + box.width * 0.6, box.y + box.height / 2, { steps: 4 });
+        await page.mouse.up();
+        await page.click(".step-next");
+        await page.waitForFunction(() => /image 2/.test(document.querySelector(".ms-crop-title").textContent));
+
+        assert.equal(await page.locator(".ms-crop-overlay").count(), 1, "the editor never closed");
+        const first = await page.evaluate(() => window.__node._msImages[0].crop);
+        assert.ok(Math.abs(first.w - 0.6) < 0.03, `the trim was kept: ${JSON.stringify(first)}`);
+        assert.equal(await page.locator(".step-prev").isDisabled(), false);
+
+        // The arrow keys do the same, and the last image has nothing after it.
+        await page.keyboard.press("ArrowRight");
+        await page.waitForFunction(() => /image 3/.test(document.querySelector(".ms-crop-title").textContent));
+        assert.equal(await page.locator(".step-next").isDisabled(), true);
+        await page.keyboard.press("ArrowLeft");
+        await page.waitForFunction(() => /image 2/.test(document.querySelector(".ms-crop-title").textContent));
+
+        // Walking past an image without touching it leaves it alone, so
+        // browsing the list costs no undo steps.
+        assert.deepEqual(await page.evaluate(() => window.__node._msImages[1].crop), { x: 0, y: 0, w: 1, h: 1 });
+        assert.deepEqual(await page.evaluate(() => window.__node._msImages[2].crop), { x: 0, y: 0, w: 1, h: 1 });
+
+        // And the second image is really the one on the canvas now.
+        assert.equal(await page.evaluate(() => window.__node._msEditor.index()), 1);
+        assert.equal(await page.locator(".dimensions").textContent(), "300 × 200");
         assert.deepEqual(errors, []);
         await page.close();
     });

@@ -47,7 +47,13 @@ function installStyles() {
 .ms-crop-hint.said{color:#8ab4f8}
 .ms-crop-tools{display:flex;align-items:center;gap:5px}
 .ms-crop-tools button{padding:7px 12px}
+.ms-crop-controls .step-prev,.ms-crop-controls .step-next{padding:7px 13px;font-size:15px;line-height:1}
+.ms-crop-controls button:disabled{opacity:.4;cursor:default}
+/* The rule below sets display on an element the editor hides with [hidden],
+   and an author rule outranks the browser's own [hidden] one whatever its
+   specificity, so say it here. */
 .ms-crop-brush{display:flex;align-items:center;gap:8px;color:#cfcfcf;font-size:12px}
+.ms-crop-brush[hidden]{display:none}
 .ms-crop-brush input[type=range]{width:96px;accent-color:#8ab4f8}
 .ms-crop-brush .value{min-width:42px;text-align:right;font-variant-numeric:tabular-nums}
 .ms-crop-menu{position:fixed;z-index:100001;background:#2b2b2b;border:1px solid #4a4a4a;border-radius:6px;padding:3px;display:flex;flex-direction:column;min-width:190px;box-shadow:0 6px 20px rgba(0,0,0,.55);font-size:13px}
@@ -101,19 +107,24 @@ function cursorForMode(mode) {
     }[mode] || "crosshair";
 }
 
+// Decodes one of the node's images, or throws in the editor's own voice.
+function loadSource(item) {
+    const source = new Image();
+    source.crossOrigin = "anonymous";
+    source.src = imageUrl(item);
+    return new Promise((resolve, reject) => {
+        source.onload = () => resolve(source);
+        source.onerror = () => reject(new Error("Could not load image for cropping."));
+    });
+}
+
 export async function openCropEditor(node, index) {
-    const item = node._msImages[index];
+    let item = node._msImages[index];
     if (!item) return;
 
     installStyles();
 
-    const source = new Image();
-    source.crossOrigin = "anonymous";
-    source.src = imageUrl(item);
-    await new Promise((resolve, reject) => {
-        source.onload = resolve;
-        source.onerror = () => reject(new Error("Could not load image for cropping."));
-    });
+    let source = await loadSource(item);
 
     const overlay = document.createElement("div");
     overlay.className = "ms-crop-overlay";
@@ -123,7 +134,7 @@ export async function openCropEditor(node, index) {
     overlay.innerHTML = `
       <div class="ms-crop-panel" role="dialog" aria-modal="true">
         <div class="ms-crop-head">
-          <span>Edit image ${index + 1}</span>
+          <span class="ms-crop-title">Edit image ${index + 1}</span>
           <span class="dimensions" style="font-size:12px;color:#aaa"></span>
         </div>
         <div class="ms-crop-stage"><canvas class="ms-crop-canvas"></canvas></div>
@@ -164,6 +175,8 @@ export async function openCropEditor(node, index) {
           <button class="reset-all">Reset all</button>
           <span class="ms-crop-hint">Drag bars/corners • inside: move • outside: new crop • wheel: zoom • space or middle drag: pan</span>
           <span class="ms-crop-spacer"></span>
+          <button class="step-prev" title="Keep this edit and go to the previous image (←)">‹</button>
+          <button class="step-next" title="Keep this edit and go to the next image (→)">›</button>
           <button class="cancel">Cancel</button>
           <button class="primary apply">Apply</button>
         </div>
@@ -177,6 +190,9 @@ export async function openCropEditor(node, index) {
     const dimensions = overlay.querySelector(".dimensions");
     const transformState = overlay.querySelector(".ms-transform-state");
     const hint = overlay.querySelector(".ms-crop-hint");
+    const title = overlay.querySelector(".ms-crop-title");
+    const prevButton = overlay.querySelector(".step-prev");
+    const nextButton = overlay.querySelector(".step-next");
     const brushBar = overlay.querySelector(".ms-crop-brush");
     const cropButton = overlay.querySelector(".tool-crop");
     const blurButton = overlay.querySelector(".tool-blur");
@@ -198,6 +214,9 @@ export async function openCropEditor(node, index) {
 
     let transform = normalizeTransform(item);
     let working = renderTransformedImage(source, transform);
+    // Guards a load in flight: two quick presses of Next must not leave the
+    // slower one to finish last and show the wrong picture.
+    let loading = 0;
     let rect;
     let scale = 1;
     const MAX_ZOOM = 16;
@@ -317,21 +336,40 @@ export async function openCropEditor(node, index) {
         };
     }
 
-    const storedBlur = normalizeBlur(item.blur);
-    // A brush a thirtieth of the picture across, and a blur strong enough to
-    // take a face out at that size: both adjustable, neither needing to be.
-    sizeSlider.value = String(Math.round((storedBlur?.strokes[0]?.r ?? 0.03) * 1000));
-    strengthSlider.value = String(Math.round((storedBlur?.strength ?? 0.01) * 2000));
+    // Everything that belongs to the picture being edited rather than to the
+    // editor itself, so moving to the next one does not tear the panel down
+    // and build it again.
+    function adoptItem() {
+        transform = normalizeTransform(item);
+        working = renderTransformedImage(source, transform);
+        strokes = (normalizeBlur(item.blur)?.strokes || []).map((stroke) => ({ r: stroke.r, pts: [...stroke.pts] }));
+        painting = null;
+        drag = null;
+        pan = null;
+        brushAt = null;
 
-    const initialCrop = normalizeCrop(item.crop);
-    setCanvasSize();
-    readBrush();
-    rect = {
-        x: initialCrop.x * working.width,
-        y: initialCrop.y * working.height,
-        w: initialCrop.w * working.width,
-        h: initialCrop.h * working.height,
-    };
+        const storedBlur = normalizeBlur(item.blur);
+        // A brush a thirtieth of the picture across, and a blur strong enough
+        // to take a face out at that size: both adjustable, neither needing to be.
+        sizeSlider.value = String(Math.round((storedBlur?.strokes[0]?.r ?? 0.03) * 1000));
+        strengthSlider.value = String(Math.round((storedBlur?.strength ?? 0.01) * 2000));
+
+        const initialCrop = normalizeCrop(item.crop);
+        setCanvasSize();
+        readBrush();
+        rect = {
+            x: initialCrop.x * working.width,
+            y: initialCrop.y * working.height,
+            w: initialCrop.w * working.width,
+            h: initialCrop.h * working.height,
+        };
+        ratioSelect.value = "free";
+        title.textContent = `Edit image ${index + 1}${node._msImages.length > 1 ? ` of ${node._msImages.length}` : ""}`;
+        prevButton.disabled = index <= 0;
+        nextButton.disabled = index >= node._msImages.length - 1;
+    }
+
+    adoptItem();
 
     const point = (event) => {
         const box = canvas.getBoundingClientRect();
@@ -827,6 +865,8 @@ export async function openCropEditor(node, index) {
         overlay, canvas, changed, close: () => {},
         onKey: (event) => keyHandler?.(event),
         view: () => ({ ...view }),
+        index: () => index,
+        step: (delta) => step(delta),
     };
     const close = () => {
         if (closed) return;
@@ -851,7 +891,7 @@ export async function openCropEditor(node, index) {
     overlay.querySelector(".reset-all").onclick = () => {
         applyTransform({ rotation: 0, flip_h: false, flip_v: false });
     };
-    overlay.querySelector(".apply").onclick = () => {
+    function applyEdits() {
         item.rotation = transform.rotation;
         item.flip_h = transform.flip_h;
         item.flip_v = transform.flip_v;
@@ -869,8 +909,40 @@ export async function openCropEditor(node, index) {
         };
         node._msTransformedCache?.clear();
         commitImages(node);
+    }
+
+    overlay.querySelector(".apply").onclick = () => {
+        applyEdits();
         close();
     };
+
+    // The list is usually worked through one card after another, and closing
+    // the editor to find the next one is most of that work. Keep what was
+    // edited — only when something was — and move along.
+    async function step(delta) {
+        const next = index + delta;
+        if (closed || next < 0 || next >= node._msImages.length) return;
+        if (changed()) applyEdits();
+        const token = ++loading;
+        let loaded;
+        try {
+            loaded = await loadSource(node._msImages[next]);
+        } catch (error) {
+            say(error?.message || String(error));
+            return;
+        }
+        // A slower load must not land on top of a later one, and the editor
+        // may have closed while it was in the air.
+        if (closed || token !== loading) return;
+        index = next;
+        item = node._msImages[index];
+        source = loaded;
+        adoptItem();
+        fitView();
+        say(null);
+    }
+    prevButton.onclick = () => step(-1);
+    nextButton.onclick = () => step(1);
 
     overlay.addEventListener("mousedown", (event) => {
         if (event.target !== overlay || event.button !== 0 || menuWasOpen) return;
@@ -893,7 +965,11 @@ export async function openCropEditor(node, index) {
             }
             return;
         }
-        if ((event.ctrlKey || event.metaKey) && /^z$/i.test(event.key) && strokes.length) {
+        if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+            swallowKey(event);
+            event.preventDefault();
+            step(event.key === "ArrowLeft" ? -1 : 1);
+        } else if ((event.ctrlKey || event.metaKey) && /^z$/i.test(event.key) && strokes.length) {
             swallowKey(event);
             event.preventDefault();
             undoStroke();

@@ -42,6 +42,11 @@
 - 일반 `IMAGE` 출력 → `Preview Image`, `Save Image`, `VAE Encode` 등에 바로 연결
 - 추가 Python 패키지 불필요 — 동영상 서버 디코딩에만 PyAV가 쓰이고 최신 ComfyUI에는 이미 포함되어 있습니다(ComfyUI-Manager용 `requirements.txt`에도 적어 두었습니다)
 
+### 1.9에서 달라진 점
+
+- **편집기에서 다음/이전 이미지로 바로 이동** — Cancel 옆의 `‹` `›` 또는 **좌우 방향키**로 편집기를 닫지 않고 옮겨 갑니다. 지금까지는 `Apply → 닫힘 → 카드 찾기 → 클릭 → 로딩 → 편집`을 장마다 반복해야 했는데, 그 왕복이 사라집니다. 헤더가 위치를 알려 주고(`Edit image 2 of 5`) 양 끝에서는 멈춥니다.
+- **그냥 넘겨보는 건 공짜입니다** — 실제로 뭔가 바꿨을 때만 저장되므로, 목록을 훑어봐도 실행 취소 기록이 쌓이지 않고 카드도 안 건드립니다. 이미지마다 실행 취소 단위는 그대로 분리됩니다.
+
 ### 1.8에서 달라진 점
 
 - **블러 브러시** — 편집기에 `◍ Blur` 탭이 생겼습니다. 드래그해서 얼굴·번호판·워터마크 등을 가릴 수 있고, **Brush**로 두께, **Blur**로 강도를 조절합니다(둘 다 이미지 실제 픽셀 기준, 포인터의 원이 실제 브러시 크기). `Ctrl+Z`로 마지막 스트로크 취소, `Clear blur`로 전체 삭제.
@@ -200,6 +205,7 @@ git pull
 - `Reset crop`
 - `Reset all`
 - **크기 표시**: 헤더가 `1080 × 1920 → 792 × 1411`처럼 **원본 크기와 지금 Crop의 크기**를 드래그하는 동안 계속 보여 줍니다
+- **`‹` `›` 또는 좌우 방향키**: 편집기를 닫지 않고 다음/이전 이미지로. 바꾼 게 있을 때만 저장됩니다
 - **`◍ Blur` 탭**: 드래그해서 블러 칠하기. **Brush**=두께, **Blur**=강도, `Ctrl+Z`=마지막 스트로크 취소, `Clear blur`=전체 삭제. Crop·회전과 마찬가지로 좌표로 저장되어 원본은 그대로입니다
 - **우클릭**: `Copy crop to clipboard`(Crop된 부분만 원본 해상도로) / `Copy whole image to clipboard` — 편집기의 격자나 테두리는 복사되지 않습니다
 - **확대 / 이동**: 휠(포인터 기준 확대), `+ / − / Fit` 버튼, 키보드 `+ / - / 0`. 이동은 **휠 버튼 드래그** 또는 **Space + 좌클릭 드래그**. 최대 16배까지 확대되며, 확대하면 핸들이 잡는 범위와 최소 Crop 크기도 함께 작아져 픽셀 단위로 다듬을 수 있습니다.
@@ -456,6 +462,11 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 - Standard `IMAGE` output → `Preview Image`, `Save Image`, `VAE Encode`, etc.
 - No extra Python packages required — only server-side video decoding uses PyAV, which current ComfyUI already installs (and `requirements.txt` lists it for ComfyUI-Manager)
 
+### What changed in 1.9
+
+- **The editor walks the list** — `‹` `›` beside Cancel, or the arrow keys, keep the edit and move to the next image without closing the panel. `Apply → close → find the card → click → wait → edit` becomes one key.
+- **Walking past an image costs nothing** — the step commits only where something was changed, so browsing adds no undo steps. The header counts where you are and the arrows stop at either end.
+
 ### What changed in 1.8
 
 - **A blur brush in the editor.** `◍ Blur` switches from cropping to painting: drag to blur a face, a plate, a watermark. **Brush** sets the width, **Blur** the strength, both in the picture's own pixels; `Ctrl+Z` takes back a stroke and `Clear blur` removes them all.
@@ -616,6 +627,7 @@ Single-click the thumbnail image area to open the editor.
 - `Reset crop`
 - `Reset all`
 - **The size, live**: the header shows the image's size and what the crop leaves of it — `1080 × 1920 → 792 × 1411` — updated while the crop is dragged
+- **`‹` `›` or the arrow keys**: move to the next or previous image without closing the editor; the edit is kept only where you made one
 - **`◍ Blur` tab**: drag to paint a blur. **Brush** is the width, **Blur** the strength, `Ctrl+Z` takes back a stroke, `Clear blur` removes them all. Stored as coordinates like the crop, so the source file is never modified
 - **Right-click**: `Copy crop to clipboard` (the crop alone, at full resolution) or `Copy whole image to clipboard` — never the grid and outline drawn over the picture
 - **Zoom and pan**: the wheel zooms around the pointer, `+ / − / Fit` and the keys `+ / - / 0` do the same from the keyboard. Pan with a **middle-button drag** or **space held with the left button**. Up to 16×, and zooming in shrinks the grab areas and the minimum crop with it, so a crop can be trimmed to the pixel.
