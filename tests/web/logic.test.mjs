@@ -1161,9 +1161,10 @@ describe("relink a missing image", () => {
 
 describe("copy original image", () => {
 
-    it("offers the entry only over a card and copies the file as PNG", async () => {
+    it("offers the entry only over a card, and the file beside the edit once there is one", async () => {
         const node = plainNode(nodeType);
-        setImages(node, [item("photo.jpg")]);
+        dom.imageSizes.set("photo.jpg", [40, 20]);
+        setImages(node, [item("photo.jpg", { crop: { x: 0, y: 0, w: 0.5, h: 1 } })]);
         const written = [];
         define("fetch", async () => ({ ok: true, status: 200, blob: async () => ({ type: "image/jpeg" }) }));
         define("ClipboardItem", class { constructor(parts) { this.parts = parts; } });
@@ -1176,12 +1177,22 @@ describe("copy original image", () => {
 
         const options = [];
         nodeType.prototype.getExtraMenuOptions.call(node, { graph_mouse: [card(node, 0).x + 65, card(node, 0).y + 46] }, options);
-        assert.deepEqual(options.slice(0, 5).map((o) => o.content),
-            ["Edit image #1…", "Duplicate image #1", "Copy image #1 to clipboard", "Replace image #1…", "Remove image #1"]);
+        assert.deepEqual(options.slice(0, 6).map((o) => o.content), [
+            "Edit image #1…", "Duplicate image #1", "Copy image #1 to clipboard",
+            "Copy image #1 as uploaded", "Replace image #1…", "Remove image #1",
+        ], "a cropped image can be copied as it looks, or as the file it came from");
+
+        // As it looks: rendered in the browser, at the size of the crop.
         await options.find((o) => o.content === "Copy image #1 to clipboard").callback();
         assert.equal(written.length, 1);
-        assert.equal(written[0].type, "image/png", "a JPEG source is re-encoded");
-        assert.deepEqual(toasts(), ["success/Copied"]);
+        assert.equal(written[0].type, "image/png");
+        assert.match(app.extensionManager.toast.log.at(-1).detail, /20×20, as edited/);
+
+        // As the file: fetched whole, and re-encoded when it is not a PNG.
+        await options.find((o) => o.content === "Copy image #1 as uploaded").callback();
+        assert.equal(written.length, 2);
+        assert.equal(written[1].type, "image/png", "a JPEG source is re-encoded");
+        assert.deepEqual(toasts(), ["success/Copied", "success/Copied"]);
     });
 
     it("reports a missing file instead of throwing", async () => {

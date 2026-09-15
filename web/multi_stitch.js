@@ -631,6 +631,11 @@ function drawContained(ctx, image, crop, rect) {
     );
 }
 
+// Whether anything about this image differs from the file it came from.
+function isEdited(item) {
+    return isCropped(item?.crop) || isTransformed(item) || isBlurred(item);
+}
+
 function transformedCropDims(node, item) {
     const state = loadTransformedThumb(node, item);
     if (!state.ready) return null;
@@ -1062,6 +1067,8 @@ const DOM_VIEW_ACTIONS = () => (domViewActions ||= {
     move: moveItem,
     duplicate: duplicateImage,
     copyOriginal: copyOriginalImage,
+    copyEdited: copyEditedImage,
+    isEdited,
     replace: replaceImage,
     openVideo: openVideoPicker,
     removeVideo,
@@ -1278,6 +1285,57 @@ async function originalPngBlob(item) {
     canvas.getContext("2d").drawImage(bitmap, 0, 0);
     bitmap.close?.();
     return await canvasPngBlob(canvas);
+}
+
+// The image as the card shows it: cropped, turned and painted, at its own
+// full resolution. "Copy image #N" handing over the untouched file was a
+// surprise to anyone who had just cropped it — the card, the size beside it
+// and the preview all showed the edit, and only the clipboard did not.
+async function editedRender(item) {
+    const source = await loadFullImage(imageUrl(item));
+    try {
+        const view = isTransformed(item) || isBlurred(item) ? renderTransformedImage(source, item, 0) : source;
+        const size = mediaSize(view);
+        const box = cropPixelBox(size.w, size.h, item.crop);
+        if (box.w * box.h > COPY_MAX_PIXELS) {
+            throw new Error(
+                `${box.w}×${box.h} is too large to render in the browser ` +
+                `(limit ${Math.round(COPY_MAX_PIXELS / 1_000_000)} MP)`,
+            );
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = box.w;
+        canvas.height = box.h;
+        canvas.getContext("2d").drawImage(view, box.x, box.y, box.w, box.h, 0, 0, box.w, box.h);
+        return { blob: await canvasPngBlob(canvas), width: box.w, height: box.h };
+    } finally {
+        releaseImage(source);
+    }
+}
+
+async function copyEditedImage(node, index) {
+    const item = node._msImages?.[index];
+    if (!item) return;
+    const unavailable = clipboardUnavailable();
+    if (unavailable) {
+        notify("Copy failed", unavailable, "error");
+        return;
+    }
+    try {
+        // The size comes back from the rendering itself, not from the
+        // thumbnail cache, which need not be warm when the menu is used.
+        const rendered = editedRender(item);
+        rendered.catch(() => {});
+        await writePngToClipboard(rendered.then((out) => out.blob));
+        const { width, height } = await rendered;
+        notify(
+            "Copied",
+            `Image #${index + 1} copied at ${width}×${height}, as edited. ` +
+            "Ctrl+V pastes it back as another image.",
+        );
+    } catch (error) {
+        notify("Copy failed", String(error?.message || error), "error");
+    }
 }
 
 async function copyOriginalImage(node, index) {
@@ -2299,10 +2357,15 @@ function openVideoPicker(node, entry) {
 // One image's own entries. A selection of several replaces most of them with
 // the batch below, so these stay about the single card they name.
 function imageCardEntries(node, index) {
+    const item = node._msImages?.[index];
     return [
         { content: `Edit image #${index + 1}…`, callback: () => openEditor(node, index) },
         { content: `Duplicate image #${index + 1}`, callback: () => duplicateImage(node, index) },
-        { content: `Copy image #${index + 1} to clipboard`, callback: () => copyOriginalImage(node, index) },
+        { content: `Copy image #${index + 1} to clipboard`, callback: () => copyEditedImage(node, index) },
+        ...(isEdited(item) ? [{
+            content: `Copy image #${index + 1} as uploaded`,
+            callback: () => copyOriginalImage(node, index),
+        }] : []),
         { content: `Replace image #${index + 1}…`, callback: () => replaceImage(node, index) },
         { content: `Remove image #${index + 1}`, callback: () => removeImageAt(node, index) },
     ];

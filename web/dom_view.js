@@ -331,7 +331,8 @@ export function installDomView(node, actions) {
         el.addEventListener("contextmenu", (event) => openMenu(event, [
             ["Edit image…", () => actions.edit(node, index)],
             ["Duplicate image", () => actions.duplicate(node, index)],
-            ["Copy image to clipboard", () => actions.copyOriginal(node, index)],
+            ["Copy image to clipboard", () => actions.copyEdited(node, index)],
+            ...(actions.isEdited(item) ? [["Copy image as uploaded", () => actions.copyOriginal(node, index)]] : []),
             ["Replace image…", () => actions.replace(node, index)],
             ["Remove image", () => actions.remove(node, index)],
         ]));

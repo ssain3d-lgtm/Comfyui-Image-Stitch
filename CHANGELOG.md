@@ -2,6 +2,12 @@
 
 All notable changes to **Multi Stitch Images**. The version is the one in `pyproject.toml`; each release is tagged `v<version>` on `main`.
 
+## 1.9.1 — 2026-09-15
+
+### Fixed
+- **`Copy image #N to clipboard` handed over the untouched file.** The card showed the crop, the size beside it counted the crop, the preview drew the crop — and the clipboard gave you the original, which is a surprise to anyone who had just cropped something. It now copies the picture as the card shows it: the crop, the rotation, the flip and the blur strokes, at its own full resolution, and the notice says the size it wrote.
+- The file as uploaded is still one menu entry away — **`Copy image #N as uploaded`** — and it appears only once an image has actually been edited, since for an untouched one the two would be the same picture.
+
 ## 1.9.0 — 2026-09-15
 
 ### Added

@@ -77,6 +77,8 @@ function actionSpy(overrides = {}) {
             remove: (node, index) => calls.push(["remove", index]),
             duplicate: (node, index) => calls.push(["duplicate", index]),
             copyOriginal: (node, index) => calls.push(["copyOriginal", index]),
+            copyEdited: (node, index) => calls.push(["copyEdited", index]),
+            isEdited: (entry) => !!entry?.crop && entry.crop.w !== 1,
             replace: (node, index) => calls.push(["replace", index]),
             move: (node, index, delta) => calls.push(["move", index, delta]),
             openVideo: (node, entry) => calls.push(["openVideo", entry.filename]),
@@ -178,14 +180,33 @@ describe("dom view", () => {
         card.handlers.contextmenu[0](menuEvent());
         const entries = dom.overlays.at(-1).children;
         assert.deepEqual(entries.map((e) => e.textContent),
-            ["Edit image…", "Duplicate image", "Copy image to clipboard", "Replace image…", "Remove image"]);
+            ["Edit image…", "Duplicate image", "Copy image to clipboard", "Replace image…", "Remove image"],
+            "an untouched image has one copy: the file and the edit are the same thing");
         for (const entry of entries) entry.handlers.click[0]({ stopPropagation() {} });
         card.children.find((c) => c.className === "thumb").handlers.click[0]();
         assert.deepEqual(spy.calls.filter(([name]) => name !== "drawThumb" && name !== "drawPreview" && name !== "resized"), [
             ["add"], ["clear"], ["copy"], ["undo"], ["redo"], ["openGallery"],
             ["togglePreview"], ["toggleOptions"], ["toggleSizePanel"],
-            ["edit", 1], ["duplicate", 1], ["copyOriginal", 1], ["replace", 1], ["remove", 1], ["edit", 1],
+            ["edit", 1], ["duplicate", 1], ["copyEdited", 1], ["replace", 1], ["remove", 1], ["edit", 1],
         ]);
+        handle.destroy();
+    });
+
+    it("offers the untouched file as a second copy once an image is edited", () => {
+        const node = fakeNode([item("a.png"), item("b.png", { crop: { x: 0.1, y: 0, w: 0.8, h: 1 } })]);
+        const spy = actionSpy();
+        const handle = view.installDomView(node, spy.actions);
+        cards(handle.root)[1].handlers.contextmenu[0](menuEvent());
+        const entries = dom.overlays.at(-1).children;
+        assert.deepEqual(entries.map((e) => e.textContent), [
+            "Edit image…", "Duplicate image", "Copy image to clipboard",
+            "Copy image as uploaded", "Replace image…", "Remove image",
+        ]);
+        entries.find((e) => e.textContent === "Copy image to clipboard").handlers.click[0]({ stopPropagation() {} });
+        cards(handle.root)[1].handlers.contextmenu[0](menuEvent());
+        dom.overlays.at(-1).children.find((e) => e.textContent === "Copy image as uploaded")
+            .handlers.click[0]({ stopPropagation() {} });
+        assert.deepEqual(spy.calls.filter(([name]) => name.startsWith("copy")), [["copyEdited", 1], ["copyOriginal", 1]]);
         handle.destroy();
     });
 

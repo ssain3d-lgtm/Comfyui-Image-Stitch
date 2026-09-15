@@ -44,6 +44,8 @@
 
 ### 1.9에서 달라진 점
 
+- **우클릭 `Copy image #N to clipboard`가 원본을 주던 문제 수정 (1.9.1)** — 카드도, 옆의 크기 표시도, 미리보기도 전부 Crop된 모습을 보여 주는데 클립보드만 원본을 줬습니다. 이제 **카드에 보이는 그대로**(Crop·회전·반전·블러 적용) 원본 해상도로 복사합니다. 업로드한 파일 그대로가 필요하면 바로 아래 **`Copy image #N as uploaded`** 를 쓰면 됩니다(편집된 이미지에만 나타납니다).
+
 - **편집기에서 다음/이전 이미지로 바로 이동** — Cancel 옆의 `‹` `›` 또는 **좌우 방향키**로 편집기를 닫지 않고 옮겨 갑니다. 지금까지는 `Apply → 닫힘 → 카드 찾기 → 클릭 → 로딩 → 편집`을 장마다 반복해야 했는데, 그 왕복이 사라집니다. 헤더가 위치를 알려 주고(`Edit image 2 of 5`) 양 끝에서는 멈춥니다.
 - **그냥 넘겨보는 건 공짜입니다** — 실제로 뭔가 바꿨을 때만 저장되므로, 목록을 훑어봐도 실행 취소 기록이 쌓이지 않고 카드도 안 건드립니다. 이미지마다 실행 취소 단위는 그대로 분리됩니다.
 
@@ -220,7 +222,7 @@ Crop / 회전 / 반전 정보만 workflow에 저장하는 **비파괴 방식**�
 
 - **카드 클릭**(누르고 그 자리에서 떼기) → Edit 즉시 열기
 - **카드를 끌기** → 순서 변경. 놓일 자리가 **파란 막대**로 카드 사이에 표시되고, 끌리는 카드는 반투명해집니다.
-- **카드 우클릭** → `Edit · Duplicate · Copy to clipboard · Replace · Remove`
+- **카드 우클릭** → `Edit · Duplicate · Copy to clipboard · Replace · Remove` — 복사는 **Crop·회전·블러가 적용된 모습**이고, 편집한 이미지에는 `Copy as uploaded`(원본 파일)가 하나 더 붙습니다
 - 카드 **오른쪽 아래 모서리**에 **그 이미지의 픽셀 크기**가 작게 표시됩니다. Crop한 카드는 Crop 후 크기를 주황색으로 보여 주고, 마우스를 올리면 상태 줄에 원본 크기까지 함께 나옵니다.
 - 툴바 **`⧉ Copy`** → 합성 결과 복사
 - Drag 판정 거리는 ComfyUI Canvas 좌표가 아닌 **실제 화면 픽셀 기준**이라 Zoom 배율에 영향을 덜 받습니다. 그 거리를 넘지 않고 떼면 클릭으로 처리되어 편집기가 열립니다.
@@ -464,6 +466,8 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 
 ### What changed in 1.9
 
+- **`Copy image #N to clipboard` gave you the untouched file (1.9.1)** — the card, the size beside it and the preview all showed the crop; only the clipboard did not. It now copies the picture as the card shows it, at full resolution. **`Copy image #N as uploaded`** sits beside it for the original, and appears only once an image has been edited.
+
 - **The editor walks the list** — `‹` `›` beside Cancel, or the arrow keys, keep the edit and move to the next image without closing the panel. `Apply → close → find the card → click → wait → edit` becomes one key.
 - **Walking past an image costs nothing** — the step commits only where something was changed, so browsing adds no undo steps. The header counts where you are and the arrows stop at either end.
 
@@ -642,7 +646,7 @@ A card carries no buttons: the whole picture is the target, and everything else 
 
 - **Click a card** (press and release without moving) → open the editor immediately
 - **Drag a card** → reorder. A **blue bar** between the cards marks the slot it would drop into, and the card in hand goes translucent.
-- **Right-click a card** → `Edit · Duplicate · Copy to clipboard · Replace · Remove`
+- **Right-click a card** → `Edit · Duplicate · Copy to clipboard · Replace · Remove` — the copy is the picture **as edited**, and an edited image also offers `Copy as uploaded` for the original file
 - Each card shows **its pixel size** in its bottom-right corner, small; a cropped card shows what the crop leaves, in amber. Hover it and the status line adds the size before the crop.
 - **`⧉ Copy`** in the toolbar → copies the stitched result
 - Drag threshold is measured in **real browser pixels**, not ComfyUI graph coordinates, so canvas zoom does not make normal clicks behave like drags. Release inside that threshold and it counts as a click, opening the editor.

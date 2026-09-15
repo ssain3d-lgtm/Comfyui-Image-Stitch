@@ -747,15 +747,17 @@ describe("frame picker", () => {
     });
 });
 
-describe("copy original image", () => {
-    async function copyThroughMenu(page, filename) {
-        return page.evaluate(async (name) => {
+describe("copy one image", () => {
+    async function copyThroughMenu(page, filename, entry = "Copy image #1 to clipboard", edits = null) {
+        return page.evaluate(async ({ name, entry, edits }) => {
             const node = window.__makeNode(name);
+            if (edits) Object.assign(node._msImages[0], edits);
             window.__toasts.length = 0;
             const options = [];
             // graph_mouse over card 0: the list starts 148px down (toolbar row included), 130px cells.
             window.__nodeType.prototype.getExtraMenuOptions.call(node, { graph_mouse: [73, 194] }, options);
-            const copy = options.find((o) => o?.content === "Copy image #1 to clipboard");
+            const copy = options.find((o) => o?.content === entry);
+            if (!copy) return { entries: options.map((o) => o?.content).filter(Boolean) };
             await copy.callback();
             await new Promise((resolve) => setTimeout(resolve, 200));
             const toast = window.__toasts[0];
@@ -774,18 +776,48 @@ describe("copy original image", () => {
                     decoded = { w: bitmap.width, h: bitmap.height, pixel: [...ctx.getImageData(0, 0, 1, 1).data].slice(0, 3), magic };
                 }
             } catch (error) { decoded = { error: String(error) }; }
-            return { entry: copy.content, toast: toast && `${toast.severity}/${toast.summary}`, detail: toast?.detail, decoded };
-        }, filename);
+            return {
+                entry: copy.content, toast: toast && `${toast.severity}/${toast.summary}`,
+                detail: toast?.detail, decoded,
+                entries: options.map((o) => o?.content).filter(Boolean),
+            };
+        }, { name: filename, entry, edits });
     }
 
-    it("puts a PNG source on the clipboard unchanged", async () => {
+    it("copies an untouched image whole, as PNG", async () => {
         const { page } = await openPage();
         const r = await copyThroughMenu(page, "green.png");
-        assert.equal(r.entry, "Copy image #1 to clipboard");
         assert.equal(r.toast, "success/Copied");
         assert.deepEqual(r.decoded.magic, [0x89, 0x50, 0x4e, 0x47]);
         assert.deepEqual([r.decoded.w, r.decoded.h], [6, 4]);
         assert.deepEqual(r.decoded.pixel, [10, 200, 40]);
+        // With nothing edited, the file and the edit are the same picture, so
+        // the menu does not offer to copy it twice.
+        assert.equal(r.entries.includes("Copy image #1 as uploaded"), false);
+        await page.close();
+    });
+
+    it("copies what the card shows, not the file it came from", async () => {
+        const { page } = await openPage();
+        // A quarter turn makes the 300x200 gradient 200x300, and the crop is
+        // measured against that, as the editor and the server measure it: the
+        // right-hand 40% of 200 is 80 wide, the full 300 tall.
+        const edits = { crop: { x: 0.6, y: 0, w: 0.4, h: 1 }, rotation: 90 };
+        const r = await copyThroughMenu(page, "editor.png", "Copy image #1 to clipboard", edits);
+        assert.equal(r.toast, "success/Copied");
+        assert.deepEqual([r.decoded.w, r.decoded.h], [80, 300]);
+        assert.match(r.detail, /80×300/);
+        assert.match(r.detail, /as edited/);
+        await page.close();
+    });
+
+    it("still offers the untouched file beside it", async () => {
+        const { page } = await openPage();
+        const edits = { crop: { x: 0.6, y: 0, w: 0.4, h: 1 }, rotation: 90 };
+        const r = await copyThroughMenu(page, "editor.png", "Copy image #1 as uploaded", edits);
+        assert.equal(r.toast, "success/Copied");
+        assert.deepEqual([r.decoded.w, r.decoded.h], [300, 200], "the file as uploaded, crop and turn ignored");
+        assert.match(r.detail, /as uploaded/);
         await page.close();
     });
 
@@ -803,7 +835,7 @@ describe("copy original image", () => {
         const { page, errors } = await openPage();
         const r = await copyThroughMenu(page, "does-not-exist.png");
         assert.equal(r.toast, "error/Copy failed");
-        assert.match(r.detail, /404/);
+        assert.match(r.detail, /does-not-exist\.png/);
         assert.deepEqual(errors, []);
         await page.close();
     });
