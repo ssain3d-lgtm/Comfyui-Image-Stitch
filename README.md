@@ -45,6 +45,8 @@
 
 ### 1.10에서 달라진 점
 
+- **갤러리 미리보기가 찌그러지던 문제 수정 (1.10.1)** — 그리드 행 높이가 `auto`라 패널 높이를 행끼리 나눠 갖는 바람에, 카드 안에서 유일하게 줄어들 수 있는 **사진이 132px → 53px로 눌리고** 이름 줄까지 버튼에 가려졌습니다. UI 배율이 클수록 심했습니다. 행이 내용에 맞춰 커지도록 고쳤고, **미리보기도 180px로 키웠습니다.**
+
 - **이미지마다 개별 출력 단자** — `output_cells`를 켜면 **`image_1` … `image_8`** 단자가 생겨 이미지를 한 장씩 따로 뺄 수 있습니다. 노드에는 **가지고 있는 이미지 수만큼만** 표시되고, 연결된 단자는 절대 사라지지 않습니다. 레퍼런스를 한 장씩 따로 넣어야 하는 모델에 바로 연결할 수 있습니다.
 - **여백이 붙지 않습니다** — ComfyUI의 `IMAGE` 배치는 크기가 같아야 해서 `cells`는 모든 프레임을 같은 셀에 담고 나머지를 배경색으로 채웁니다. 개별 단자는 그럴 필요가 없어서, `image_2`는 **합성 결과에서 가지는 크기 그대로**(`cells_resolution = source`면 원본 크기) 나옵니다.
 - `IMAGE` 입력을 연결하면 실행 전에는 장수를 알 수 없으므로 단자 8개가 전부 보입니다. 이미지 수보다 뒤쪽 단자는 1픽셀 검정 이미지를 냅니다(빈 값이 흘러가면 엉뚱한 노드에서 터지기 때문입니다).
@@ -474,6 +476,8 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 - No extra Python packages required — only server-side video decoding uses PyAV, which current ComfyUI already installs (and `requirements.txt` lists it for ComfyUI-Manager)
 
 ### What changed in 1.10
+
+- **The gallery's previews were a strip (1.10.1)** — the grid split the panel's height between its rows instead of sizing them to their contents, and the picture was the only thing in a card able to shrink. Rows size to content now, and the previews are bigger besides.
 
 - **Each image can leave on its own socket** — `output_cells` also fills **`image_1` … `image_8`**, and the node shows exactly as many as it holds images, never dropping one that is wired. For a model that wants its references one at a time rather than as a batch.
 - **No padding** — a ComfyUI `IMAGE` batch must be one size, so `cells` pads; a socket of its own does not. `image_2` is image 2 at the size it has in the stitched result, or its own with `cells_resolution = source`.

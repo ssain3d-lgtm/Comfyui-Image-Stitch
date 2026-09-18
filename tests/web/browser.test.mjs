@@ -14,9 +14,11 @@ const TYPES = { ".js": "text/javascript", ".html": "text/html", ".png": "image/p
 const PAGE = `<!doctype html><meta charset="utf-8"><title>Multi Stitch Images test page</title>
 <script type="module">
 import { app } from "./scripts/app.js";
+import { api } from "./scripts/api.js";
 import { openCropEditor } from "./pkg/web/crop_editor.js";
 import { drawImageScaled, loadTransformedThumb } from "./pkg/web/shared.js";
 import { openFramePicker } from "./pkg/web/frame_picker.js";
+import { openGallery } from "./pkg/web/gallery.js";
 await import("./pkg/web/multi_stitch.js");
 const nodeType = { prototype: {} };
 await app.extension.beforeRegisterNodeDef(nodeType, { name: "MultiStitchImages" });
@@ -27,6 +29,8 @@ window.__openCropEditor = openCropEditor;
 window.__loadTransformedThumb = loadTransformedThumb;
 window.__drawImageScaled = drawImageScaled;
 window.__openFramePicker = openFramePicker;
+window.__openGallery = openGallery;
+window.__api = api;
 window.__makeNode = (filename) => ({
   pos: [0, 0], size: [420, 600], flags: {}, properties: { multi_stitch_preview: false }, graph: { setDirtyCanvas() {} }, widgets: [],
   _msImages: [{ filename, type: "input", crop: { x: 0, y: 0, w: 1, h: 1 }, rotation: 0, flip_h: false, flip_v: false }],
@@ -745,6 +749,58 @@ describe("frame picker", () => {
         assert.equal(r.overlaysAfter, 0, "closed");
         assert.equal(r.shots, 2, "each capture shows in the strip");
     });
+});
+
+describe("gallery layout", () => {
+    // The card is a column of boxes in a grid whose rows were left to size
+    // themselves. They did not: the container's height was split between them
+    // and the preview, the only child able to give, shrank to a strip. It got
+    // worse the larger the UI scale, which is where it was found.
+    async function openWith(page, count, rootFontPx) {
+        await page.evaluate(({ count, rootFontPx }) => {
+            document.documentElement.style.fontSize = `${rootFontPx}px`;
+            const entries = Array.from({ length: count }, (_, i) => ({
+                id: `e${i}`, created: 1758000000 + i, used: 1758000000 + i, uses: 1,
+                preview: true, width: 1660, height: 1028, images: [{ filename: "a" }, { filename: "b" }],
+            }));
+            window.__api.fetchApi = async () => ({
+                ok: true, status: 200,
+                json: async () => ({ entries, storage: { files: count, bytes: 1 }, settings: { autosave: true } }),
+            });
+            window.__api.apiURL = () => `${window.__msFixtureBase}/editor.png`;
+            window.__openGallery({ id: 1 }, {});
+        }, { count, rootFontPx });
+        await page.locator(".ms-gallery-card").first().waitFor();
+        await page.waitForTimeout(150);
+    }
+
+    const measure = (page) => page.evaluate(() => {
+        const card = document.querySelector(".ms-gallery-card");
+        const thumb = card.querySelector(".thumb");
+        const actions = card.querySelector(".actions");
+        return {
+            cardHeight: Math.round(card.getBoundingClientRect().height),
+            content: card.scrollHeight,
+            thumb: Math.round(thumb.getBoundingClientRect().height),
+            actionsBottom: Math.round(actions.getBoundingClientRect().bottom),
+            cardBottom: Math.round(card.getBoundingClientRect().bottom),
+        };
+    });
+
+    for (const scale of [16, 24]) {
+        it(`keeps the preview and the buttons whole at a ${scale}px root font`, async () => {
+            const { page, errors } = await openPage();
+            await openWith(page, 24, scale);
+            const box = await measure(page);
+            assert.ok(box.thumb >= 180, `the preview is its full height, not a strip (${box.thumb})`);
+            assert.ok(box.cardHeight >= box.content,
+                `the card is as tall as what is in it (${box.cardHeight} vs ${box.content})`);
+            assert.ok(box.actionsBottom <= box.cardBottom + 1,
+                "and the buttons sit inside it rather than over the name");
+            assert.deepEqual(errors, []);
+            await page.close();
+        });
+    }
 });
 
 describe("copy one image", () => {

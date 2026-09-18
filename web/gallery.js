@@ -39,18 +39,18 @@ function installStyles() {
 .ms-gallery-overlay button.primary:hover{background:#3a835a}
 .ms-gallery-overlay button.danger{border-color:#7a3b3b}
 .ms-gallery-overlay button.danger:hover{background:#5a2f2f}
-.ms-gallery-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;padding:12px 14px;overflow:auto;flex:1;min-height:160px}
+.ms-gallery-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));grid-auto-rows:max-content;gap:12px;padding:12px 14px;overflow:auto;flex:1;min-height:160px;align-content:start}
 .ms-gallery-card{background:#181818;border:1px solid #333;border-radius:6px;display:flex;flex-direction:column;overflow:hidden}
-.ms-gallery-card .thumb{height:132px;background:#0e0e0e;display:flex;align-items:center;justify-content:center;color:#666;font-size:12px;overflow:hidden}
+.ms-gallery-card .thumb{flex:0 0 180px;background:#0e0e0e;display:flex;align-items:center;justify-content:center;color:#666;font-size:12px;overflow:hidden}
 .ms-gallery-card .thumb img{max-width:100%;max-height:100%;object-fit:contain;display:block}
 .ms-gallery-card.pinned{border-color:#f6b73c}
 .ms-gallery-card .pin{position:absolute;right:6px;top:6px;background:rgba(0,0,0,.65);border:0;color:#8a8a8a;border-radius:4px;padding:2px 6px;font-size:13px;line-height:1;cursor:pointer}
 .ms-gallery-card .pin.on{color:#f6b73c}
 .ms-gallery-card .thumb{position:relative}
-.ms-gallery-card .name{padding:6px 8px 0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:text}
+.ms-gallery-card .name{flex:0 0 auto;padding:6px 8px 0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:text}
 .ms-gallery-card .name:hover{color:#fff;text-decoration:underline dotted}
-.ms-gallery-card .meta{padding:2px 8px 6px;color:#9a9a9a;font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ms-gallery-card .actions{display:flex;gap:6px;padding:0 8px 8px;flex-wrap:wrap}
+.ms-gallery-card .meta{flex:0 0 auto;padding:2px 8px 6px;color:#9a9a9a;font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ms-gallery-card .actions{flex:0 0 auto;display:flex;gap:6px;padding:0 8px 8px;flex-wrap:wrap}
 .ms-gallery-card .actions button{padding:3px 8px;font-size:12px}
 .ms-gallery-empty{grid-column:1/-1;color:#8f8f8f;text-align:center;padding:40px 12px;line-height:1.6}
 .ms-gallery-status{padding:6px 14px 10px;color:#9a9a9a;font-size:12px;min-height:18px}

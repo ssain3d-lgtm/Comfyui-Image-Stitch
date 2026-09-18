@@ -2,6 +2,13 @@
 
 All notable changes to **Multi Stitch Images**. The version is the one in `pyproject.toml`; each release is tagged `v<version>` on `main`.
 
+## 1.10.1 — 2026-09-18
+
+### Fixed
+- **The gallery's previews were a strip.** Its grid left the row height to `auto`, which split the panel's height between the rows instead of sizing each to what was in it, and the card — a column of boxes — gave up the only part able to shrink: the picture. A 132px preview came out at 53px, with the name clipped behind the buttons. The rows size to their content now (`grid-auto-rows: max-content`), and nothing in a card can be squashed.
+- It was worse the larger the UI scale, because the buttons wrap to a second row and leave the preview even less to live on. Both scales are now covered by a browser test that measures the card against what is inside it.
+- **The previews are bigger while we are here**: 180px tall in slightly wider cards, so a composition can actually be recognised from the thumbnail.
+
 ## 1.10.0 — 2026-09-15
 
 ### Added

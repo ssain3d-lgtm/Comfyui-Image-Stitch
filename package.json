@@ -1,6 +1,6 @@
 {
   "name": "comfyui-image-stitch-tests",
-  "version": "1.10.0",
+  "version": "1.10.1",
   "private": true,
   "description": "Frontend tests for the Multi Stitch Images ComfyUI node. ComfyUI itself never reads this file. The version tracks pyproject.toml so a release cannot half-happen; tests/test_packaging.py checks it.",
   "scripts": {
