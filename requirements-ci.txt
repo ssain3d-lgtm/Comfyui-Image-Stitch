@@ -16,7 +16,7 @@ torch>=2.2,<3
 aiohttp>=3.14.3,<4
 
 # Server-side video decoding for the frame picker routes.
-av>=12,<20
+av>=17.1.0,<20
 
 # Test tooling: the coverage gate, the lint gate, and the workflow parsing in
 # tests/test_packaging.py. ruff is held to one minor: a new minor adds rules to
