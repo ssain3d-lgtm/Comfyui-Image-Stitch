@@ -22,6 +22,6 @@ av>=12,<20
 # tests/test_packaging.py. ruff is held to one minor: a new minor adds rules to
 # the selected B/UP sets, and that upgrade belongs in a reviewed Dependabot PR
 # rather than in the next unrelated push.
-coverage>=7.6,<8
+coverage>=7.16.1,<8
 ruff>=0.16.6,<0.17
 pyyaml>=6.0.3,<7
