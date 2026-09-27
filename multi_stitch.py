@@ -1407,10 +1407,10 @@ class MultiStitchImages:
                 # go in side by side without an Image Batch squeezing them.
                 **{
                     name: ("IMAGE", {
-                        "tooltip": f"Another IMAGE input, appended after images{'' if number == 2 else f'_{number - 1}'}. "
+                        "tooltip": f"Another IMAGE input, appended after {previous}. "
                                    "Each input keeps its own size, like a pasted image.",
                     })
-                    for number, name in enumerate(_EXTRA_IMAGE_INPUTS, start=2)
+                    for previous, name in zip(("images", *_EXTRA_IMAGE_INPUTS[:-1]), _EXTRA_IMAGE_INPUTS, strict=True)
                 },
             },
         }
