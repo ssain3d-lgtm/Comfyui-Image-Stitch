@@ -9,10 +9,10 @@ import {
 } from "./harness.mjs";
 
 const dom = installDom();
-let app, api, shared, picker, ms, nodeType;
+let app, api, shared, picker, inputs, ms, nodeType;
 
 before(async () => {
-    ({ app, api, shared, picker, ms, nodeType } = await loadExtension(stageExtension()));
+    ({ app, api, shared, picker, inputs, ms, nodeType } = await loadExtension(stageExtension()));
 });
 
 beforeEach(() => {
@@ -942,15 +942,15 @@ describe("preview", () => {
         assert.equal(node.size[1], before);
     });
 
-    it("mentions a connected IMAGE input, whose frames only exist at run time", async () => {
+    it("mentions a connected IMAGE input whose pictures only a run can show", async () => {
         const node = makeNode(nodeType, { inputs: [{ name: "images", link: 7 }] });
         dom.imageSizes.set("a.png", [40, 20]);
         setImages(node, [item("a.png")]);
         paintedCalls(nodeType, node);
         await waitForThumbs(node);
         const painted = paintedCalls(nodeType, node);
-        assert.match(painted.text[0], /\+ IMAGE input$/);
-        assert.ok(painted.text.some((t) => t.endsWith("+ IMAGE input at run time")));
+        assert.match(painted.text[0], /\+ 1 input after a run$/);
+        assert.ok(painted.text.some((t) => t.endsWith("  + 1 input after a run") && t.startsWith("Preview")));
     });
 });
 
@@ -1239,7 +1239,7 @@ describe("copy the stitched result", () => {
         assert.equal(written[0].type, "image/png");
         assert.equal(`${lastToast().severity}/${lastToast().summary}`, "success/Copied");
         assert.match(lastToast().detail, /30×10/);
-        assert.match(lastToast().detail, /IMAGE input frames not included/);
+        assert.match(lastToast().detail, /1 input not included until a run/);
         assert.equal(node.title, "Multi Stitch Images");
     });
 
@@ -1865,13 +1865,27 @@ describe("native-reference refinements", () => {
         assert.equal(shared.imageInputNumber("image_2"), 0);
     });
 
+    it("grows the sockets on a connection alone, for the Vue mode that never draws the node", async () => {
+        const node = plainNode(nodeType);
+        const images = () => node.inputs.map((slot) => slot.name).filter((name) => shared.imageInputNumber(name));
+        node.inputs[0].link = 4;
+        nodeType.prototype.onConnectionsChange.call(node, 1, 0, true, { id: 4 }, node.inputs[0]);
+        assert.deepEqual(images(), ["images"], "not inside the frontend's own connect");
+        await tick(5);
+        assert.deepEqual(images(), ["images", "images_2"]);
+        node.inputs[0].link = null;
+        nodeType.prototype.onConnectionsChange.call(node, 1, 0, false, null, node.inputs[0]);
+        await tick(5);
+        assert.deepEqual(images(), ["images"]);
+    });
+
     it("counts any connected IMAGE input as frames at run time", async () => {
         const node = makeNode(nodeType, { inputs: [{ name: "images", link: null }, { name: "images_2", link: 9 }] });
         dom.imageSizes.set("a.png", [40, 20]);
         setImages(node, [item("a.png")]);
         paintedCalls(nodeType, node);
         await waitForThumbs(node);
-        assert.ok(paintedCalls(nodeType, node).text.some((t) => t.endsWith("+ IMAGE input at run time")));
+        assert.ok(paintedCalls(nodeType, node).text.some((t) => t.endsWith("+ 1 input after a run")));
     });
 
     it("says what an image measures, and what a crop leaves of it", () => {
@@ -2478,5 +2492,283 @@ describe("replacing the whole list", () => {
         ms.applyImages(node, [item("g2.png")], { pushHistory: false });
         assert.deepEqual(node._msImages.map((i) => i.filename), ["g2.png"]);
         assert.equal(node._msHistory.past.length, steps, "loading a list is not an edit to undo");
+    });
+});
+
+// A graph around the node: the nodes feeding it and the links between them,
+// shaped the way the frontend's LGraph answers for them.
+function feed(node, sources) {
+    const nodes = new Map();
+    const links = new Map();
+    node.graph = {
+        setDirtyCanvas() {},
+        getNodeById: (id) => nodes.get(id),
+        links,
+    };
+    let nextLink = 100;
+    const api = {
+        loadImage(id, value) {
+            nodes.set(id, { id, type: "LoadImage", comfyClass: "LoadImage", widgets: [{ name: "image", value }] });
+            return id;
+        },
+        other(id, type = "CropHead") {
+            nodes.set(id, { id, type, comfyClass: type, widgets: [] });
+            return id;
+        },
+        reroute(id, from, slot = 0) {
+            const link = nextLink++;
+            links.set(link, { id: link, origin_id: from, origin_slot: slot });
+            nodes.set(id, { id, type: "Reroute", inputs: [{ link }] });
+            return id;
+        },
+        plug(socket, from, slot = 0) {
+            const link = nextLink++;
+            links.set(link, { id: link, origin_id: from, origin_slot: slot });
+            let input = node.inputs.find((i) => i.name === socket);
+            if (!input) {
+                input = { name: socket, type: "IMAGE", link: null };
+                node.inputs.push(input);
+            }
+            input.link = link;
+            nodeType.prototype.onConnectionsChange?.call(node, 1, node.inputs.indexOf(input), true, links.get(link), input);
+        },
+        unplug(socket) {
+            const input = node.inputs.find((i) => i.name === socket);
+            input.link = null;
+            nodeType.prototype.onConnectionsChange?.call(node, 1, node.inputs.indexOf(input), false, null, input);
+        },
+    };
+    for (const source of sources) source(api);
+    return api;
+}
+
+const runResult = (socket, filename, extra = {}) => ({
+    filename, subfolder: "multi_stitch_inputs", type: "temp", socket, frame: 0, ...extra,
+});
+
+describe("IMAGE inputs on the node", () => {
+    const armClipboard = () => {
+        const written = [];
+        define("ClipboardItem", class { constructor(parts) { this.parts = parts; } });
+        define("navigator", { clipboard: { async write(items) { written.push(await items[0].parts["image/png"]); } } });
+        return written;
+    };
+    const lastToast = () => app.extensionManager.toast.log.at(-1);
+
+    it("reads which file a Load Image points at", () => {
+        const { loadImageItem } = inputs;
+        assert.deepEqual(
+            [loadImageItem("pasted/image (186).png"), loadImageItem("a.png [output]"), loadImageItem("x\\y\\z.webp")]
+                .map((i) => [i.type, i.subfolder, i.filename]),
+            [["input", "pasted", "image (186).png"], ["output", "", "a.png"], ["input", "x/y", "z.webp"]],
+        );
+        for (const value of [null, "", "folder/", 12]) assert.equal(loadImageItem(value), null);
+    });
+
+    it("shows a Load Image's picture the moment it is plugged in, through a Reroute too", async () => {
+        const node = makeNode(nodeType);
+        dom.imageSizes.set("face.png", [30, 60]);
+        dom.imageSizes.set("a.png", [40, 20]);
+        setImages(node, [item("a.png")]);
+        const graph = feed(node, [(g) => g.loadImage(5, "pasted/face.png"), (g) => g.reroute(6, 5)]);
+        graph.plug("images", 6);
+        paintedCalls(nodeType, node);
+        await waitForThumbs(node);
+
+        assert.deepEqual(inputs.inputCards(node).map((c) => [c.socket, c.source, c.item.subfolder, c.item.filename]),
+            [["images", "file", "pasted", "face.png"]]);
+        const painted = paintedCalls(nodeType, node);
+        // Matched to the smaller height, 20: 40×20 then 10×20.
+        assert.match(painted.text[0], /^1 image \+ 1 from input {2}• {2}~50×20$/);
+        assert.ok(painted.text.includes("Preview  50×20"), painted.text.join(" | "));
+        assert.ok(painted.text.includes("in"), "the card says which socket it came in on");
+        assert.ok(painted.text.includes("2"), "and which picture it is in the stitch");
+        assert.equal(ms.plannedLayout(node).items.length, 2);
+
+        // The pointer over it says where it comes from; there is nothing to click.
+        const [x, y] = centre(card(node, 1));
+        nodeType.prototype.onMouseMove.call(node, pointer(x, y), [x, y], {});
+        assert.match(paintedCalls(nodeType, node).text[0], /images · from Load Image, live/);
+        assert.equal(nodeType.prototype.onMouseDown.call(node, pointer(x, y), [x, y], {}), false);
+        assert.equal(node._msImages.length, 1, "an input picture never joins the pasted list");
+        nodeType.prototype.onMouseLeave.call(node);
+
+        // Picking another file on the Load Image shows that one instead.
+        dom.imageSizes.set("other.png", [20, 20]);
+        node.graph.getNodeById(5).widgets[0].value = "other.png";
+        paintedCalls(nodeType, node);
+        await waitForThumbs(node);
+        assert.match(paintedCalls(nodeType, node).text[0], /~60×20/);
+    });
+
+    it("holds a place for what only a run can show, then shows what the run received", async () => {
+        const node = makeNode(nodeType);
+        const graph = feed(node, [(g) => g.other(7)]);
+        graph.plug("images", 7);
+        let painted = paintedCalls(nodeType, node);
+        assert.equal(painted.text[0], "1 input  —  Queue once to see them");
+        assert.ok(painted.text.includes("Queue once"), "the card itself asks for a run");
+        assert.equal(ms.previewRect(node), null, "nothing to preview yet");
+
+        dom.imageSizes.set("input_run1_001.png", [24, 32]);
+        dom.imageSizes.set("input_run1_002.png", [24, 32]);
+        nodeType.prototype.onExecuted.call(node, {
+            multi_stitch_inputs: [runResult("images", "input_run1_001.png"), runResult("images", "input_run1_002.png", { frame: 1 })],
+        });
+        paintedCalls(nodeType, node);
+        await waitForThumbs(node);
+        painted = paintedCalls(nodeType, node);
+        assert.match(painted.text[0], /^2 from inputs {2}• {2}~48×32$/);
+        assert.ok(painted.text.some((t) => t.startsWith("Preview  48×32")));
+        assert.ok(ms.previewRect(node), "the preview has pictures to show now");
+        const [x, y] = centre(card(node, 0));
+        nodeType.prototype.onMouseMove.call(node, pointer(x, y), [x, y], {});
+        assert.match(paintedCalls(nodeType, node).text[0], /as of the last run/);
+        nodeType.prototype.onMouseLeave.call(node);
+
+        // Fed from somewhere else now: what the last run saw no longer applies.
+        graph.other(8);
+        graph.plug("images", 8);
+        assert.equal(paintedCalls(nodeType, node).text[0], "1 input  —  Queue once to see them");
+        // The same source again, and it does.
+        graph.plug("images", 7);
+        assert.match(paintedCalls(nodeType, node).text[0], /^2 from inputs/);
+        graph.unplug("images");
+        assert.equal(inputs.inputCards(node).length, 0);
+    });
+
+    it("keeps the stitch order: pasted, then images, images_2 and on, whatever order they were plugged in", async () => {
+        const node = makeNode(nodeType);
+        dom.imageSizes.set("a.png", [10, 10]);
+        dom.imageSizes.set("b.png", [10, 10]);
+        setImages(node, [item("p.png")]);
+        dom.imageSizes.set("p.png", [10, 10]);
+        const graph = feed(node, [(g) => g.loadImage(1, "a.png"), (g) => g.loadImage(2, "b.png"), (g) => g.other(3)]);
+        graph.plug("images_2", 2);
+        graph.plug("images_3", 3);
+        graph.plug("images", 1);
+        paintedCalls(nodeType, node);
+        await waitForThumbs(node);
+        assert.deepEqual(inputs.inputCards(node).map((c) => [c.socket, c.item?.filename ?? null]),
+            [["images", "a.png"], ["images_2", "b.png"], ["images_3", null]]);
+        assert.deepEqual(ms.plannedLayout(node).items.map((i) => i.filename), ["p.png", "a.png", "b.png"]);
+        const painted = paintedCalls(nodeType, node);
+        assert.match(painted.text[0], /^1 image \+ 2 from inputs {2}• {2}~30×10 {2}\+ 1 input after a run$/);
+    });
+
+    it("shows one numbered output per picture once every input is known", async () => {
+        const node = plainNode(nodeType);
+        dom.imageSizes.set("a.png", [10, 10]);
+        dom.imageSizes.set("p.png", [10, 10]);
+        setImages(node, [item("p.png")]);
+        widget(node, "output_cells").value = true;
+        const names = () => node.outputs.map((slot) => slot.name).slice(shared.NAMED_OUTPUTS);
+        const graph = feed(node, [(g) => g.loadImage(1, "a.png"), (g) => g.other(2)]);
+        graph.plug("images", 1);
+        paintedCalls(nodeType, node);
+        await waitForThumbs(node);
+        paintedCalls(nodeType, node);
+        assert.deepEqual(names(), ["image_1", "image_2"]);
+        graph.plug("images_2", 2);
+        paintedCalls(nodeType, node);
+        assert.equal(names().length, shared.MAX_SEPARATE, "one only a run can count: the whole set");
+        dom.imageSizes.set("input_r_003.png", [10, 10]);
+        nodeType.prototype.onExecuted.call(node, { multi_stitch_inputs: [runResult("images_2", "input_r_003.png")] });
+        paintedCalls(nodeType, node);
+        await waitForThumbs(node);
+        paintedCalls(nodeType, node);
+        assert.deepEqual(names(), ["image_1", "image_2", "image_3"]);
+    });
+
+    it("falls back to the last run when the browser cannot load the Load Image's file", async () => {
+        const node = makeNode(nodeType);
+        const graph = feed(node, [(g) => g.loadImage(1, "scan.tiff")]);
+        graph.plug("images", 1);
+        paintedCalls(nodeType, node);
+        await waitForThumbs(node);
+        assert.deepEqual(inputs.inputCards(node).map((c) => c.source), ["pending"]);
+        dom.imageSizes.set("input_t_001.png", [8, 8]);
+        nodeType.prototype.onExecuted.call(node, { multi_stitch_inputs: [runResult("images", "input_t_001.png")] });
+        paintedCalls(nodeType, node);
+        await waitForThumbs(node);
+        assert.deepEqual(inputs.inputCards(node).map((c) => c.source), ["run"]);
+    });
+
+    it("copies an input picture from its card's menu, and ignores a run that sent nothing usable", async () => {
+        const node = makeNode(nodeType);
+        dom.imageSizes.set("face.png", [16, 16]);
+        const graph = feed(node, [(g) => g.loadImage(1, "face.png")]);
+        graph.plug("images", 1);
+        paintedCalls(nodeType, node);
+        await waitForThumbs(node);
+        const entries = cardMenu(node, 0);
+        const copy = entries.find((o) => o.content === "Copy images picture to clipboard");
+        assert.ok(copy, entries.map((o) => o.content).join(", "));
+        const written = armClipboard();
+        copy.callback();
+        await until(() => written.length === 1);
+        assert.equal(written[0].type, "image/png");
+        assert.equal(`${lastToast().severity}/${lastToast().summary}`, "success/Copied");
+
+        const before = node._msRunInputs;
+        nodeType.prototype.onExecuted.call(node, {});
+        nodeType.prototype.onExecuted.call(node, { multi_stitch_inputs: "nope" });
+        assert.equal(node._msRunInputs, before);
+    });
+
+    it("lays out a frame written smaller at the size it really has", async () => {
+        const node = makeNode(nodeType);
+        const graph = feed(node, [(g) => g.other(1)]);
+        graph.plug("images", 1);
+        dom.imageSizes.set("input_big_001.png", [1536, 1024]);
+        nodeType.prototype.onExecuted.call(node, {
+            multi_stitch_inputs: [runResult("images", "input_big_001.png", { width: 3072, height: 2048 })],
+        });
+        paintedCalls(nodeType, node);
+        await waitForThumbs(node);
+        assert.match(paintedCalls(nodeType, node).text[0], /~3072×2048/);
+    });
+
+    it("keeps the pixels when a cached run sends the same files again, and drops the last run's otherwise", async () => {
+        const node = makeNode(nodeType);
+        const graph = feed(node, [(g) => g.other(1)]);
+        graph.plug("images", 1);
+        dom.imageSizes.set("input_c_001.png", [8, 8]);
+        dom.imageSizes.set("input_d_001.png", [8, 8]);
+        const send = (filename) => nodeType.prototype.onExecuted.call(node, { multi_stitch_inputs: [runResult("images", filename)] });
+        send("input_c_001.png");
+        paintedCalls(nodeType, node);
+        await waitForThumbs(node);
+        const cached = node._msThumbCache.get("temp:multi_stitch_inputs/input_c_001.png");
+        assert.ok(cached?.ready);
+        send("input_c_001.png");
+        assert.equal(node._msThumbCache.get("temp:multi_stitch_inputs/input_c_001.png"), cached);
+        send("input_d_001.png");
+        assert.equal(node._msThumbCache.has("temp:multi_stitch_inputs/input_c_001.png"), false);
+    });
+
+    it("recognises a source it cannot look up — a subgraph's own input — by its link", async () => {
+        const node = makeNode(nodeType);
+        const graph = feed(node, []);
+        graph.plug("images", -10);
+        assert.deepEqual(inputs.inputCards(node).map((c) => c.source), ["pending"]);
+        dom.imageSizes.set("input_s_001.png", [8, 8]);
+        nodeType.prototype.onExecuted.call(node, { multi_stitch_inputs: [runResult("images", "input_s_001.png")] });
+        paintedCalls(nodeType, node);
+        await waitForThumbs(node);
+        assert.deepEqual(inputs.inputCards(node).map((c) => c.source), ["run"]);
+    });
+
+    it("says how many frames a long batch brought beyond the ones it shows", async () => {
+        const node = makeNode(nodeType);
+        const graph = feed(node, [(g) => g.other(1)]);
+        graph.plug("images", 1);
+        dom.imageSizes.set("input_m_001.png", [8, 8]);
+        nodeType.prototype.onExecuted.call(node, { multi_stitch_inputs: [runResult("images", "input_m_001.png", { more: 5 })] });
+        paintedCalls(nodeType, node);
+        await waitForThumbs(node);
+        const painted = paintedCalls(nodeType, node);
+        assert.match(painted.text[0], /^6 from inputs {2}• {2}~8×8 {2}\+ 5 more frames not shown$/);
+        assert.ok(painted.text.some((t) => t.startsWith("Preview") && t.endsWith("+ 5 more frames not shown")));
     });
 });

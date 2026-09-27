@@ -64,6 +64,14 @@ _MAX_SEPARATE = 8
 # the UI shows one spare socket past the last one connected.
 _MAX_IMAGE_INPUTS = 8
 _EXTRA_IMAGE_INPUTS = tuple(f"images_{number}" for number in range(2, _MAX_IMAGE_INPUTS + 1))
+# After a run, the frames that came in on those inputs are written to the temp
+# folder so the node can show them as cards and in its preview: until the
+# upstream nodes have run, nobody knows what a Crop Head will hand over. A
+# long batch only shows its first few, and a large frame is written smaller
+# (its true size travels with it); the run itself uses every frame as it is.
+_INPUT_PREVIEW_SUBFOLDER = "multi_stitch_inputs"
+_MAX_INPUT_PREVIEWS = 32
+_INPUT_PREVIEW_MAX_SIDE = 1536
 _MAX_OUTPUT_PIXELS = 128 * 1024 * 1024
 _MAX_OUTPUT_SIDE = 131_072
 _MAX_SOURCE_PIXELS = 128 * 1024 * 1024
@@ -1257,6 +1265,57 @@ def _frame_loader(frame: torch.Tensor, background: tuple[float, float, float]) -
     return load, size
 
 
+def _save_input_previews(sockets: list[str], loaders: list[Loader]) -> list[dict]:
+    """Write the input frames to the temp folder as the stitch saw them.
+
+    One entry per frame, in stitch order: where the file is, which socket and
+    which frame of its batch it came from, and its size. The frame is the
+    loader's own output, so a transparent one is already on the spacing
+    colour, exactly as it was placed. A preview is a courtesy: anything that
+    goes wrong here leaves the node without cards, never the run without its
+    result.
+    """
+    if not loaders:
+        return []
+    try:
+        folder = Path(folder_paths.get_temp_directory()) / _INPUT_PREVIEW_SUBFOLDER
+        folder.mkdir(parents=True, exist_ok=True)
+        run = secrets.token_hex(6)
+        previews = []
+        seen: dict[str, int] = {}
+        for index, (socket, load) in enumerate(zip(sockets, loaders, strict=True)):
+            frame = seen.get(socket, 0)
+            seen[socket] = frame + 1
+            if index >= _MAX_INPUT_PREVIEWS:
+                continue
+            pixels = load()[0].clamp(0, 1).mul(255).round().to(torch.uint8).numpy()
+            filename = f"input_{run}_{index + 1:03d}.png"
+            picture = Image.fromarray(pixels)
+            # A preview, so a 4K frame need not cost a 4K PNG on every run.
+            limit = (_INPUT_PREVIEW_MAX_SIDE, _INPUT_PREVIEW_MAX_SIDE)
+            picture.thumbnail(limit, Image.Resampling.BILINEAR, reducing_gap=2.0)
+            # Speed over size: the file lives until ComfyUI next starts.
+            picture.save(folder / filename, compress_level=1)
+            previews.append({
+                "filename": filename,
+                "subfolder": _INPUT_PREVIEW_SUBFOLDER,
+                "type": "temp",
+                "socket": socket,
+                "frame": frame,
+                "width": int(pixels.shape[1]),
+                "height": int(pixels.shape[0]),
+            })
+        if len(loaders) > _MAX_INPUT_PREVIEWS:
+            # The rest are counted, not written, so the node can say so.
+            previews[-1]["more"] = len(loaders) - _MAX_INPUT_PREVIEWS
+        return previews
+    except Exception as exc:
+        # Whatever it was (a full disk, a read-only temp folder), the stitch
+        # itself succeeded and keeps its result.
+        print(f"[Multi Stitch Images] could not save the input previews: {exc}", file=sys.stderr)
+        return []
+
+
 class MultiStitchImages:
     """Paste many images into one node, edit each one, then stitch or arrange as a grid."""
 
@@ -1477,6 +1536,7 @@ class MultiStitchImages:
         valid_items = [item for item in items if isinstance(item, dict)]
         # Every connected input in socket order, each batch frame by frame.
         frames = []
+        sockets: list[str] = []
         for name, batch in [("images", images), *((name, more_images.get(name)) for name in _EXTRA_IMAGE_INPUTS)]:
             if batch is None:
                 continue
@@ -1486,6 +1546,7 @@ class MultiStitchImages:
                     "[batch, height, width, channels] tensor."
                 )
             frames.extend(batch)
+            sockets.extend([name] * int(batch.shape[0]))
         input_frames = len(frames)
         if len(valid_items) + input_frames > _MAX_IMAGES:
             raise ValueError(
@@ -1503,9 +1564,11 @@ class MultiStitchImages:
             _validate_source_pixels(item, source_w, source_h)
             dimensions.append(output_size)
             loaders.append(functools.partial(_load_image, item, background))
+        input_loaders: list[Loader] = []
         for frame in frames:
             loader, size = _frame_loader(frame, background)
             loaders.append(loader)
+            input_loaders.append(loader)
             dimensions.append(size)
 
         # A target shape decides the columns before anything else reads them,
@@ -1570,7 +1633,13 @@ class MultiStitchImages:
         # here, in whatever node tried to read it.
         blank = torch.zeros((1, 1, 1, 3), dtype=torch.float32)
         separate = tuple((frames[i] if i < len(frames) else blank) for i in range(_MAX_SEPARATE))
-        return (image, cells, width, height, *separate)
+        result = (image, cells, width, height, *separate)
+        # What came in on the IMAGE inputs, for the node to show; a run with
+        # nothing connected answers exactly as it always has.
+        previews = _save_input_previews(sockets, input_loaders)
+        if not previews:
+            return result
+        return {"ui": {"multi_stitch_inputs": previews}, "result": result}
 
     @classmethod
     def VALIDATE_INPUTS(cls, images_json="[]"):

@@ -213,13 +213,14 @@ export async function loadExtension(root) {
     const api = await import(pathToFileURL(join(root, "scripts", "api.js")).href);
     const shared = await import(pathToFileURL(join(root, "pkg", "web", "shared.js")).href);
     const picker = await import(pathToFileURL(join(root, "pkg", "web", "frame_picker.js")).href);
+    const inputs = await import(pathToFileURL(join(root, "pkg", "web", "inputs.js")).href);
     // The node module's own exports: the tests drive the same functions the
     // canvas UI calls, and take their geometry from the same helpers, instead
     // of repeating coordinates that the real frontend does not even agree with.
     const ms = await import(pathToFileURL(join(root, "pkg", "web", "multi_stitch.js")).href);
     const nodeType = { prototype: {} };
     await app.extension.beforeRegisterNodeDef(nodeType, { name: "MultiStitchImages" });
-    return { app, api, shared, picker, ms, nodeType };
+    return { app, api, shared, picker, inputs, ms, nodeType };
 }
 
 // The widgets INPUT_TYPES declares, in order, with their defaults.

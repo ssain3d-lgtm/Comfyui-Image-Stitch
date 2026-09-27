@@ -210,6 +210,71 @@ describe("dom view", () => {
         handle.destroy();
     });
 
+    it("shows what the IMAGE inputs bring after the list, as cards that are only shown", async () => {
+        const node = fakeNode([item("a.png")]);
+        let signature = "one";
+        let renders = 0;
+        const inputs = [
+            { card: { socket: "images", number: 1, item: item("face.png"), source: "file" }, number: 2 },
+            { card: { socket: "images_2", number: 2, item: null, source: "pending" }, number: null },
+        ];
+        const spy = actionSpy({
+            inputs: () => inputs,
+            stitchCount: () => 2,
+            inputHint: (n, k) => `hint ${k}`,
+            copyInput: (n, k) => spy.calls.push(["copyInput", k]),
+            inputSignature: () => signature,
+            status: () => { renders += 1; return "1 image + 1 from input"; },
+        });
+        const handle = view.installDomView(node, spy.actions);
+        // The view polls on a timer: whatever fails, it must go, or the run hangs.
+        try {
+            const [pasted, shown, pending] = cards(handle.root);
+            assert.equal(pasted.className, "card");
+            assert.deepEqual([shown.className, pending.className], ["card input", "card input pending"]);
+            const badges = (el) => el.children.find((c) => c.className === "badges").children.map((b) => b.textContent);
+            assert.deepEqual(badges(shown), ["2", "in"], "its place in the stitch and the socket it came in on");
+            assert.deepEqual(badges(pending), ["in 2"], "no number until a run says how many came before");
+            assert.equal(pending.children.find((c) => c.className === "text input").textContent, "Queue once to see it");
+            assert.equal(shown.title, "hint 0");
+            assert.equal(shown.draggable, undefined, "not part of the drag order");
+            assert.equal(pending.handlers?.contextmenu, undefined, "nothing to copy yet");
+            shown.handlers.contextmenu[0](menuEvent());
+            const entries = dom.overlays.at(-1).children;
+            assert.deepEqual(entries.map((e) => e.textContent), ["Copy picture to clipboard"]);
+            entries[0].handlers.click[0]({ stopPropagation() {} });
+            assert.deepEqual(spy.calls.filter(([name]) => name === "copyInput"), [["copyInput", 0]]);
+
+            // A Load Image switched to another file reports nothing; the view
+            // notices within a second and draws the cards again.
+            const before = renders;
+            await new Promise((resolve) => setTimeout(resolve, 1100));
+            assert.equal(renders, before, "nothing changed, nothing redrawn");
+            signature = "two";
+            await new Promise((resolve) => setTimeout(resolve, 1100));
+            assert.equal(renders, before + 1);
+        } finally {
+            handle.destroy();
+        }
+    });
+
+    it("previews and copies input pictures even with nothing pasted", () => {
+        const node = fakeNode([]);
+        const spy = actionSpy({
+            inputs: () => [{ card: { socket: "images", number: 1, item: item("face.png"), source: "run" }, number: 1 }],
+            stitchCount: () => 1,
+            inputHint: () => "",
+            copyInput: () => {},
+        });
+        const handle = view.installDomView(node, spy.actions);
+        assert.equal(part(handle.root, "empty").hidden, true);
+        assert.equal(part(handle.root, "preview").hidden, false);
+        const byLabel = (label) => buttons(handle.root).find((b) => b.textContent.startsWith(label));
+        assert.equal(byLabel("⧉ Copy").disabled, false);
+        assert.equal(byLabel("Clear").disabled, true, "Clear empties the pasted list, which is empty");
+        handle.destroy();
+    });
+
     it("keeps only the remove button on the picture and reorders by dragging a card", () => {
         const spy = actionSpy();
         const handle = view.installDomView(fakeNode([item("a.png"), item("b.png"), item("c.png")]), spy.actions);

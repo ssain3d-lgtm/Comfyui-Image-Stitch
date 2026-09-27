@@ -21,6 +21,7 @@ import {
     toggleSelection,
 } from "./selection.js";
 import { canvasToPngFile, captureFileName, formatTime, openFramePicker } from "./frame_picker.js";
+import { inputCardHint, inputCards, inputFramesNotShown, inputSignature, receiveInputPreviews } from "./inputs.js";
 import {
     commitImages,
     canvasPngBlob,
@@ -157,7 +158,7 @@ function toolbarRect(node) {
 }
 
 function previewRect(node) {
-    if (!previewEnabled(node) || !(node._msImages?.length)) return null;
+    if (!previewEnabled(node) || !stitchItems(node).length) return null;
     const bar = toolbarRect(node);
     return { x: 8, y: bar.y + bar.h + 6, w: nodeWidth(node) - 16, h: PREVIEW_HEIGHT };
 }
@@ -169,9 +170,33 @@ function listTop(node) {
     return bar.y + bar.h + 6;
 }
 
-// Cards in the list: the images, then any videos waiting for capture.
+// Cards in the list: the images, then any videos waiting for capture, then
+// what the IMAGE inputs bring.
 function listCount(node) {
-    return (node._msImages?.length || 0) + (node._msVideos?.length || 0);
+    return (node._msImages?.length || 0) + (node._msVideos?.length || 0) + inputCards(node).length;
+}
+
+// Everything the run will stitch that can be seen now, in its order: the
+// pasted images, then the input pictures already known. An input only a run
+// can show is left out, and said so where the preview is.
+function stitchItems(node) {
+    const inputs = inputCards(node).filter((card) => card.item).map((card) => card.item);
+    return inputs.length ? [...(node._msImages || []), ...inputs] : (node._msImages || []);
+}
+
+function pendingInputs(node) {
+    return inputCards(node).filter((card) => !card.item).length;
+}
+
+// The list index of input card `k`: after the images and the videos.
+function inputCardIndex(node, k) {
+    return (node._msImages?.length || 0) + (node._msVideos?.length || 0) + k;
+}
+
+// Which input card a list index is, or -1.
+function inputCardAt(node, index) {
+    const k = index - (node._msImages?.length || 0) - (node._msVideos?.length || 0);
+    return k >= 0 && k < inputCards(node).length ? k : -1;
 }
 
 function columnsOf(node) {
@@ -311,7 +336,7 @@ function aspectLabel(w, h) {
 // from the same maths as the backend (referenceSize mirrors _reference_size).
 // Null while a thumbnail is still loading.
 function sizeReadout(node) {
-    const items = node._msImages || [];
+    const items = stitchItems(node);
     if (!items.length) return null;
     const known = items.map((item) => {
         const state = loadTransformedThumb(node, item);
@@ -382,7 +407,7 @@ function drawSizePanel(ctx, node, rect) {
     if (!readout) {
         ctx.fillStyle = "#7fb08f";
         drawWrappedText(ctx,
-            node._msImages?.length ? "Loading…" : "Add an image: its size becomes the width / height outputs",
+            stitchItems(node).length ? "Loading…" : "Add an image: its size becomes the width / height outputs",
             rect.x + rect.w / 2, box.y + box.h / 2 + 4, box.w - 20,
         );
         drawSizePresets(ctx, node, rect);
@@ -682,7 +707,7 @@ function backgroundColor(settings) {
 // (layoutPlacements mirrors _layout). Items still decoding yield null; items
 // that failed to load are stood in for by the first known size and flagged.
 function plannedLayout(node) {
-    const items = node._msImages || [];
+    const items = stitchItems(node);
     if (!items.length) return null;
     const settings = readSettings(node);
     const known = items.map((item) => {
@@ -718,6 +743,9 @@ function plannedLayout(node) {
         failed: known.map((d) => d === "failed"),
         skipped: known.filter((d) => d === "failed").length,
         settings,
+        // The list this plan was made from: a render that finishes later
+        // draws exactly these, whatever the inputs have done meanwhile.
+        items,
     };
 }
 
@@ -726,8 +754,16 @@ function predictedSize(node) {
     return planned ? { w: planned.finalWidth, h: planned.finalHeight, skipped: planned.skipped } : null;
 }
 
-function imageInputConnected(node) {
-    return (node.inputs || []).some((input) => imageInputNumber(input?.name) && input.link != null);
+// What the preview and the estimate leave out, as a note after `prefix`: the
+// inputs only a run can show, and the frames of a long batch past the ones
+// the last run wrote out. "" when nothing is missing.
+function inputNote(node, prefix) {
+    const pending = pendingInputs(node);
+    const more = inputFramesNotShown(node);
+    return [
+        pending ? `${prefix}${pending} input${pending === 1 ? "" : "s"} after a run` : "",
+        more ? `${prefix}${more} more frame${more === 1 ? "" : "s"} not shown` : "",
+    ].join("");
 }
 
 // The first candidate that fits `maxWidth`, or the shortest one when none
@@ -760,11 +796,14 @@ function drawToolbar(ctx, node) {
         ? fittingLabel(ctx, [`Cancel ${run.done}/${run.total}`, `✕ ${run.done}/${run.total}`, `${run.done}/${run.total}`], controls.add.w - 6)
         : "+ Add";
     drawPill(ctx, controls.add, addLabel);
+    // Copy and the preview have the input pictures to work with too; Clear
+    // only ever empties the pasted list.
+    const shown = stitchItems(node).length;
     drawPill(ctx, controls.clear, "Clear", count > 0 || !!run);
-    drawPill(ctx, controls.copy, node._msCopying ? "…" : "⧉ Copy", count > 0 && !node._msCopying);
+    drawPill(ctx, controls.copy, node._msCopying ? "…" : "⧉ Copy", shown > 0 && !node._msCopying);
     drawPill(ctx, controls.undo, "↶", history.past.length > 0);
     drawPill(ctx, controls.redo, "↷", history.future.length > 0);
-    drawPill(ctx, controls.preview, previewEnabled(node) ? "Preview ✓" : "Preview", count > 0);
+    drawPill(ctx, controls.preview, previewEnabled(node) ? "Preview ✓" : "Preview", shown > 0);
     drawPill(
         ctx,
         controls.options,
@@ -798,7 +837,7 @@ function drawPreview(ctx, node, rect) {
     ctx.fillStyle = backgroundColor(planned.settings);
     ctx.fillRect(ox, oy, pw, ph);
 
-    const items = node._msImages;
+    const items = planned.items;
     const pixelScale = devicePixelScale(ctx);
     const contentKey = previewContentKey(node, planned);
     let render = node._msPreviewRender;
@@ -834,7 +873,7 @@ function drawPreview(ctx, node, rect) {
     ctx.fillStyle = "rgba(0,0,0,.6)";
     const caption = `Preview  ${planned.finalWidth}×${planned.finalHeight}` +
         (planned.finalWidth !== planned.width ? `  (canvas ${planned.width}×${planned.height})` : "") +
-        (imageInputConnected(node) ? "  + IMAGE input at run time" : "");
+        inputNote(node, "  + ");
     ctx.fillRect(rect.x + 1, rect.y + rect.h - 17, rect.w - 2, 16);
     ctx.fillStyle = "#d0d0d0";
     ctx.fillText(caption, rect.x + 8, rect.y + rect.h - 5, rect.w - 16);
@@ -942,6 +981,79 @@ function drawCard(ctx, node, item, index, r) {
     ctx.restore();
 }
 
+// Each input card with the number its picture will have in the stitch — the
+// N of image_N — or null once an input only a run can size comes before it.
+function inputCardNumbers(node) {
+    let next = (node._msImages?.length || 0) + 1;
+    return inputCards(node).map((card) => {
+        const number = next;
+        next = card.item && next !== null ? next + 1 : null;
+        return { card, number: card.item ? number : null };
+    });
+}
+
+// A picture from an IMAGE input: shown, not edited — it is whatever the node
+// above hands over, so it has no ×, no editor and no place in the drag order.
+// Teal, like nothing else on the node, so it is not mistaken for a pasted one.
+function drawInputCard(ctx, node, card, number, r) {
+    ctx.save();
+    ctx.fillStyle = "#11191a";
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.strokeStyle = "#3f8f8a";
+    ctx.lineWidth = 1;
+    ctx.setLineDash?.(card.item ? [] : [4, 4]);
+    ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+    ctx.setLineDash?.([]);
+    const imageRect = { x: r.x + 3, y: r.y + 3, w: r.w - 6, h: r.h - 6 };
+    const state = card.item ? loadTransformedThumb(node, card.item) : null;
+    ctx.textAlign = "center";
+    if (state?.ready) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(imageRect.x, imageRect.y, imageRect.w, imageRect.h);
+        ctx.clip();
+        drawContained(ctx, state.image, null, imageRect);
+        ctx.restore();
+    } else {
+        ctx.fillStyle = "#8fbfbb";
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(imageRect.x, imageRect.y, imageRect.w, imageRect.h);
+        ctx.clip();
+        drawWrappedText(ctx, card.item ? "Loading…" : "Queue once\nto see it", r.x + r.w / 2, r.y + r.h / 2 + 4, r.w - 12, 14);
+        ctx.restore();
+    }
+    ctx.textAlign = "left";
+    // Its place in the stitch, then the socket it came in on.
+    let x = r.x + 3;
+    if (number !== null) {
+        ctx.fillStyle = "rgba(0,0,0,.72)";
+        ctx.fillRect(x, r.y + 3, 27, 19);
+        ctx.fillStyle = "#fff";
+        ctx.fillText(String(number), x + 8, r.y + 17);
+        x += 30;
+    }
+    const socket = card.number === 1 ? "in" : `in ${card.number}`;
+    ctx.fillStyle = "rgba(0,0,0,.72)";
+    const socketWidth = (ctx.measureText?.(socket)?.width ?? 24) + 10;
+    ctx.fillRect(x, r.y + 3, socketWidth, 19);
+    ctx.fillStyle = "#7fd8cf";
+    ctx.fillText(socket, x + 5, r.y + 17);
+    if (state?.ready) {
+        const label = `${state.width}×${state.height}`;
+        ctx.save();
+        ctx.font = "6px sans-serif";
+        const barWidth = Math.min(r.w - 6, (ctx.measureText?.(label)?.width ?? 0) + 8);
+        ctx.fillStyle = "rgba(0,0,0,.72)";
+        ctx.fillRect(r.x + r.w - 3 - barWidth, r.y + r.h - 14, barWidth, 11);
+        ctx.fillStyle = "#e8e8e8";
+        ctx.textAlign = "right";
+        ctx.fillText(label, r.x + r.w - 7, r.y + r.h - 6, barWidth - 4);
+        ctx.restore();
+    }
+    ctx.restore();
+}
+
 function drawVideoCard(ctx, entry, r) {
     ctx.save();
     ctx.fillStyle = "#151a20";
@@ -1040,6 +1152,11 @@ let domViewActions = null;
 const DOM_VIEW_ACTIONS = () => (domViewActions ||= {
     items: (node) => node._msImages || [],
     videos: (node) => node._msVideos || [],
+    inputs: (node) => inputCardNumbers(node),
+    inputSignature,
+    inputHint: (node, index) => cardHint(node, inputCardIndex(node, index), () => true),
+    copyInput: copyInputImage,
+    stitchCount: (node) => stitchItems(node).length,
     status: (node) => statusText(node),
     canUndo, canRedo,
     previewOn: previewEnabled,
@@ -1055,7 +1172,7 @@ const DOM_VIEW_ACTIONS = () => (domViewActions ||= {
     clear: clearAllImages,
     copy: copyStitchedResult,
     undo, redo,
-    togglePreview: (node) => { if (node._msImages?.length) togglePreview(node); },
+    togglePreview: (node) => { if (stitchItems(node).length) togglePreview(node); },
     toggleOptions: toggleAdvanced,
     toggleSizePanel,
     // The DOM panel is the same drawing at its own origin, so a click on it is
@@ -1129,18 +1246,24 @@ function loadComposition(node, entry, append) {
 function statusText(node, measure = null, room = 0) {
     const count = node._msImages?.length || 0;
     const predicted = predictedSize(node);
-    const noun = `${count} image${count === 1 ? "" : "s"}`;
+    const cards = inputCards(node);
+    const fromInputs = cards.filter((card) => card.item).length + inputFramesNotShown(node);
+    const parts = [];
+    if (count) parts.push(`${count} image${count === 1 ? "" : "s"}`);
+    if (fromInputs) parts.push(`${fromInputs} from input${fromInputs === 1 ? "" : "s"}`);
+    const pending = cards.length - cards.filter((card) => card.item).length;
+    const noun = parts.join(" + ") || `${pending} input${pending === 1 ? "" : "s"}`;
     const estimate = predicted
         ? `  •  ~${predicted.w}×${predicted.h}${predicted.skipped ? ` (${predicted.skipped} not loaded)` : ""}`
         : "";
-    const inputNote = imageInputConnected(node) ? "  + IMAGE input" : "";
+    const inputsNote = parts.length ? inputNote(node, "  + ") : "  —  Queue once to see them";
     const videos = node._msVideos?.length || 0;
     const videoNote = videos ? `  •  ${videos} video${videos === 1 ? "" : "s"} to capture from` : "";
     const picked = selectionSize(node);
     const pickedNote = picked > 1 ? `  •  ${picked} selected` : "";
-    const candidates = count
-        ? [`${noun}${estimate}${inputNote}${videoNote}${pickedNote}`, `${noun}${estimate}${pickedNote}`,
-            `${noun}${estimate}${videoNote}`, `${noun}${estimate}`, noun]
+    const candidates = count || cards.length
+        ? [`${noun}${estimate}${inputsNote}${videoNote}${pickedNote}`, `${noun}${estimate}${inputsNote}${pickedNote}`,
+            `${noun}${estimate}${inputsNote}`, `${noun}${estimate}`, noun]
         : [videos
             ? `${videos} video${videos === 1 ? "" : "s"} — click the card to capture frames`
             : node._msUnreadable
@@ -1154,14 +1277,12 @@ function drawThumbs(node, ctx) {
     if (node.flags?.collapsed) return;
 
     const items = node._msImages || [];
-    const count = items.length;
     const top = visibleWidgetBottom(node) + 8;
 
     ctx.save();
     ctx.font = "12px sans-serif";
     ctx.fillStyle = "#b8b8b8";
     const room = nodeWidth(node) - 18;
-    const videos = node._msVideos?.length || 0;
     ctx.textAlign = "left";
     const fits = (text) => (ctx.measureText?.(text)?.width ?? 0) <= room;
     const hint = node._msHoverCard >= 0 ? cardHint(node, node._msHoverCard, fits) : null;
@@ -1170,7 +1291,7 @@ function drawThumbs(node, ctx) {
     ctx.fillStyle = "#b8b8b8";
     drawToolbar(ctx, node);
 
-    if (!count && !videos) {
+    if (!listCount(node)) {
         const r = emptyBoxRect(node);
         ctx.strokeStyle = "#666";
         ctx.setLineDash([5, 5]);
@@ -1210,6 +1331,10 @@ function drawThumbs(node, ctx) {
     (node._msVideos || []).forEach((entry, index) => {
         const r = thumbLayout(node, items.length + index);
         if (r.visible) drawVideoCard(ctx, entry, r);
+    });
+    inputCardNumbers(node).forEach(({ card, number }, k) => {
+        const r = thumbLayout(node, inputCardIndex(node, k));
+        if (r.visible) drawInputCard(ctx, node, card, number, r);
     });
 
     // Where the card in hand would land, drawn on top of the row it splits.
@@ -1363,6 +1488,44 @@ async function copyOriginalImage(node, index) {
     }
 }
 
+// The picture an input card shows, as a PNG: what the last run received, or
+// the Load Image's file.
+async function copyInputImage(node, k) {
+    const card = inputCards(node)[k];
+    if (!card?.item) return;
+    const unavailable = clipboardUnavailable();
+    if (unavailable) {
+        notify("Copy failed", unavailable, "error");
+        return;
+    }
+    try {
+        await writePngToClipboard(originalPngBlob(card.item));
+        notify("Copied", `The picture on ${card.socket} copied to the clipboard. Ctrl+V pastes it in as an image of its own.`);
+    } catch (error) {
+        notify("Copy failed", String(error?.message || error), "error");
+    }
+}
+
+function inputCardEntries(node, k) {
+    const card = inputCards(node)[k];
+    return card?.item
+        ? [{ content: `Copy ${card.socket} picture to clipboard`, callback: () => copyInputImage(node, k) }]
+        : [];
+}
+
+function inputIndexAt(node, graphCanvas) {
+    const mouse = graphCanvas?.graph_mouse || graphCanvas?.canvas_mouse;
+    if (node.flags?.collapsed || !Array.isArray(mouse)) return -1;
+    const x = mouse[0] - node.pos[0];
+    const y = mouse[1] - node.pos[1];
+    const count = inputCards(node).length;
+    for (let k = 0; k < count; k++) {
+        const r = thumbLayout(node, inputCardIndex(node, k));
+        if (r.visible && inRect(x, y, r)) return k;
+    }
+    return -1;
+}
+
 function loadFullImage(url) {
     return new Promise((resolve, reject) => {
         const image = new Image();
@@ -1468,7 +1631,7 @@ async function renderComposite(node, planned, { width, height, onProgress, alive
     const scaleX = canvas.width / planned.width;
     const scaleY = canvas.height / planned.height;
 
-    const items = node._msImages;
+    const items = planned.items;
     let skipped = 0;
     for (let index = 0; index < items.length; index++) {
         if (alive && !alive()) return null;
@@ -1506,7 +1669,7 @@ function devicePixelScale(ctx) {
 // the band keeps its thumbnails rather than freezing the tab for a file the
 // backend will have to refuse anyway.
 function sourceAboveLimit(node, planned) {
-    const items = node._msImages;
+    const items = planned.items;
     return items.some((item, index) => {
         if (planned.failed[index]) return false;
         const raw = loadThumb(node, item);
@@ -1517,7 +1680,7 @@ function sourceAboveLimit(node, planned) {
 // True when some image would be drawn larger on screen than its thumbnail
 // holds, while the original has more pixels to give.
 function needsSharpPreview(node, planned, drawScale) {
-    const items = node._msImages;
+    const items = planned.items;
     if (sourceAboveLimit(node, planned)) return false;
     return planned.placements.some((p, index) => {
         if (planned.failed[index]) return false;
@@ -1537,7 +1700,7 @@ function needsSharpPreview(node, planned, drawScale) {
 function previewContentKey(node, planned) {
     const s = planned.settings;
     return JSON.stringify([
-        node._msImages.map((i) => [i.type, i.subfolder, i.filename, normalizeCrop(i.crop), normalizeTransform(i)]),
+        planned.items.map((i) => [i.type, i.subfolder, i.filename, normalizeCrop(i.crop), normalizeTransform(i)]),
         [s.layout, s.direction, s.match, s.matchReference, s.gridColumns, s.spacing,
             s.cellWidth, s.cellHeight, s.spacingColor, s.customColor],
         planned.failed,
@@ -1644,7 +1807,7 @@ function copyCacheKey(node, planned = plannedLayout(node)) {
 // "⧉ Copy": the composite as it will be stitched, on the clipboard now,
 // without queueing the workflow.
 async function copyStitchedResult(node) {
-    if (!(node._msImages?.length)) return;
+    if (!stitchItems(node).length) return;
     const unavailable = clipboardUnavailable();
     if (unavailable) {
         notify("Copy failed", unavailable, "error");
@@ -1677,7 +1840,8 @@ async function copyStitchedResult(node) {
         await writePngToClipboard(rendering);
         const notes = [];
         if (result.skipped) notes.push(`${result.skipped} not loaded, left blank`);
-        if (imageInputConnected(node)) notes.push("IMAGE input frames not included");
+        const pending = pendingInputs(node);
+        if (pending) notes.push(`${pending} input${pending === 1 ? "" : "s"} not included until a run`);
         notify(
             "Copied",
             `Stitched result ${result.width}×${result.height} copied to the clipboard` +
@@ -1796,6 +1960,15 @@ function clearAllImages(node) {
     changed(node);
 }
 
+// What the inputs show changed: redraw, and resize for a card more or less.
+// The pasted list is untouched, so this is not an edit and has no undo step.
+function inputsChanged(node) {
+    node._msCopyRender = null;
+    refreshDomView(node);
+    updateNodeSize(node);
+    node.graph?.setDirtyCanvas(true, true);
+}
+
 function togglePreview(node) {
     node.properties ||= {};
     node.properties.multi_stitch_preview = !previewEnabled(node);
@@ -1884,6 +2057,14 @@ const CARD_HINTS = [
 // The card's own line: what the image measures, what the crop leaves of it,
 // then the gestures — trimmed from the right as the node narrows.
 function cardHint(node, index, fits) {
+    const k = inputCardAt(node, index);
+    if (k >= 0) {
+        const card = inputCards(node)[k];
+        const state = card.item ? loadTransformedThumb(node, card.item) : null;
+        const hint = inputCardHint(card);
+        const candidates = state?.ready ? [`${state.width} × ${state.height}  ·  ${hint}`, hint] : [hint];
+        return candidates.find(fits) ?? candidates[candidates.length - 1];
+    }
     const item = node._msImages?.[index];
     const state = item ? loadTransformedThumb(node, item) : null;
     const size = state?.ready && !state.failed ? sizeText(state.width, state.height, item.crop) : "";
@@ -1903,7 +2084,8 @@ function setCardHover(node, index, graphCanvas) {
     // The frontend sets this cursor itself and changes it as the pointer moves
     // between the canvas and a node, so the value to put back is the one that
     // was there when a card took it over — not a value cached once.
-    if (index >= 0) {
+    // An input card only shows something: it keeps the node's own cursor.
+    if (index >= 0 && inputCardAt(node, index) < 0) {
         if (node._msCursorWas === undefined) node._msCursorWas = canvas.style.cursor;
         canvas.style.cursor = node._msThumbPress?.dragging ? "grabbing" : "pointer";
     } else if (node._msCursorWas !== undefined) {
@@ -2478,6 +2660,11 @@ function cardEntriesUnder(node, graphCanvas) {
         const entry = node._msVideos[videoIndex];
         return { title: String(entry.name || entry.filename || "Video"), values: videoCardEntries(node, entry) };
     }
+    const inputIndex = inputIndexAt(node, graphCanvas);
+    if (inputIndex >= 0) {
+        const values = inputCardEntries(node, inputIndex);
+        return values.length ? { title: inputCards(node)[inputIndex].socket, values } : null;
+    }
     const index = thumbIndexAt(node, graphCanvas);
     if (index < 0) return null;
     // Right-clicking one of several selected cards is about all of them.
@@ -2533,16 +2720,16 @@ function setWidgetVisible(widget, visible) {
 
 // The numbered sockets exist on the node type up to MAX_SEPARATE, but a node
 // holding two pictures has no use for eight. Show one per image, and only when
-// output_cells is on, since that is the switch that fills them; a connected
-// IMAGE input adds frames whose number is unknown until the run, so that shows
-// the lot. A socket someone has wired is never taken away: the link would go
-// with it.
+// output_cells is on, since that is the switch that fills them. An input whose
+// pictures only a run can count shows the lot; once every input is known —
+// a Load Image, or the last run — it is one per picture again. A socket
+// someone has wired is never taken away: the link would go with it.
 function syncSeparateOutputs(node) {
     if (!Array.isArray(node?.outputs) || typeof node.addOutput !== "function") return;
     const on = !!getWidget(node, "output_cells")?.value;
     let want = !on ? 0
-        : imageInputConnected(node) ? MAX_SEPARATE
-            : Math.min(node._msImages?.length || 0, MAX_SEPARATE);
+        : pendingInputs(node) ? MAX_SEPARATE
+            : Math.min(stitchItems(node).length + inputFramesNotShown(node), MAX_SEPARATE);
     for (let slot = MAX_SEPARATE; slot > want; slot--) {
         if (node.outputs[NAMED_OUTPUTS + slot - 1]?.links?.length) {
             want = slot;
@@ -2921,6 +3108,35 @@ app.registerExtension({
             return r;
         };
 
+        // A run hands back what came in on the IMAGE inputs; the cards and the
+        // preview show it from now on.
+        const executed = nodeType.prototype.onExecuted;
+        nodeType.prototype.onExecuted = function (output) {
+            const r = executed?.apply(this, arguments);
+            if (receiveInputPreviews(this, output?.multi_stitch_inputs)) inputsChanged(this);
+            return r;
+        };
+
+        // Plugging something in shows it straight away when it is a Load
+        // Image, and a placeholder otherwise. The sockets follow here too, not
+        // only when the node is drawn: in the Vue node mode the canvas never
+        // draws it, and the spare images_N socket would never appear. Once the
+        // frontend has finished its own connect, since this runs inside it.
+        const connections = nodeType.prototype.onConnectionsChange;
+        nodeType.prototype.onConnectionsChange = function (type, slot, connected, link, input) {
+            const r = connections?.apply(this, arguments);
+            if (imageInputNumber(input?.name)) {
+                inputsChanged(this);
+                setTimeout(() => {
+                    if (this._msDisposed) return;
+                    syncImageInputs(this);
+                    syncSeparateOutputs(this);
+                    inputsChanged(this);
+                }, 0);
+            }
+            return r;
+        };
+
         const serialize = nodeType.prototype.onSerialize;
         nodeType.prototype.onSerialize = function (data) {
             serialize?.apply(this, arguments);
@@ -2978,11 +3194,11 @@ app.registerExtension({
                         if (!cancelUpload(this)) chooseFiles(this);
                     } else if (hit === "clear") clearAllImages(this);
                     else if (hit === "copy") {
-                        if (this._msImages?.length) copyStitchedResult(this);
+                        if (stitchItems(this).length) copyStitchedResult(this);
                     } else if (hit === "undo") restoreHistory(this, undoImages);
                     else if (hit === "redo") restoreHistory(this, redoImages);
                     else if (hit === "preview") {
-                        if (this._msImages?.length) togglePreview(this);
+                        if (stitchItems(this).length) togglePreview(this);
                     } else if (hit === "options") toggleAdvanced(this);
                     stopEvent(event);
                     return true;
@@ -3049,8 +3265,10 @@ app.registerExtension({
                 if (videoIndex >= 0) extra.push(...videoCardEntries(this, this._msVideos[videoIndex]));
                 const index = thumbIndexAt(this, graphCanvas);
                 if (index >= 0) extra.push(...imageCardEntries(this, index));
+                const inputIndex = inputIndexAt(this, graphCanvas);
+                if (inputIndex >= 0) extra.push(...inputCardEntries(this, inputIndex));
             }
-            if (this._msImages?.length) {
+            if (stitchItems(this).length) {
                 extra.push({
                     content: "Copy stitched result",
                     callback: () => copyStitchedResult(this),

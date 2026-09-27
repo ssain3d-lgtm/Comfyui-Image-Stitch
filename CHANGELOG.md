@@ -2,6 +2,17 @@
 
 All notable changes to **Multi Stitch Images**. The version is the one in `pyproject.toml`; each release is tagged `v<version>` on `main`.
 
+## 1.12.0 — 2026-09-27
+
+### Added
+- **The IMAGE inputs show what they bring.** Each picture arriving on `images`, `images_2`… appears as a teal card after the list, and in the preview band, the size estimate, the width / height outputs and `⧉ Copy` — in the order the run stitches them. A card carries the picture's place in the stitch (the N of `image_N`) and the socket it came in on.
+- **A Load Image connected directly shows at once.** Its file is on the server already, so there is nothing to wait for; pick another file on the Load Image and the card follows. Classic Reroute nodes in between are looked through.
+- **Anything else shows after one run.** A Crop Head has to find the face before there is a picture, so until the workflow has run the card is a `Queue once to see it` placeholder. The run then writes the frames it received to ComfyUI's temp folder and hands their names back (a `multi_stitch_inputs` UI output), and the cards and the preview show exactly those — composited on the spacing colour as they were placed. They stay until the next run, and only while the socket is still fed by the same node: plug in another and the placeholder is back. A frame larger than 1536px is written smaller, carrying its true size for the layout, and a long batch writes its first 32 frames and counts the rest — so the previews cost a run next to nothing.
+- Input cards are shown, not edited: no ×, no editor, no place in the drag order, since the picture is whatever the node above hands over. Right-click one to copy its picture to the clipboard. The number of `image_N` sockets follows the known pictures and shows the whole set only while some input is still waiting for a run.
+
+### Fixed
+- **The extra IMAGE sockets never appeared in the Vue node (Nodes 2.0) mode.** 1.11 grew them while the node was drawn, and in that mode the canvas never draws it. They now follow every connection as well.
+
 ## 1.11.0 — 2026-09-27
 
 ### Added

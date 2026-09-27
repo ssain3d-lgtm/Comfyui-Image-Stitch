@@ -63,6 +63,11 @@ function installStyles() {
 .ms-card-menu button:hover{background:#3d5a80}
 .ms-dom-view .card .size{position:absolute;right:3px;bottom:3px;background:rgba(0,0,0,.72);color:#e8e8e8;font-size:6px;padding:1px 3px;border-radius:2px;white-space:nowrap;pointer-events:none}
 .ms-dom-view .card .size.edited{color:#f6b73c}
+.ms-dom-view .card.input{background:#11191a;border-color:#3f8f8a;cursor:default}
+.ms-dom-view .card.input.pending{border-style:dashed}
+.ms-dom-view .card.input canvas.thumb,.ms-dom-view .card.input .text{cursor:default}
+.ms-dom-view .card .text.input{color:#8fbfbb}
+.ms-dom-view .card .badges span.input{color:#7fd8cf}
 .ms-dom-view .card .label{position:absolute;left:24px;right:24px;bottom:3px;background:rgba(0,0,0,.6);color:#9ad0ff;font-size:11px;padding:2px 4px;border-radius:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;pointer-events:none}
 .ms-dom-view .empty{border:1px dashed #666;border-radius:3px;height:${CARD_H}px;display:flex;align-items:center;justify-content:center;text-align:center;color:#8f8f8f;cursor:pointer;padding:0 12px}
 .ms-dom-view .empty.over{border-color:#8ab4f8;color:#c8d8ff}
@@ -114,10 +119,16 @@ function paintThumb(canvas, draw) {
 // the toolbar wraps at narrow widths and large UI scales, and guessing one row
 // for it leaves the node short.
 function viewHeight(node, actions) {
-    const count = actions.items(node).length + actions.videos(node).length;
+    const count = actions.items(node).length + actions.videos(node).length + (actions.inputs?.(node).length || 0);
     const rows = Math.max(1, Math.ceil(count / columnsForWidth(node?.size?.[0])));
-    return 22 + TOOLBAR_ROW_H + (actions.previewOn(node) && actions.items(node).length ? PREVIEW_H + 8 : 0)
+    return 22 + TOOLBAR_ROW_H + (actions.previewOn(node) && stitchCount(node, actions) ? PREVIEW_H + 8 : 0)
         + rows * (CARD_H + THUMB_GAP) + (actions.sizePanelOn(node) ? PANEL_H + 8 : 0) + 8;
+}
+
+// Pictures the stitch will use that can be shown now: the pasted ones and
+// what the IMAGE inputs are known to bring.
+function stitchCount(node, actions) {
+    return actions.stitchCount ? actions.stitchCount(node) : actions.items(node).length;
 }
 
 // The height the rendered view actually occupies, or null where the DOM cannot
@@ -339,6 +350,50 @@ export function installDomView(node, actions) {
         return el;
     };
 
+    // A picture from an IMAGE input: shown, not edited, and not part of the
+    // drag order — whatever the node above hands over is what it is.
+    const inputCardFor = ({ card, number }, k) => {
+        const el = document.createElement("div");
+        el.className = `card input${card.item ? "" : " pending"}`;
+        const state = card.item ? actions.thumb(node, card.item) : null;
+        if (state?.ready) {
+            const canvas = document.createElement("canvas");
+            canvas.className = "thumb";
+            el.appendChild(canvas);
+            paintSoon(() => paintThumb(canvas, (ctx, rect) => actions.drawThumb(ctx, state.image, null, rect)));
+        } else {
+            const text = document.createElement("div");
+            text.className = "text input";
+            text.textContent = card.item ? "Loading…" : "Queue once to see it";
+            el.appendChild(text);
+        }
+        const badges = document.createElement("div");
+        badges.className = "badges";
+        if (number !== null) {
+            const span = document.createElement("span");
+            span.textContent = String(number);
+            badges.appendChild(span);
+        }
+        const socket = document.createElement("span");
+        socket.className = "input";
+        socket.textContent = card.number === 1 ? "in" : `in ${card.number}`;
+        badges.appendChild(socket);
+        el.appendChild(badges);
+        if (state?.ready) {
+            const size = document.createElement("div");
+            size.className = "size";
+            size.textContent = `${state.width}×${state.height}`;
+            el.appendChild(size);
+        }
+        el.title = actions.inputHint(node, k);
+        if (card.item) {
+            el.addEventListener("contextmenu", (event) => openMenu(event, [
+                ["Copy picture to clipboard", () => actions.copyInput(node, k)],
+            ]));
+        }
+        return el;
+    };
+
     const videoCardFor = (entry) => {
         const el = document.createElement("div");
         el.className = "card";
@@ -371,13 +426,16 @@ export function installDomView(node, actions) {
         pending = false;
         const items = actions.items(node);
         const videos = actions.videos(node);
+        const inputs = actions.inputs?.(node) || [];
+        const shown = stitchCount(node, actions);
+        view.inputKey = actions.inputSignature?.(node);
         status.textContent = actions.status(node);
         buttons.undo.disabled = !actions.canUndo(node);
         buttons.redo.disabled = !actions.canRedo(node);
         buttons.clear.disabled = !items.length && !videos.length;
-        buttons.copy.disabled = !items.length;
-        buttons.preview.disabled = !items.length;
-        const previewOn = actions.previewOn(node) && items.length > 0;
+        buttons.copy.disabled = !shown;
+        buttons.preview.disabled = !shown;
+        const previewOn = actions.previewOn(node) && shown > 0;
         buttons.preview.textContent = previewOn ? "Preview ✓" : "Preview";
         buttons.preview.className = previewOn ? "on" : "";
         const optionsOn = actions.optionsOn(node);
@@ -396,10 +454,12 @@ export function installDomView(node, actions) {
         else cards.innerHTML = "";
         items.forEach((item, index) => cards.appendChild(cardFor(item, index)));
         videos.forEach((entry) => cards.appendChild(videoCardFor(entry)));
+        inputs.forEach((entry, k) => cards.appendChild(inputCardFor(entry, k)));
         const columns = columnsForWidth(node?.size?.[0]);
         if (cards.style) cards.style.gridTemplateColumns = `repeat(${columns}, 1fr)`;
-        cards.hidden = !items.length && !videos.length;
-        empty.hidden = items.length > 0 || videos.length > 0;
+        const listed = items.length + videos.length + inputs.length;
+        cards.hidden = !listed;
+        empty.hidden = listed > 0;
         panel.hidden = !sizeOn;
         if (sizeOn) paintSoon(() => paintThumb(panel, (ctx, rect) => actions.drawSizePanel(ctx, node, rect)));
 
@@ -411,13 +471,22 @@ export function installDomView(node, actions) {
         // Thumbnails and posters arrive asynchronously; keep refreshing while
         // any is still on its way.
         const waiting = items.some((item) => { const s = actions.thumb(node, item); return !s.ready && !s.failed; })
-            || videos.some((entry) => !entry.poster && !entry.failed);
+            || videos.some((entry) => !entry.poster && !entry.failed)
+            || inputs.some(({ card }) => { const s = card.item && actions.thumb(node, card.item); return s && !s.ready && !s.failed; });
         if (waiting && !pending) {
             pending = true;
             view.timer = setTimeout(render, REFRESH_MS);
         }
     };
     view.render = render;
+    // A Load Image switched to another file reports nothing to this node, so
+    // while anything is plugged in the view checks once a second whether what
+    // its input cards would show has changed, and redraws only if it has.
+    if (actions.inputSignature) {
+        view.poll = setInterval(() => {
+            if (view.alive && actions.inputSignature(node) !== view.inputKey) view.refresh();
+        }, 1000);
+    }
     view.refresh = () => {
         if (!view.alive) return;
         clearTimeout(view.timer);
@@ -459,6 +528,7 @@ export function installDomView(node, actions) {
 
     view.destroy = () => {
         view.alive = false;
+        clearInterval(view.poll);
         view.observer?.disconnect?.();
         view.observer = null;
         closeMenu();

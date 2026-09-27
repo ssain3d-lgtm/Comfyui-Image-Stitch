@@ -810,9 +810,16 @@ function startThumbLoad(node, key, state, item, release) {
         image.onload = () => {
             try {
                 if (node._msDisposed || node._msThumbCache.get(key) !== state) return;
-                state.width = image.naturalWidth || image.width || 1;
-                state.height = image.naturalHeight || image.height || 1;
-                state.image = scaledCanvas(image, state.width, state.height, THUMB_MAX_SIDE);
+                const naturalW = image.naturalWidth || image.width || 1;
+                const naturalH = image.naturalHeight || image.height || 1;
+                // A file written smaller than the picture it stands for (an
+                // input preview) carries the true size, which is what every
+                // estimate and layout must use.
+                const [trueW, trueH] = Array.isArray(item?.size) ? item.size : [];
+                const known = trueW > 0 && trueH > 0;
+                state.width = known ? trueW : naturalW;
+                state.height = known ? trueH : naturalH;
+                state.image = scaledCanvas(image, naturalW, naturalH, THUMB_MAX_SIDE);
                 state.ready = true;
             } catch (_) { failThumb(state, "error"); }
             finally { finish(); }

@@ -87,6 +87,12 @@ def load_the_whole_image_first(item, background=(1.0, 1.0, 1.0)):
     return torch.from_numpy(array).unsqueeze(0)
 
 
+def stitched(*args, **kwargs):
+    """The node's outputs, whether or not the run also sent previews to the UI."""
+    out = ms.MultiStitchImages().stitch(*args, **kwargs)
+    return out["result"] if isinstance(out, dict) else out
+
+
 def solid(rgb, h=2, w=2):
     image = torch.zeros((1, h, w, 3), dtype=torch.float32)
     image[:] = torch.tensor(rgb, dtype=torch.float32)
@@ -615,32 +621,32 @@ class MultiStitchTests(unittest.TestCase):
             images_json=json.dumps([small, big]), layout_mode="strip", grid_columns=3,
             custom_spacing_color="#808080",
         )
-        image, _, width, height, *_ = ms.MultiStitchImages().stitch(**common)
+        image, _, width, height, *_ = stitched(**common)
         self.assertEqual(tuple(image.shape), (1, 20, 63, 3), "the strip itself is unchanged")
         self.assertEqual((width, height), (32, 32), "first image, 30×20 snapped to 32s")
         self.assertIsInstance(width, int)
         self.assertIsInstance(height, int)
-        _, _, width, height, *_ = ms.MultiStitchImages().stitch(**common, size_reference=2, size_divisible_by=4)
+        _, _, width, height, *_ = stitched(**common, size_reference=2, size_divisible_by=4)
         self.assertEqual((width, height), (100, 60))
-        _, _, width, height, *_ = ms.MultiStitchImages().stitch(
+        _, _, width, height, *_ = stitched(
             **common, size_reference=2, size_megapixels=1.0, size_divisible_by=32,
         )
         self.assertEqual((width, height), (1280, 768), "100×60 scaled to 1 MP keeps its 5:3 shape")
         # Crop and rotation count: the size is the image's footprint on the canvas.
         edited = dict(small, rotation=90, crop={"x": 0, "y": 0, "w": 1, "h": 0.5})
-        _, _, width, height, *_ = ms.MultiStitchImages().stitch(
+        _, _, width, height, *_ = stitched(
             **dict(common, images_json=json.dumps([edited, big])), size_divisible_by=1,
         )
         self.assertEqual((width, height), (20, 15))
         # Frames from the IMAGE input are candidates too.
-        _, _, width, height, *_ = ms.MultiStitchImages().stitch(
+        _, _, width, height, *_ = stitched(
             **common, images=torch.zeros(1, 200, 300, 3), size_reference=3, size_divisible_by=1,
         )
         self.assertEqual((width, height), (300, 200), "IMAGE-input frames count after the pasted images")
-        _, _, width, height, *_ = ms.MultiStitchImages().stitch(**common, size_reference=7, size_divisible_by=1)
+        _, _, width, height, *_ = stitched(**common, size_reference=7, size_divisible_by=1)
         self.assertEqual((width, height), (100, 60), "a number past the end means the last image")
         with self.assertRaisesRegex(ValueError, "size_reference must be an image number"):
-            ms.MultiStitchImages().stitch(**common, size_reference="biggest")
+            stitched(**common, size_reference="biggest")
 
     def test_stitch_rejects_too_many_images(self):
         item = self.write_png("many.png", (1, 2, 3))
@@ -1184,7 +1190,7 @@ class MultiStitchTests(unittest.TestCase):
         batch[1, ..., 3] = 0         # fully transparent: shows the background
         batch[2, ..., :3] = 0.5
         batch[2, ..., 3] = 1         # opaque grey
-        image, _, *_ = ms.MultiStitchImages().stitch(
+        image, _, *_ = stitched(
             direction="right", match_image_size=True, spacing_width=0, spacing_color="blue",
             images_json=json.dumps([green]), layout_mode="strip", grid_columns=3, custom_spacing_color="#808080",
             images=batch,
@@ -1195,18 +1201,18 @@ class MultiStitchTests(unittest.TestCase):
         self.assertRgb(image[0, 0, 8], (0.0, 0.0, 1.0))
         self.assertRgb(image[0, 0, 12], (0.5, 0.5, 0.5))
 
-        grey, _, *_ = ms.MultiStitchImages().stitch(
+        grey, _, *_ = stitched(
             "right", True, 0, "white", "[]", "strip", 3, "#808080", images=torch.full((1, 2, 4, 1), 0.25),
         )
         self.assertEqual(tuple(grey.shape), (1, 2, 4, 3))
         self.assertRgb(grey[0, 0, 0], (0.25, 0.25, 0.25))
 
         with self.assertRaisesRegex(ValueError, r"maximum 256 images.*1 pasted \+ 256 from the IMAGE input"):
-            ms.MultiStitchImages().stitch(
+            stitched(
                 "right", True, 0, "white", json.dumps([green]), "strip", 3, "#808080", images=torch.zeros(256, 2, 2, 3),
             )
         with self.assertRaisesRegex(ValueError, "expected 1, 3 or 4"):
-            ms.MultiStitchImages().stitch("right", True, 0, "white", "[]", "strip", 3, "#808080", images=torch.zeros(1, 2, 2, 2))
+            stitched("right", True, 0, "white", "[]", "strip", 3, "#808080", images=torch.zeros(1, 2, 2, 2))
 
     def test_each_image_input_is_its_own_picture_in_socket_order(self):
         """Two sources of different sizes, one per socket, like two pasted images."""
@@ -1217,7 +1223,7 @@ class MultiStitchTests(unittest.TestCase):
         green = torch.zeros(1, 2, 2, 3)
         green[..., 1] = 1
         with patch.object(ms.gallery, "record_run") as record:
-            image, _, width, height, first, second, third, *rest = ms.MultiStitchImages().stitch(
+            image, _, width, height, first, second, third, *rest = stitched(
                 "right", False, 0, "white", "[]", "strip", 3, "#808080", output_cells=True,
                 cells_resolution="source", images=red, images_3=green, images_2=blue,
             )
@@ -1231,24 +1237,88 @@ class MultiStitchTests(unittest.TestCase):
         self.assertEqual(record.call_args.kwargs["input_frames"], 3)
 
         # A socket left empty in the middle is simply skipped.
-        image, *_ = ms.MultiStitchImages().stitch(
+        image, *_ = stitched(
             "right", False, 0, "white", "[]", "strip", 3, "#808080", images_4=green,
         )
         self.assertEqual(tuple(image.shape), (1, 2, 2, 3))
         with self.assertRaisesRegex(ValueError, "the images_2 input must be a nonempty"):
-            ms.MultiStitchImages().stitch(
+            stitched(
                 "right", False, 0, "white", "[]", "strip", 3, "#808080", images=red, images_2=torch.zeros(0, 2, 2, 3),
             )
         with self.assertRaisesRegex(ValueError, r"1 pasted \+ 256 from the IMAGE input"):
-            ms.MultiStitchImages().stitch(
+            stitched(
                 "right", True, 0, "white", json.dumps([self.write_png("g.png", (0, 255, 0), size=(2, 2))]),
                 "strip", 3, "#808080", images=torch.zeros(200, 2, 2, 3), images_8=torch.zeros(56, 2, 2, 3),
             )
 
+    def test_a_run_shows_the_node_what_came_in_on_its_inputs(self):
+        """Until the upstream nodes run nobody knows what a Crop Head hands over."""
+        clear = torch.zeros(1, 2, 3, 4)          # fully transparent: lands on the spacing colour
+        grey = torch.full((2, 4, 2, 1), 0.5)     # a two-frame, one-channel batch
+        out = ms.MultiStitchImages().stitch(
+            "right", False, 0, "blue", "[]", "strip", 3, "#808080", images=clear, images_3=grey,
+        )
+        self.assertEqual(set(out), {"ui", "result"})
+        self.assertEqual(tuple(out["result"][0].shape), (1, 4, 7, 3))
+        previews = out["ui"]["multi_stitch_inputs"]
+        self.assertEqual(
+            [(p["socket"], p["frame"], p["width"], p["height"], p["type"], p["subfolder"]) for p in previews],
+            [("images", 0, 3, 2, "temp", "multi_stitch_inputs"),
+             ("images_3", 0, 2, 4, "temp", "multi_stitch_inputs"),
+             ("images_3", 1, 2, 4, "temp", "multi_stitch_inputs")],
+        )
+        for preview in previews:
+            with Image.open(self.temp_dir / preview["subfolder"] / preview["filename"]) as saved:
+                self.assertEqual((saved.mode, saved.size), ("RGB", (preview["width"], preview["height"])))
+                first = saved.getpixel((0, 0))
+            # The file shows the frame as it was placed, not as it arrived.
+            self.assertEqual(first, (0, 0, 255) if preview["socket"] == "images" else (128, 128, 128))
+        # Two runs never share a file, so a view of the last one cannot go stale.
+        again = ms.MultiStitchImages().stitch(
+            "right", False, 0, "blue", "[]", "strip", 3, "#808080", images=clear,
+        )["ui"]["multi_stitch_inputs"]
+        self.assertNotEqual(again[0]["filename"], previews[0]["filename"])
+
+    def test_no_inputs_means_no_previews_and_a_long_batch_is_counted_not_written(self):
+        green = self.write_png("green.png", (0, 255, 0), size=(2, 2))
+        plain = ms.MultiStitchImages().stitch("right", True, 0, "white", json.dumps([green]), "strip", 3, "#808080")
+        self.assertIsInstance(plain, tuple, "nothing connected: the node answers as it always has")
+
+        many = ms._MAX_INPUT_PREVIEWS + 3
+        out = ms.MultiStitchImages().stitch(
+            "right", True, 0, "white", "[]", "grid", 3, "#808080", images=torch.zeros(many, 2, 2, 3),
+        )
+        previews = out["ui"]["multi_stitch_inputs"]
+        self.assertEqual(len(previews), ms._MAX_INPUT_PREVIEWS)
+        self.assertEqual(previews[-1]["more"], 3)
+        self.assertEqual(len(list((self.temp_dir / ms._INPUT_PREVIEW_SUBFOLDER).iterdir())), ms._MAX_INPUT_PREVIEWS)
+
+    def test_a_large_frame_is_previewed_smaller_but_keeps_its_true_size(self):
+        long_side = ms._INPUT_PREVIEW_MAX_SIDE * 2
+        out = ms.MultiStitchImages().stitch(
+            "right", True, 0, "white", "[]", "strip", 3, "#808080", images=torch.full((1, 8, long_side, 3), 0.5),
+        )
+        preview = out["ui"]["multi_stitch_inputs"][0]
+        self.assertEqual((preview["width"], preview["height"]), (long_side, 8))
+        with Image.open(self.temp_dir / preview["subfolder"] / preview["filename"]) as saved:
+            self.assertEqual(saved.size, (ms._INPUT_PREVIEW_MAX_SIDE, 4))
+        self.assertEqual(tuple(out["result"][0].shape), (1, 8, long_side, 3), "the run itself is untouched")
+
+    def test_a_preview_that_cannot_be_written_never_costs_the_result(self):
+        blocked = self.root / "blocked"
+        blocked.write_text("a file where the temp folder should be")
+        ms.folder_paths.get_temp_directory = lambda: str(blocked)
+        with patch("sys.stderr"):
+            out = ms.MultiStitchImages().stitch(
+                "right", True, 0, "white", "[]", "strip", 3, "#808080", images=torch.zeros(1, 2, 2, 3),
+            )
+        self.assertIsInstance(out, tuple)
+        self.assertEqual(tuple(out[0].shape), (1, 2, 2, 3))
+
     def test_the_gallery_counts_only_frames_from_the_inputs(self):
         green = self.write_png("green.png", (0, 255, 0), size=(4, 2))
         with patch.object(ms.gallery, "record_run") as record:
-            ms.MultiStitchImages().stitch(
+            stitched(
                 "right", True, 0, "white", json.dumps([green]), "strip", 3, "#808080", images=torch.zeros(1, 2, 2, 3),
             )
         self.assertEqual(record.call_args.kwargs["input_frames"], 1)
