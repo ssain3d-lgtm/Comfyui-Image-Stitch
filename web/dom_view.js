@@ -67,6 +67,7 @@ function installStyles() {
 .ms-dom-view .card.input.pending{border-style:dashed}
 .ms-dom-view .card.input canvas.thumb,.ms-dom-view .card.input .text{cursor:default}
 .ms-dom-view .card .text.input{color:#8fbfbb}
+.ms-dom-view .card.input .text.run{cursor:pointer}
 .ms-dom-view .card .badges span.input{color:#7fd8cf}
 .ms-dom-view .card .label{position:absolute;left:24px;right:24px;bottom:3px;background:rgba(0,0,0,.6);color:#9ad0ff;font-size:11px;padding:2px 4px;border-radius:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;pointer-events:none}
 .ms-dom-view .empty{border:1px dashed #666;border-radius:3px;height:${CARD_H}px;display:flex;align-items:center;justify-content:center;text-align:center;color:#8f8f8f;cursor:pointer;padding:0 12px}
@@ -193,6 +194,8 @@ export function installDomView(node, actions) {
         options: button("Options ▸", "Show the advanced widgets", () => actions.toggleOptions(node)),
         gallery: button("🖼 Gallery", "Compositions this node has stitched; load one back", () => actions.openGallery(node)),
         size: button("📐 Size", "Width / height outputs and the size panel", () => actions.toggleSizePanel(node)),
+        inputs: button("▶ Inputs", "Run only the nodes feeding the IMAGE inputs — not the ones after this node",
+            () => actions.runInputs?.(node)),
     };
     toolbar.append(...Object.values(buttons));
 
@@ -364,7 +367,13 @@ export function installDomView(node, actions) {
         } else {
             const text = document.createElement("div");
             text.className = "text input";
-            text.textContent = card.item ? "Loading…" : "Queue once to see it";
+            const running = actions.inputsRunning?.(node);
+            text.textContent = card.item ? "Loading…" : running ? "Running…" : "▶ Click to run the inputs";
+            // A placeholder is a way to fill it: the same run as ▶ Inputs.
+            if (!card.item) {
+                text.className += " run";
+                text.addEventListener("click", () => actions.runInputs?.(node));
+            }
             el.appendChild(text);
         }
         const badges = document.createElement("div");
@@ -445,6 +454,12 @@ export function installDomView(node, actions) {
         const sizeOn = actions.sizePanelOn(node);
         buttons.size.textContent = sizeOn ? "📐 Size ✓" : "📐 Size";
         buttons.size.className = sizeOn ? "on" : "";
+        // Only while something is plugged in; lit while something waits for a run.
+        const running = actions.inputsRunning?.(node);
+        buttons.inputs.hidden = !inputs.length || !actions.runInputs;
+        buttons.inputs.disabled = !!running;
+        buttons.inputs.textContent = running ? "Running…" : "▶ Inputs";
+        buttons.inputs.className = !running && inputs.some(({ card }) => !card.item) ? "on" : "";
 
         preview.hidden = !previewOn;
         if (previewOn) {

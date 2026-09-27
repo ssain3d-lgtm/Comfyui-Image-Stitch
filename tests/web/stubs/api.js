@@ -14,7 +14,19 @@ export const calls = [];
 export const knobs = { delayMs: 0, failNext: false, serverVideo: true, serverVideoInfo: { duration: 2, fps: 10, width: 320, height: 180, frames: 20, rotation: 0 } };
 let serverCaptures = 0;
 
+// ComfyUI's api is an EventTarget; tests fire its execution events by hand.
+const listeners = new Map();
+
 export const api = {
+    addEventListener(type, handler) {
+        (listeners.get(type) || listeners.set(type, new Set()).get(type)).add(handler);
+    },
+    removeEventListener(type, handler) {
+        listeners.get(type)?.delete(handler);
+    },
+    fire(type, detail = {}) {
+        for (const handler of [...(listeners.get(type) || [])]) handler({ type, detail });
+    },
     apiURL(path) {
         const base = globalThis.__msFixtureBase;
         const query = path.indexOf("?");

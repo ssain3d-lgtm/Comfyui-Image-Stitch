@@ -20,6 +20,14 @@ from PIL import Image, ImageDraw
 
 import folder_paths
 
+# What a node returns to stop whatever reads its outputs with a message. The
+# node holds its errors back this way while nothing uses it (see
+# _held_back_while_unused); an older ComfyUI without it simply gets the error.
+try:
+    from comfy_execution.graph_utils import ExecutionBlocker
+except ImportError:
+    ExecutionBlocker = None
+
 try:
     from . import multi_stitch_gallery as gallery
 except ImportError:  # loaded as a plain module by tests and tooling
@@ -1265,6 +1273,51 @@ def _frame_loader(frame: torch.Tensor, background: tuple[float, float, float]) -
     return load, size
 
 
+def _feeds_anything(prompt: object, unique_id: object) -> bool:
+    """Whether any node in the queued prompt reads one of this node's outputs.
+
+    The prompt is the whole workflow as queued, even for a run of only part
+    of it, so "nothing reads it" means nothing in the workflow does. When it
+    cannot be told — no prompt, no id — the answer is yes, which keeps the
+    node's errors exactly as they always were.
+    """
+    if not isinstance(prompt, dict) or unique_id is None or str(unique_id) not in prompt:
+        return True
+    me = str(unique_id)
+    for node in prompt.values():
+        inputs = node.get("inputs") if isinstance(node, dict) else None
+        for value in (inputs or {}).values() if isinstance(inputs, dict) else ():
+            if isinstance(value, list) and len(value) == 2 and str(value[0]) == me:
+                return True
+    return False
+
+
+def _held_back_while_unused(stitch):
+    """Run the node, but keep its failure to itself while nothing uses it.
+
+    The node is an output node — that is what lets ComfyUI run just it and the
+    nodes feeding it, to show what its IMAGE inputs bring — so it runs on every
+    Queue, wired to anything or not. An error there would stop a run that never
+    needed it: a fresh node with nothing pasted yet, a file that moved. While
+    no node reads its outputs, a failure becomes an ExecutionBlocker carrying
+    the message instead: harmless where it is, and the same error, word for
+    word, for whatever gets wired to it later and reads the cached result.
+    Wired to something, the node fails as it always has.
+    """
+    @functools.wraps(stitch)
+    def run(self, *args, prompt=None, unique_id=None, **kwargs):
+        try:
+            return stitch(self, *args, **kwargs)
+        except Exception as exc:
+            if ExecutionBlocker is None or _feeds_anything(prompt, unique_id):
+                raise
+            message = str(exc) or type(exc).__name__
+            print(f"[Multi Stitch Images] node {unique_id} feeds nothing, so its error waits for "
+                  f"whatever does: {message}", file=sys.stderr)
+            return {"ui": {"multi_stitch_error": [message]}, "result": ExecutionBlocker(message)}
+    return run
+
+
 def _save_input_previews(sockets: list[str], loaders: list[Loader]) -> list[dict]:
     """Write the input frames to the temp folder as the stitch saw them.
 
@@ -1472,6 +1525,9 @@ class MultiStitchImages:
                     for previous, name in zip(("images", *_EXTRA_IMAGE_INPUTS[:-1]), _EXTRA_IMAGE_INPUTS, strict=True)
                 },
             },
+            # For _held_back_while_unused: the queued workflow, to tell whether
+            # anything reads this node, and which node this is in it.
+            "hidden": {"prompt": "PROMPT", "unique_id": "UNIQUE_ID"},
         }
 
     # The numbered outputs come last so no saved workflow's links shift.
@@ -1480,6 +1536,11 @@ class MultiStitchImages:
         f"image_{number}" for number in range(1, _MAX_SEPARATE + 1)
     )
     FUNCTION = "stitch"
+    # An output node, so a run of just this node and the nodes feeding it is
+    # possible — the ▶ Inputs button, and ComfyUI's own "run selected output
+    # nodes". The price, running on every Queue, is what _held_back_while_unused
+    # keeps from ever costing a run it has nothing to do with.
+    OUTPUT_NODE = True
     CATEGORY = "image/transform"
     DESCRIPTION = (
         "Paste multiple images directly into this node with Ctrl+V, click an image to edit, "
@@ -1500,6 +1561,7 @@ class MultiStitchImages:
         for number in range(1, _MAX_SEPARATE + 1)
     )
 
+    @_held_back_while_unused
     def stitch(
         self,
         direction,

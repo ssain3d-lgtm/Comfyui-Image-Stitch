@@ -2606,8 +2606,8 @@ describe("IMAGE inputs on the node", () => {
         const graph = feed(node, [(g) => g.other(7)]);
         graph.plug("images", 7);
         let painted = paintedCalls(nodeType, node);
-        assert.equal(painted.text[0], "1 input  —  Queue once to see them");
-        assert.ok(painted.text.includes("Queue once"), "the card itself asks for a run");
+        assert.equal(painted.text[0], "1 input  —  ▶ Inputs to see them");
+        assert.ok(painted.text.includes("▶ Click to run"), "the card itself offers the run");
         assert.equal(ms.previewRect(node), null, "nothing to preview yet");
 
         dom.imageSizes.set("input_run1_001.png", [24, 32]);
@@ -2629,7 +2629,7 @@ describe("IMAGE inputs on the node", () => {
         // Fed from somewhere else now: what the last run saw no longer applies.
         graph.other(8);
         graph.plug("images", 8);
-        assert.equal(paintedCalls(nodeType, node).text[0], "1 input  —  Queue once to see them");
+        assert.equal(paintedCalls(nodeType, node).text[0], "1 input  —  ▶ Inputs to see them");
         // The same source again, and it does.
         graph.plug("images", 7);
         assert.match(paintedCalls(nodeType, node).text[0], /^2 from inputs/);
@@ -2770,5 +2770,146 @@ describe("IMAGE inputs on the node", () => {
         const painted = paintedCalls(nodeType, node);
         assert.match(painted.text[0], /^6 from inputs {2}• {2}~8×8 {2}\+ 5 more frames not shown$/);
         assert.ok(painted.text.some((t) => t.startsWith("Preview") && t.endsWith("+ 5 more frames not shown")));
+    });
+});
+
+describe("▶ Inputs: run only what feeds the node", () => {
+    const lastToast = () => app.extensionManager.toast.log.at(-1);
+    let queued;
+    // A frontend that can run part of a workflow, and records what it was asked.
+    const capable = (node, answer = true) => {
+        queued = [];
+        app.extensionManager.command = { commands: [{ id: "Comfy.QueueSelectedOutputNodes" }], execute() {} };
+        app.rootGraph = node.graph;
+        app.queuePrompt = async (number, batch, ids) => { queued.push({ number, batch, ids }); return answer; };
+    };
+    const reset = () => {
+        delete app.extensionManager.command;
+        delete app.rootGraph;
+        delete app.queuePrompt;
+    };
+    const titleClick = (node, rect) => click(node, centre(rect));
+    const cropHeadNode = () => {
+        const node = makeNode(nodeType);
+        node.id = 21;
+        const graph = feed(node, [(g) => g.other(7)]);
+        graph.plug("images", 7);
+        return node;
+    };
+
+    it("shows a lit ▶ Inputs in the title while an input waits for a run, and none without inputs", () => {
+        const bare = makeNode(nodeType);
+        assert.equal(ms.inputsButtonRect(bare), null);
+        const node = cropHeadNode();
+        const r = ms.inputsButtonRect(node);
+        assert.ok(r && r.x + r.w <= ms.sizeButtonRect(node).x, "left of the size button");
+        assert.ok(paintedCalls(nodeType, node).text.includes("▶ Inputs"));
+    });
+
+    it("asks ComfyUI to run this node alone, which runs what feeds it and nothing after", async () => {
+        const node = cropHeadNode();
+        capable(node);
+        try {
+            assert.equal(titleClick(node, ms.inputsButtonRect(node)), true);
+            await tick(1);
+            assert.deepEqual(queued, [{ number: 0, batch: 1, ids: ["21"] }]);
+            assert.ok(paintedCalls(nodeType, node).text.includes("Running…"));
+            // Pressed again while it runs: said, not queued twice.
+            titleClick(node, ms.inputsButtonRect(node));
+            await tick(1);
+            assert.equal(queued.length, 1);
+            assert.equal(lastToast().summary, "Already running");
+
+            dom.imageSizes.set("input_btn_001.png", [8, 8]);
+            nodeType.prototype.onExecuted.call(node, { multi_stitch_inputs: [runResult("images", "input_btn_001.png")] });
+            assert.equal(node._msInputsRun, null, "the pictures arrived: done");
+            assert.ok(paintedCalls(nodeType, node).text.includes("▶ Inputs"));
+        } finally {
+            reset();
+        }
+    });
+
+    it("runs from a placeholder card too", async () => {
+        const node = cropHeadNode();
+        capable(node);
+        try {
+            const [x, y] = centre(card(node, 0));
+            assert.equal(nodeType.prototype.onMouseDown.call(node, pointer(x, y), [x, y], {}), true);
+            await tick(1);
+            assert.deepEqual(queued.map((q) => q.ids), [["21"]]);
+        } finally {
+            reset();
+        }
+    });
+
+    it("finds the node inside a subgraph by the subgraph nodes holding it", async () => {
+        const node = cropHeadNode();
+        capable(node);
+        const inner = node.graph;
+        const middle = { _nodes: [{ id: 30, subgraph: inner }] };
+        app.rootGraph = { _nodes: [{ id: 4 }, { id: 12, subgraph: middle }] };
+        try {
+            titleClick(node, ms.inputsButtonRect(node));
+            await tick(1);
+            assert.deepEqual(queued.map((q) => q.ids), [["12:30:21"]]);
+        } finally {
+            reset();
+        }
+    });
+
+    it("never runs the whole workflow instead: without partial runs it says so and does nothing", async () => {
+        const node = cropHeadNode();
+        let asked = 0;
+        app.queuePrompt = async () => { asked += 1; };
+        try {
+            titleClick(node, ms.inputsButtonRect(node));
+            await tick(1);
+            assert.equal(asked, 0);
+            assert.equal(`${lastToast().severity}/${lastToast().summary}`, "warn/Cannot run part of the workflow");
+            assert.equal(node._msInputsRun ?? null, null);
+        } finally {
+            reset();
+        }
+    });
+
+    it("stops waiting when the run is refused, fails upstream or is interrupted", async () => {
+        const node = cropHeadNode();
+        capable(node, false);
+        try {
+            titleClick(node, ms.inputsButtonRect(node));
+            await tick(1);
+            assert.equal(node._msInputsRun, null, "refused before it ran");
+            capable(node, true);
+            for (const type of ["execution_error", "execution_interrupted", "execution_success"]) {
+                titleClick(node, ms.inputsButtonRect(node));
+                await tick(1);
+                assert.ok(node._msInputsRun, type);
+                api.api.fire(type);
+                assert.equal(node._msInputsRun, null, type);
+            }
+            app.queuePrompt = async () => { throw new Error("socket closed"); };
+            titleClick(node, ms.inputsButtonRect(node));
+            await tick(1);
+            assert.equal(node._msInputsRun, null);
+            assert.equal(`${lastToast().severity}/${lastToast().detail}`, "error/socket closed");
+        } finally {
+            reset();
+        }
+    });
+
+    it("tells whoever pressed it when the stitch itself failed, and nobody otherwise", async () => {
+        const node = cropHeadNode();
+        capable(node);
+        try {
+            const before = app.extensionManager.toast.log.length;
+            nodeType.prototype.onExecuted.call(node, { multi_stitch_error: ["Multi Stitch Images: too big"] });
+            assert.equal(app.extensionManager.toast.log.length, before, "an unused node's held-back error is quiet");
+            titleClick(node, ms.inputsButtonRect(node));
+            await tick(1);
+            nodeType.prototype.onExecuted.call(node, { multi_stitch_error: ["Multi Stitch Images: too big"] });
+            assert.equal(`${lastToast().severity}/${lastToast().detail}`, "warn/Multi Stitch Images: too big");
+        } finally {
+            reset();
+        }
     });
 });

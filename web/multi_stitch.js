@@ -297,6 +297,15 @@ function sizeButtonRect(node) {
     return { x: galleryButtonRect(node).x - 4 - w, y: -title + Math.round((title - h) / 2), w, h };
 }
 
+// "▶ Inputs", left of the size button, while an IMAGE input is plugged in.
+function inputsButtonRect(node) {
+    if (!inputCards(node).length) return null;
+    const title = titleHeight();
+    const w = 64;
+    const h = 20;
+    return { x: sizeButtonRect(node).x - 4 - w, y: -title + Math.round((title - h) / 2), w, h };
+}
+
 function drawTitleButton(ctx, r, label, on, font = "11px sans-serif") {
     ctx.save();
     ctx.fillStyle = on ? "rgba(74,222,128,.22)" : "rgba(255,255,255,.10)";
@@ -313,6 +322,13 @@ function drawTitleButton(ctx, r, label, on, font = "11px sans-serif") {
 
 function drawGalleryButton(ctx, node) {
     drawTitleButton(ctx, galleryButtonRect(node), "🖼", false, "12px sans-serif");
+}
+
+// Lit while an input is waiting for a run, as the thing to press next.
+function drawInputsButton(ctx, node) {
+    const r = inputsButtonRect(node);
+    if (!r) return;
+    drawTitleButton(ctx, r, node._msInputsRun ? "Running…" : "▶ Inputs", !node._msInputsRun && pendingInputs(node) > 0);
 }
 
 function drawSizeButton(ctx, node) {
@@ -1020,7 +1036,7 @@ function drawInputCard(ctx, node, card, number, r) {
         ctx.beginPath();
         ctx.rect(imageRect.x, imageRect.y, imageRect.w, imageRect.h);
         ctx.clip();
-        drawWrappedText(ctx, card.item ? "Loading…" : "Queue once\nto see it", r.x + r.w / 2, r.y + r.h / 2 + 4, r.w - 12, 14);
+        drawWrappedText(ctx, card.item ? "Loading…" : node._msInputsRun ? "Running…" : "▶ Click to run\nthe inputs", r.x + r.w / 2, r.y + r.h / 2 + 4, r.w - 12, 14);
         ctx.restore();
     }
     ctx.textAlign = "left";
@@ -1156,6 +1172,8 @@ const DOM_VIEW_ACTIONS = () => (domViewActions ||= {
     inputSignature,
     inputHint: (node, index) => cardHint(node, inputCardIndex(node, index), () => true),
     copyInput: copyInputImage,
+    runInputs,
+    inputsRunning: (node) => !!node._msInputsRun,
     stitchCount: (node) => stitchItems(node).length,
     status: (node) => statusText(node),
     canUndo, canRedo,
@@ -1256,7 +1274,7 @@ function statusText(node, measure = null, room = 0) {
     const estimate = predicted
         ? `  •  ~${predicted.w}×${predicted.h}${predicted.skipped ? ` (${predicted.skipped} not loaded)` : ""}`
         : "";
-    const inputsNote = parts.length ? inputNote(node, "  + ") : "  —  Queue once to see them";
+    const inputsNote = parts.length ? inputNote(node, "  + ") : "  —  ▶ Inputs to see them";
     const videos = node._msVideos?.length || 0;
     const videoNote = videos ? `  •  ${videos} video${videos === 1 ? "" : "s"} to capture from` : "";
     const picked = selectionSize(node);
@@ -1503,6 +1521,98 @@ async function copyInputImage(node, k) {
         notify("Copied", `The picture on ${card.socket} copied to the clipboard. Ctrl+V pastes it in as an image of its own.`);
     } catch (error) {
         notify("Copy failed", String(error?.message || error), "error");
+    }
+}
+
+// ---- ▶ Inputs: run only what feeds this node ----
+//
+// ComfyUI runs part of a workflow by output node: the ones asked for, and
+// every node they read from, nothing after them. This node is an output node
+// for exactly this, so asking for it alone runs the Crop Head and the rest of
+// what feeds its IMAGE inputs, and not the model it feeds.
+
+// Whether this ComfyUI can run part of a workflow. Its own command for it is
+// the sign; without it the id list would be ignored and the whole workflow
+// would run, which is the one thing this button must never do.
+function canRunPart() {
+    const commands = app.extensionManager?.command?.commands;
+    return Array.isArray(commands) && commands.some((command) => command?.id === "Comfy.QueueSelectedOutputNodes");
+}
+
+// The id ComfyUI runs this node under: its own id at the top level, the ids
+// of the subgraph nodes holding it before that when it is inside one.
+function executionIdOf(node) {
+    const root = app.rootGraph ?? app.graph;
+    if (!root || !node?.graph) return null;
+    if (node.graph === root) return String(node.id);
+    const path = subgraphPath(root, node.graph, new Set());
+    return path ? [...path, node.id].join(":") : null;
+}
+
+function subgraphPath(graph, target, seen) {
+    for (const holder of graph?._nodes || graph?.nodes || []) {
+        const inner = holder?.subgraph;
+        if (!inner || seen.has(inner)) continue;
+        if (inner === target) return [holder.id];
+        seen.add(inner);
+        const rest = subgraphPath(inner, target, seen);
+        if (rest) return [holder.id, ...rest];
+    }
+    return null;
+}
+
+// The nodes waiting on a run they asked for, and the end of any run clearing
+// them: a run that fails upstream never reaches this node to say so itself.
+const nodesRunningInputs = new Set();
+let runListenersInstalled = false;
+function endInputsRun(node) {
+    if (!node._msInputsRun) return;
+    node._msInputsRun = null;
+    nodesRunningInputs.delete(node);
+    node.graph?.setDirtyCanvas(true, true);
+    refreshDomView(node);
+}
+function installRunListeners() {
+    if (runListenersInstalled || typeof api?.addEventListener !== "function") return;
+    runListenersInstalled = true;
+    for (const type of ["execution_success", "execution_error", "execution_interrupted"]) {
+        api.addEventListener(type, () => {
+            for (const node of [...nodesRunningInputs]) endInputsRun(node);
+        });
+    }
+}
+
+async function runInputs(node) {
+    if (node._msInputsRun) {
+        notify("Already running", "The inputs are on their way — the cards change as soon as they arrive.", "info");
+        return;
+    }
+    if (!canRunPart()) {
+        notify(
+            "Cannot run part of the workflow",
+            "This ComfyUI has no way to run only some nodes. Update it, or press Queue to run everything.",
+            "warn",
+        );
+        return;
+    }
+    const id = executionIdOf(node);
+    if (!id) {
+        notify("Cannot run the inputs", "This node's place in the workflow could not be found. Press Queue instead.", "warn");
+        return;
+    }
+    installRunListeners();
+    node._msInputsRun = { asked: true };
+    nodesRunningInputs.add(node);
+    node.graph?.setDirtyCanvas(true, true);
+    refreshDomView(node);
+    try {
+        // The array form: every frontend that can run part of a workflow takes it.
+        const queued = await app.queuePrompt(0, 1, [id]);
+        // Refused before it ran (the frontend has shown why): nothing to wait for.
+        if (queued === false) endInputsRun(node);
+    } catch (error) {
+        endInputsRun(node);
+        notify("Cannot run the inputs", String(error?.message || error), "error");
     }
 }
 
@@ -2084,8 +2194,10 @@ function setCardHover(node, index, graphCanvas) {
     // The frontend sets this cursor itself and changes it as the pointer moves
     // between the canvas and a node, so the value to put back is the one that
     // was there when a card took it over — not a value cached once.
-    // An input card only shows something: it keeps the node's own cursor.
-    if (index >= 0 && inputCardAt(node, index) < 0) {
+    // An input card only shows something and keeps the node's own cursor —
+    // but a placeholder is a button, the same as ▶ Inputs.
+    const k = inputCardAt(node, index);
+    if (index >= 0 && (k < 0 || !inputCards(node)[k].item)) {
         if (node._msCursorWas === undefined) node._msCursorWas = canvas.style.cursor;
         canvas.style.cursor = node._msThumbPress?.dragging ? "grabbing" : "pointer";
     } else if (node._msCursorWas !== undefined) {
@@ -3114,6 +3226,11 @@ app.registerExtension({
         nodeType.prototype.onExecuted = function (output) {
             const r = executed?.apply(this, arguments);
             if (receiveInputPreviews(this, output?.multi_stitch_inputs)) inputsChanged(this);
+            // A failure this node held back because nothing reads it is news
+            // only to someone who pressed ▶ Inputs and is waiting on it.
+            const failed = Array.isArray(output?.multi_stitch_error) ? output.multi_stitch_error[0] : null;
+            if (failed && this._msInputsRun) notify("Inputs ran, the stitch did not", String(failed), "warn");
+            endInputsRun(this);
             return r;
         };
 
@@ -3156,6 +3273,7 @@ app.registerExtension({
             updateNodeSize(this);
             drawThumbs(this, ctx);
             if (!this.flags?.collapsed) {
+                drawInputsButton(ctx, this);
                 drawSizeButton(ctx, this);
                 drawGalleryButton(ctx, this);
             }
@@ -3185,6 +3303,12 @@ app.registerExtension({
                 }
                 if (inRect(x, y, sizeButtonRect(this))) {
                     toggleSizePanel(this);
+                    stopEvent(event);
+                    return true;
+                }
+                const inputsButton = inputsButtonRect(this);
+                if (inputsButton && inRect(x, y, inputsButton)) {
+                    runInputs(this);
                     stopEvent(event);
                     return true;
                 }
@@ -3218,6 +3342,13 @@ app.registerExtension({
             }
             if (primary && !this.flags?.collapsed && listCount(this)) {
                 const [x, y] = localPos(this, event, pos, graphCanvas);
+                // A placeholder card is a way to fill it: the same run as ▶ Inputs.
+                const k = inputCardAt(this, cardIndexAtPoint(this, x, y));
+                if (k >= 0 && !inputCards(this)[k].item) {
+                    runInputs(this);
+                    stopEvent(event);
+                    return true;
+                }
                 for (let i = 0; i < (this._msVideos?.length || 0); i++) {
                     const entry = this._msVideos[i];
                     const r = thumbLayout(this, this._msImages.length + i);
@@ -3424,6 +3555,7 @@ export {
     removeImageAt,
     removeVideo,
     sizeButtonRect,
+    inputsButtonRect,
     sizePanelEnabled,
     sizeReadout,
     thumbActionRects,

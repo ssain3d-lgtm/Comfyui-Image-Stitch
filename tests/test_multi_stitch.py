@@ -1315,6 +1315,56 @@ class MultiStitchTests(unittest.TestCase):
         self.assertIsInstance(out, tuple)
         self.assertEqual(tuple(out[0].shape), (1, 2, 2, 3))
 
+    def test_it_is_an_output_node_told_the_workflow_and_its_own_id(self):
+        node = ms.MultiStitchImages
+        self.assertIs(node.OUTPUT_NODE, True)
+        self.assertEqual(node.INPUT_TYPES()["hidden"], {"prompt": "PROMPT", "unique_id": "UNIQUE_ID"})
+
+    def test_a_node_nothing_reads_holds_its_error_back_for_whatever_will(self):
+        """An output node runs on every Queue: an unused empty one must not stop the run."""
+        class Blocker:
+            def __init__(self, message):
+                self.message = message
+
+        empty = ("right", True, 0, "white", "[]", "strip", 3, "#808080")
+        unused = {"7": {"class_type": "MultiStitchImages", "inputs": {}},
+                  "8": {"class_type": "SaveImage", "inputs": {"images": ["3", 0]}}}
+        used = {**unused, "9": {"class_type": "PreviewImage", "inputs": {"images": ["7", 1]}}}
+        with patch.object(ms, "ExecutionBlocker", Blocker), patch("sys.stderr"):
+            out = ms.MultiStitchImages().stitch(*empty, prompt=unused, unique_id="7")
+            self.assertIsInstance(out["result"], Blocker)
+            self.assertRegex(out["result"].message, "at least one image")
+            self.assertEqual(out["ui"]["multi_stitch_error"], [out["result"].message])
+            # Read by something: it fails as it always has, where it is.
+            with self.assertRaisesRegex(ValueError, "at least one image"):
+                ms.MultiStitchImages().stitch(*empty, prompt=used, unique_id="7")
+            # Cannot tell (no workflow, not in it, no id): as it always has.
+            for prompt, unique_id in ((None, "7"), ({}, "7"), (unused, "99"), (unused, None)):
+                with self.assertRaisesRegex(ValueError, "at least one image"):
+                    ms.MultiStitchImages().stitch(*empty, prompt=prompt, unique_id=unique_id)
+            # A node that works is not touched by any of this.
+            green = self.write_png("green.png", (0, 255, 0), size=(2, 2))
+            image, *_ = ms.MultiStitchImages().stitch(
+                "right", True, 0, "white", json.dumps([green]), "strip", 3, "#808080", prompt=unused, unique_id="7",
+            )
+            self.assertEqual(tuple(image.shape), (1, 2, 2, 3))
+        # A ComfyUI without blockers gets the error, used or not.
+        with patch.object(ms, "ExecutionBlocker", None):
+            with self.assertRaisesRegex(ValueError, "at least one image"):
+                ms.MultiStitchImages().stitch(*empty, prompt=unused, unique_id="7")
+
+    def test_the_run_is_called_the_way_comfyui_calls_it(self):
+        """By keyword, hidden inputs included, through the wrapper."""
+        green = self.write_png("green.png", (0, 255, 0), size=(2, 2))
+        params = inspect.signature(ms.MultiStitchImages.stitch).parameters
+        self.assertNotIn("prompt", params, "the wrapper's own arguments stay out of the node's signature")
+        image, *_ = ms.MultiStitchImages().stitch(
+            direction="right", match_image_size=True, spacing_width=0, spacing_color="white",
+            images_json=json.dumps([green]), layout_mode="strip", grid_columns=3, custom_spacing_color="#808080",
+            prompt={"1": {"inputs": {}}}, unique_id="1",
+        )
+        self.assertEqual(tuple(image.shape), (1, 2, 2, 3))
+
     def test_the_gallery_counts_only_frames_from_the_inputs(self):
         green = self.write_png("green.png", (0, 255, 0), size=(4, 2))
         with patch.object(ms.gallery, "record_run") as record:

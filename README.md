@@ -43,7 +43,12 @@
 - 일반 `IMAGE` 출력 → `Preview Image`, `Save Image`, `VAE Encode` 등에 바로 연결
 - 추가 Python 패키지 불필요 — 동영상 서버 디코딩에만 PyAV가 쓰이고 최신 ComfyUI에는 이미 포함되어 있습니다(ComfyUI-Manager용 `requirements.txt`에도 적어 두었습니다)
 
-### 1.12에서 달라진 점
+### 1.13에서 달라진 점
+
+- **`▶ Inputs` 버튼** — IMAGE 입력에 뭔가 연결되어 있으면 노드 제목줄(Size 왼쪽, Vue 모드는 툴바)에 나타납니다. 누르면 **이 노드에 연결된 앞쪽 노드들(Crop Head 등)과 이 노드까지만 실행**하고, 뒤에 이어진 H3 같은 무거운 모델은 돌리지 않습니다. 결과가 오면 입력 카드와 미리보기가 바로 채워집니다. 실행을 기다리는 입력이 있으면 초록색으로 켜지고, 자리 카드(`▶ Click to run the inputs`)를 눌러도 똑같이 실행됩니다.
+- 이를 위해 노드가 ComfyUI의 **출력 노드**가 되었습니다. 그래서 아무 데도 연결되지 않았어도 Queue할 때마다 함께 실행됩니다(가벼운 작업입니다). 대신 **아무것도 이 노드를 읽지 않을 때는 에러로 실행 전체를 멈추지 않습니다** — 이미지를 아직 안 넣은 빈 노드가 캔버스에 있어도 괜찮고, 그 에러는 나중에 뭔가를 연결하면 그 노드에서 같은 문구로 알려 줍니다. 연결되어 쓰이는 노드는 예전과 똑같이 에러를 냅니다.
+- 부분 실행을 지원하지 않는 오래된 ComfyUI에서는 버튼이 전체 실행 대신 안내만 띄웁니다.
+
 
 - **입력 이미지가 노드 안에 보입니다** — IMAGE 입력으로 들어오는 그림이 목록 끝에 **청록색 카드**로, 미리보기에도 함께 표시됩니다. 카드에는 스티치 순번(`image_N`의 N)과 들어온 단자(`in`, `in 2`…)가 적힙니다.
 - **Load Image를 바로 연결하면 연결하는 순간** 보입니다(파일이 이미 서버에 있으니까요). Load Image에서 다른 파일을 고르면 카드도 바로 바뀝니다.
@@ -341,7 +346,7 @@ grid_columns = 3
 
 ## IMAGE 입력 · 개별 셀 출력
 
-- 선택 입력 **`images`**, **`images_2` … `images_8`** (IMAGE, 하나를 연결하면 다음 단자가 열림): 연결된 배치의 프레임들이 입력 순서대로 붙여넣은 이미지 **뒤에** 추가됩니다. 생성/업스케일 결과를 저장·재업로드 없이 바로 합칠 수 있고, 붙여넣은 이미지 없이 배치만 연결하면 "배치 → 그리드" 노드로도 씁니다. RGBA 프레임은 배경색 위에 합성되고 1채널은 RGB로 확장됩니다. 들어오는 그림은 청록색 입력 카드와 미리보기에 표시됩니다 — Load Image를 바로 연결하면 즉시, 계산이 필요한 노드를 거치면 한 번 실행한 뒤부터(1.12). 붙여넣은 이미지 + 프레임 합계가 256장 상한이고, 각 프레임에도 원본 1장 크기 한도가 적용됩니다. 프레임은 자기 차례에만 CPU float32로 변환되므로 GPU 배치를 연결해도 한꺼번에 복사되지 않습니다.
+- 선택 입력 **`images`**, **`images_2` … `images_8`** (IMAGE, 하나를 연결하면 다음 단자가 열림): 연결된 배치의 프레임들이 입력 순서대로 붙여넣은 이미지 **뒤에** 추가됩니다. 생성/업스케일 결과를 저장·재업로드 없이 바로 합칠 수 있고, 붙여넣은 이미지 없이 배치만 연결하면 "배치 → 그리드" 노드로도 씁니다. RGBA 프레임은 배경색 위에 합성되고 1채널은 RGB로 확장됩니다. 들어오는 그림은 청록색 입력 카드와 미리보기에 표시됩니다 — Load Image를 바로 연결하면 즉시, 계산이 필요한 노드를 거치면 한 번 실행한 뒤부터(1.12). **`▶ Inputs`** 는 앞쪽 노드와 이 노드만 실행해서 그 그림을 가져옵니다(1.13). 붙여넣은 이미지 + 프레임 합계가 256장 상한이고, 각 프레임에도 원본 1장 크기 한도가 적용됩니다. 프레임은 자기 차례에만 CPU float32로 변환되므로 GPU 배치를 연결해도 한꺼번에 복사되지 않습니다.
 - 출력 **`image`**: 합성 결과. 출력 **`cells`**: `output_cells = true`일 때 이미지마다 한 프레임씩, **같은 크기의 셀** 가운데에 배경색으로 패딩한 배치 `[N, H, W, 3]`입니다. 얼굴 클로즈업처럼 개별 참조를 따로 넘길 때 씁니다. `false`면 `image`와 같은 텐서를 내보내 출력이 비지 않습니다. 셀 배치 전체에도 같은 크기 안전 한도가 적용되며, 이 검사는 디코딩 전에 끝납니다.
 - **`cells_resolution`** (`output_cells`가 켜져 있을 때 표시): `placed`(기본)는 합성 결과에 놓인 크기 그대로, 셀은 가장 큰 배치 크기입니다. `source`는 **리사이즈 전 원본(Crop 적용) 크기**로 넣고 셀은 가장 큰 원본 크기가 됩니다 — 합성본은 작게 만들면서 개별 참조는 원본 해상도로 받고 싶을 때 씁니다. 이미지별 파일이 필요하면 `cells` 배치를 배치 분리 노드로 나누세요.
 
@@ -488,7 +493,12 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 - Standard `IMAGE` output → `Preview Image`, `Save Image`, `VAE Encode`, etc.
 - No extra Python packages required — only server-side video decoding uses PyAV, which current ComfyUI already installs (and `requirements.txt` lists it for ComfyUI-Manager)
 
-### What changed in 1.12
+### What changed in 1.13
+
+- **`▶ Inputs`** — while something is plugged into an IMAGE input, the title bar (left of Size; the toolbar in the Vue mode) offers it. It **runs only the nodes feeding this one (a Crop Head and whatever it reads) and this node**, never the heavy model after it, and the input cards and the preview fill in as soon as the pictures arrive. It lights up while an input waits for a run, and a placeholder card (`▶ Click to run the inputs`) does the same.
+- That makes the node an **output node** in ComfyUI's terms, so it runs on every Queue even when nothing reads it (it is cheap). In return, **while nothing reads it, its errors never stop the run**: a fresh node with nothing pasted yet can sit on the canvas, and the error waits, word for word, for whatever gets wired to it. A node that is in use fails exactly as before.
+- On a ComfyUI too old to run part of a workflow the button says so instead of running everything.
+
 
 - **The input pictures show on the node** — what arrives on the IMAGE inputs appears as **teal cards** at the end of the list and in the preview, each marked with its place in the stitch (the N of `image_N`) and the socket it came in on (`in`, `in 2`…).
 - **A Load Image plugged in directly shows the moment it is connected** — its file is on the server already — and follows it when another file is picked.
@@ -772,7 +782,7 @@ The outputs are meant for an `Empty Latent Image` or a resize node. The **`📐 
 
 ## IMAGE input · per-image cells output
 
-- Optional inputs **`images`**, **`images_2` … `images_8`** (IMAGE; connecting one opens the next): frames of each connected batch are appended, input by input, **after** the pasted images, so a generated or upscaled result is stitched without saving and re-adding it — with nothing pasted, the node works as a batch-to-grid tool. RGBA frames are composited onto the background colour; single-channel frames are expanded to RGB. What comes in shows as teal input cards and in the preview — straight away from a Load Image connected directly, after one run from anything that has to compute first (1.12). Pasted images plus frames share the 256 cap, and each frame is held to the same per-image size limit. A frame is converted to CPU float32 only when its turn comes, so a GPU batch is not copied wholesale.
+- Optional inputs **`images`**, **`images_2` … `images_8`** (IMAGE; connecting one opens the next): frames of each connected batch are appended, input by input, **after** the pasted images, so a generated or upscaled result is stitched without saving and re-adding it — with nothing pasted, the node works as a batch-to-grid tool. RGBA frames are composited onto the background colour; single-channel frames are expanded to RGB. What comes in shows as teal input cards and in the preview — straight away from a Load Image connected directly, after one run from anything that has to compute first (1.12). **`▶ Inputs`** runs just the nodes feeding this one, and this one, to fetch them (1.13). Pasted images plus frames share the 256 cap, and each frame is held to the same per-image size limit. A frame is converted to CPU float32 only when its turn comes, so a GPU batch is not copied wholesale.
 - Output **`image`**: the stitched result. Output **`cells`**: with `output_cells = true`, one frame per image, each centred in a **uniform cell** and padded with the background colour, as a batch `[N, H, W, 3]` — for passing individual references, such as a face close-up, on their own. With it off, `cells` is the same tensor as `image`, so the output is never empty. The cells batch is subject to the same size safety limit, checked before anything is decoded.
 - **`cells_resolution`** (shown while `output_cells` is on): `placed` (default) uses each image at the size it occupies in the composite, in a cell of the largest placed size. `source` uses the **cropped original before any resize**, in a cell of the largest source size — for a small composite alongside full-resolution individual references. For one file per image, split the `cells` batch with a batch-splitting node.
 

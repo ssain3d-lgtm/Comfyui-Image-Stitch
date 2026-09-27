@@ -115,8 +115,9 @@ describe("dom view", () => {
         const handle = view.installDomView(node, spy.actions);
         assert.equal(view.domView(node), handle);
         assert.equal(part(handle.root, "status").textContent, "2 images  •  ~800×300");
-        assert.deepEqual(buttons(handle.root).map((b) => b.textContent),
-            ["+ Add", "Clear", "⧉ Copy", "↶", "↷", "Preview ✓", "Options ▸ (2)", "🖼 Gallery", "📐 Size"]);
+        assert.deepEqual(buttons(handle.root).filter((b) => !b.hidden).map((b) => b.textContent),
+            ["+ Add", "Clear", "⧉ Copy", "↶", "↷", "Preview ✓", "Options ▸ (2)", "🖼 Gallery", "📐 Size"],
+            "▶ Inputs only while an input is plugged in");
         assert.equal(cards(handle.root).length, 2);
         assert.equal(cards(handle.root)[1].className, "card", "an edited image is outlined like any other; its ✂ badge marks it");
         assert.equal(part(handle.root, "empty").hidden, true, "no dashed box while there are images");
@@ -223,6 +224,8 @@ describe("dom view", () => {
             stitchCount: () => 2,
             inputHint: (n, k) => `hint ${k}`,
             copyInput: (n, k) => spy.calls.push(["copyInput", k]),
+            runInputs: () => spy.calls.push(["runInputs"]),
+            inputsRunning: () => false,
             inputSignature: () => signature,
             status: () => { renders += 1; return "1 image + 1 from input"; },
         });
@@ -235,7 +238,13 @@ describe("dom view", () => {
             const badges = (el) => el.children.find((c) => c.className === "badges").children.map((b) => b.textContent);
             assert.deepEqual(badges(shown), ["2", "in"], "its place in the stitch and the socket it came in on");
             assert.deepEqual(badges(pending), ["in 2"], "no number until a run says how many came before");
-            assert.equal(pending.children.find((c) => c.className === "text input").textContent, "Queue once to see it");
+            const placeholder = pending.children.find((c) => c.className === "text input run");
+            assert.equal(placeholder.textContent, "▶ Click to run the inputs");
+            placeholder.handlers.click[0]({});
+            assert.deepEqual(spy.calls.filter(([name]) => name === "runInputs"), [["runInputs"]]);
+            const run = buttons(handle.root).find((b) => b.textContent === "▶ Inputs");
+            assert.equal(run.hidden, false);
+            assert.equal(run.className, "on", "lit while an input waits for a run");
             assert.equal(shown.title, "hint 0");
             assert.equal(shown.draggable, undefined, "not part of the drag order");
             assert.equal(pending.handlers?.contextmenu, undefined, "nothing to copy yet");

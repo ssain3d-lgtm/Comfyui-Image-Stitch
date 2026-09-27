@@ -2,6 +2,16 @@
 
 All notable changes to **Multi Stitch Images**. The version is the one in `pyproject.toml`; each release is tagged `v<version>` on `main`.
 
+## 1.13.0 — 2026-09-27
+
+### Added
+- **`▶ Inputs`: run only what feeds the node.** While something is plugged into an IMAGE input, the title bar offers `▶ Inputs` (the toolbar, in the Vue node mode). It asks ComfyUI to run this node alone, which runs every node it reads from — the Crop Head, the Load Image behind it — and nothing after it, so the model this node feeds stays asleep. The input cards and the preview fill in when the pictures arrive, the button reads `Running…` until then, and it is lit whenever an input is still waiting for a run. A placeholder card is the same button.
+- It finds the node inside subgraphs too, and a run that is refused, fails upstream or is interrupted ends the wait.
+- **It never runs the whole workflow instead.** A ComfyUI that cannot run part of a workflow would quietly ignore the list of nodes and run everything, so without that ability (`Comfy.QueueSelectedOutputNodes`) the button explains and does nothing.
+
+### Changed
+- **The node is an output node.** That is what ComfyUI runs part of a workflow by, and it means the node now runs on every Queue, whether or not anything reads it. It is cheap; what it must not do is fail a run that never needed it — a fresh node with nothing pasted yet, a workflow whose files moved. So while no node in the queued workflow reads its outputs, a failure is held back: the node hands an execution blocker carrying the message, which nothing reads, and whatever gets wired to it later reports the same error word for word. A node that is in use fails exactly where and how it always has. Pressing `▶ Inputs` on a node whose stitch then fails says so.
+
 ## 1.12.0 — 2026-09-27
 
 ### Added

@@ -158,7 +158,7 @@ export function inputCardHint(card) {
     const from = card.source === "file"
         ? "from Load Image, live"
         : card.source === "run"
-            ? "as of the last run · Queue again after changing what feeds it"
-            : "Queue once to see it";
+            ? "as of the last run · ▶ Inputs runs what feeds it again"
+            : "click to run only the nodes feeding it";
     return `${card.socket} · ${from}`;
 }
