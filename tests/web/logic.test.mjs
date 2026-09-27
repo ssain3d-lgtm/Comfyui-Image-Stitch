@@ -1825,6 +1825,55 @@ describe("native-reference refinements", () => {
         assert.deepEqual(names(), [], "no cells, no numbered sockets");
     });
 
+    it("grows the IMAGE inputs one spare socket at a time", () => {
+        // A fresh node from the real frontend carries every declared socket,
+        // with the names and tooltips it translated.
+        const declared = Array.from({ length: shared.MAX_IMAGE_INPUTS }, (_, i) => ({
+            name: i ? `images_${i + 1}` : "images", type: "IMAGE", link: null,
+            localized_name: i ? `이미지 입력 ${i + 1}` : "이미지 입력", tooltip: `tip ${i + 1}`,
+        }));
+        const node = plainNode(nodeType, { inputs: [...declared.slice(0, 1), { name: "direction", widget: {} }, ...declared.slice(1)] });
+        const images = () => node.inputs.map((slot) => slot.name).filter((name) => shared.imageInputNumber(name));
+        const frame = () => paintedCalls(nodeType, node);
+        const plug = (name, link) => { node.inputs.find((slot) => slot.name === name).link = link; frame(); };
+
+        assert.deepEqual(images(), ["images"], "one empty socket, not eight");
+        assert.ok(node.inputs.some((slot) => slot.name === "direction"), "widget sockets are left alone");
+
+        plug("images", 1);
+        assert.deepEqual(images(), ["images", "images_2"], "plugging it in opens the next");
+        plug("images_2", 2);
+        assert.deepEqual(images(), ["images", "images_2", "images_3"]);
+        const added = node.inputs.find((slot) => slot.name === "images_3");
+        assert.equal(added.localized_name, "이미지 입력 3", "a socket put back keeps its translated name");
+        assert.equal(added.tooltip, "tip 3");
+
+        // Unplugging one in the middle leaves the gap; the spare stays last.
+        plug("images_3", 3);
+        plug("images_2", null);
+        assert.deepEqual(images(), ["images", "images_2", "images_3", "images_4"]);
+        plug("images_3", null);
+        assert.deepEqual(images(), ["images", "images_2"]);
+        plug("images", null);
+        assert.deepEqual(images(), ["images"]);
+
+        // Every socket full: no ninth.
+        for (let n = 1; n <= shared.MAX_IMAGE_INPUTS; n++) plug(n === 1 ? "images" : `images_${n}`, n);
+        assert.equal(images().length, shared.MAX_IMAGE_INPUTS);
+        assert.equal(shared.imageInputNumber(`images_${shared.MAX_IMAGE_INPUTS + 1}`), 0);
+        assert.equal(shared.imageInputNumber("images_1"), 0);
+        assert.equal(shared.imageInputNumber("image_2"), 0);
+    });
+
+    it("counts any connected IMAGE input as frames at run time", async () => {
+        const node = makeNode(nodeType, { inputs: [{ name: "images", link: null }, { name: "images_2", link: 9 }] });
+        dom.imageSizes.set("a.png", [40, 20]);
+        setImages(node, [item("a.png")]);
+        paintedCalls(nodeType, node);
+        await waitForThumbs(node);
+        assert.ok(paintedCalls(nodeType, node).text.some((t) => t.endsWith("+ IMAGE input at run time")));
+    });
+
     it("says what an image measures, and what a crop leaves of it", () => {
         assert.equal(shared.sizeText(1024, 768, null), "1024 × 768");
         assert.equal(shared.sizeText(1024, 768, { x: 0, y: 0, w: 1, h: 1 }), "1024 × 768");

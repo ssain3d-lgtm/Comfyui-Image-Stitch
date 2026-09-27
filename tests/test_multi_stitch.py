@@ -546,8 +546,11 @@ class MultiStitchTests(unittest.TestCase):
         self.assertEqual(
             list(optional),
             ["images", "cells_resolution", "minimum_image_side", "match_reference",
-             "size_reference", "size_megapixels", "size_divisible_by", "size_aspect", "grid_target_aspect"],
+             "size_reference", "size_megapixels", "size_divisible_by", "size_aspect", "grid_target_aspect",
+             *(f"images_{n}" for n in range(2, ms._MAX_IMAGE_INPUTS + 1))],
         )
+        for name in ms._EXTRA_IMAGE_INPUTS:
+            self.assertEqual(optional[name][0], "IMAGE")
         self.assertEqual(optional["images"][0], "IMAGE")
         self.assertEqual(optional["match_reference"][0], list(ms._MATCH_REFERENCES))
         self.assertEqual(optional["match_reference"][1]["default"], "smallest")
@@ -559,7 +562,10 @@ class MultiStitchTests(unittest.TestCase):
         self.assertEqual(optional["size_divisible_by"][0], "INT")
         self.assertEqual(optional["size_divisible_by"][1]["default"], 32)
         parameters = inspect.signature(ms.MultiStitchImages.stitch).parameters
-        self.assertEqual(list(parameters)[1:], list(required) + list(optional))
+        # The extra IMAGE inputs arrive as keywords; everything else is named.
+        named = [name for name in optional if name not in ms._EXTRA_IMAGE_INPUTS]
+        self.assertEqual(list(parameters)[1:-1], list(required) + named)
+        self.assertEqual(parameters["more_images"].kind, inspect.Parameter.VAR_KEYWORD)
         # A prompt that omits the value predates the option: keep matching to the first image.
         self.assertEqual(parameters["match_reference"].default, "first")
         # Defaults reproduce the behaviour before these widgets existed.
@@ -1201,6 +1207,51 @@ class MultiStitchTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(ValueError, "expected 1, 3 or 4"):
             ms.MultiStitchImages().stitch("right", True, 0, "white", "[]", "strip", 3, "#808080", images=torch.zeros(1, 2, 2, 2))
+
+    def test_each_image_input_is_its_own_picture_in_socket_order(self):
+        """Two sources of different sizes, one per socket, like two pasted images."""
+        red = torch.zeros(1, 4, 2, 3)
+        red[..., 0] = 1
+        blue = torch.zeros(1, 2, 6, 3)
+        blue[..., 2] = 1
+        green = torch.zeros(1, 2, 2, 3)
+        green[..., 1] = 1
+        with patch.object(ms.gallery, "record_run") as record:
+            image, _, width, height, first, second, third, *rest = ms.MultiStitchImages().stitch(
+                "right", False, 0, "white", "[]", "strip", 3, "#808080", output_cells=True,
+                cells_resolution="source", images=red, images_3=green, images_2=blue,
+            )
+        # Socket order, not keyword order: images, images_2, images_3.
+        self.assertEqual(tuple(image.shape), (1, 4, 10, 3))
+        self.assertRgb(image[0, 0, 0], (1.0, 0.0, 0.0))
+        self.assertRgb(image[0, 1, 2], (0.0, 0.0, 1.0))  # centred: rows 1-2
+        self.assertRgb(image[0, 1, 8], (0.0, 1.0, 0.0))
+        self.assertEqual([tuple(t.shape) for t in (first, second, third)], [(1, 4, 2, 3), (1, 2, 6, 3), (1, 2, 2, 3)])
+        self.assertEqual(tuple(rest[0].shape), (1, 1, 1, 3))
+        self.assertEqual(record.call_args.kwargs["input_frames"], 3)
+
+        # A socket left empty in the middle is simply skipped.
+        image, *_ = ms.MultiStitchImages().stitch(
+            "right", False, 0, "white", "[]", "strip", 3, "#808080", images_4=green,
+        )
+        self.assertEqual(tuple(image.shape), (1, 2, 2, 3))
+        with self.assertRaisesRegex(ValueError, "the images_2 input must be a nonempty"):
+            ms.MultiStitchImages().stitch(
+                "right", False, 0, "white", "[]", "strip", 3, "#808080", images=red, images_2=torch.zeros(0, 2, 2, 3),
+            )
+        with self.assertRaisesRegex(ValueError, r"1 pasted \+ 256 from the IMAGE input"):
+            ms.MultiStitchImages().stitch(
+                "right", True, 0, "white", json.dumps([self.write_png("g.png", (0, 255, 0), size=(2, 2))]),
+                "strip", 3, "#808080", images=torch.zeros(200, 2, 2, 3), images_8=torch.zeros(56, 2, 2, 3),
+            )
+
+    def test_the_gallery_counts_only_frames_from_the_inputs(self):
+        green = self.write_png("green.png", (0, 255, 0), size=(4, 2))
+        with patch.object(ms.gallery, "record_run") as record:
+            ms.MultiStitchImages().stitch(
+                "right", True, 0, "white", json.dumps([green]), "strip", 3, "#808080", images=torch.zeros(1, 2, 2, 3),
+            )
+        self.assertEqual(record.call_args.kwargs["input_frames"], 1)
 
 
 if __name__ == "__main__":

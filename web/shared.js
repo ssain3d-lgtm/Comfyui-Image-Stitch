@@ -8,6 +8,17 @@ export const MAX_IMAGES = 256;
 export const MAX_SEPARATE = 8;
 // image, cells, width, height — the numbered sockets start after these.
 export const NAMED_OUTPUTS = 4;
+// Mirrored by _MAX_IMAGE_INPUTS: the IMAGE inputs are "images", then
+// images_2 … images_8.
+export const MAX_IMAGE_INPUTS = 8;
+
+// Which IMAGE input a socket name is, counting from 1; 0 for anything else.
+export function imageInputNumber(name) {
+    if (name === "images") return 1;
+    const match = /^images_(\d+)$/.exec(name || "");
+    const number = match ? Number(match[1]) : 0;
+    return number >= 2 && number <= MAX_IMAGE_INPUTS ? number : 0;
+}
 // Longest side kept for a thumbnail. Cards are ~130 CSS px wide, so this stays
 // crisp on a 2x display at 2x canvas zoom while bounding memory to about
 // 1 MiB per image instead of a full-resolution canvas each.

@@ -2,6 +2,16 @@
 
 All notable changes to **Multi Stitch Images**. The version is the one in `pyproject.toml`; each release is tagged `v<version>` on `main`.
 
+## 1.11.0 — 2026-09-27
+
+### Added
+- **More than one IMAGE input.** Connecting `images` opens **`images_2`**, connecting that opens `images_3`, up to eight: the node always shows exactly one spare socket past the last one connected, never a column of eight empty ones. A socket unplugged in the middle stays until the ones after it go too, so nothing renumbers under a link.
+- **Each input is its own picture.** An `IMAGE` batch must be one size, so two sources of different sizes needed an Image Batch that resized one of them. On sockets of their own they don't: `Load Image → Crop Head → images` beside another `Load Image → images_2` stitches like two pasted images, each at its own size.
+- Frames go in after the pasted images, input by input; `image_N` and `size_reference` count in the same order. The first socket keeps its old name, `images`, and the new ones are declared last, so saved workflows load unchanged.
+
+### Fixed
+- **The gallery counted every image as coming from the IMAGE input.** Since 1.10.0 the run record passed on the size of the per-image list instead of the input frames, so `2 images + 3 from IMAGE` could read `+ 5`.
+
 ## 1.10.1 — 2026-09-18
 
 ### Fixed

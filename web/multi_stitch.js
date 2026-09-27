@@ -44,6 +44,8 @@ import {
     loadTransformedThumb,
     MAX_IMAGES,
     MAX_SEPARATE,
+    MAX_IMAGE_INPUTS,
+    imageInputNumber,
     NAMED_OUTPUTS,
     NODE_MIN_WIDTH,
     normalizeCrop,
@@ -725,7 +727,7 @@ function predictedSize(node) {
 }
 
 function imageInputConnected(node) {
-    return (node.inputs || []).some((input) => input?.name === "images" && input.link != null);
+    return (node.inputs || []).some((input) => imageInputNumber(input?.name) && input.link != null);
 }
 
 // The first candidate that fits `maxWidth`, or the shortest one when none
@@ -2553,7 +2555,48 @@ function syncSeparateOutputs(node) {
     }
 }
 
+// What the frontend gave each declared IMAGE socket on a fresh node — its
+// translated name and tooltip — so one taken away comes back looking the same.
+const imageSlotInfo = new Map();
+
+function rememberImageSlots(node) {
+    for (const input of node.inputs || []) {
+        const number = imageInputNumber(input?.name);
+        if (!number || imageSlotInfo.has(input.name)) continue;
+        const info = {};
+        for (const key of ["label", "localized_name", "tooltip"]) {
+            if (input[key] != null) info[key] = input[key];
+        }
+        imageSlotInfo.set(input.name, info);
+    }
+}
+
+// The IMAGE inputs grow like a list: every connected one stays, plus one
+// spare after the last connected, so there is always somewhere to plug the
+// next picture and never a column of eight empty sockets. A gap left by
+// unplugging one in the middle stays until the ones after it go too.
+function syncImageInputs(node) {
+    if (!Array.isArray(node?.inputs) || typeof node.addInput !== "function") return;
+    let last = 0;
+    for (const input of node.inputs) {
+        const number = imageInputNumber(input?.name);
+        if (number && input.link != null) last = Math.max(last, number);
+    }
+    const want = Math.min(last + 1, MAX_IMAGE_INPUTS);
+    for (let slot = node.inputs.length - 1; slot >= 0; slot--) {
+        const input = node.inputs[slot];
+        if (imageInputNumber(input?.name) > want && input.link == null) node.removeInput(slot);
+    }
+    const present = new Set(node.inputs.map((input) => imageInputNumber(input?.name)));
+    for (let number = 1; number <= want; number++) {
+        if (present.has(number)) continue;
+        const name = number === 1 ? "images" : `images_${number}`;
+        node.addInput(name, "IMAGE", { ...imageSlotInfo.get(name) });
+    }
+}
+
 function syncConditionalWidgets(node) {
+    syncImageInputs(node);
     syncSeparateOutputs(node);
     const layout = getWidget(node, "layout_mode")?.value || "strip";
     const spacingColor = getWidget(node, "spacing_color")?.value || "white";
@@ -2826,6 +2869,7 @@ app.registerExtension({
         const created = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
             const r = created?.apply(this, arguments);
+            rememberImageSlots(this);
             setupNode(this);
             setupDomView(this);
             installCardMenu(this);

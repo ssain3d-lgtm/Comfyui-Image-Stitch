@@ -59,6 +59,11 @@ _COLOR_MAP = {
 # images. Nine is what MiniMax H3 accepts as references; eight plus the
 # stitched image is the same handful.
 _MAX_SEPARATE = 8
+# How many IMAGE inputs the node can take. The first keeps its old name,
+# "images", so saved links still land; the rest are images_2, images_3… and
+# the UI shows one spare socket past the last one connected.
+_MAX_IMAGE_INPUTS = 8
+_EXTRA_IMAGE_INPUTS = tuple(f"images_{number}" for number in range(2, _MAX_IMAGE_INPUTS + 1))
 _MAX_OUTPUT_PIXELS = 128 * 1024 * 1024
 _MAX_OUTPUT_SIDE = 131_072
 _MAX_SOURCE_PIXELS = 128 * 1024 * 1024
@@ -1335,7 +1340,8 @@ class MultiStitchImages:
                 # without saving and re-adding it.
                 "images": ("IMAGE", {
                     "tooltip": "Optional IMAGE batch appended after the pasted images, so a generated result "
-                               "can be stitched without saving it first.",
+                               "can be stitched without saving it first. Connecting it opens images_2 for "
+                               "the next one.",
                 }),
                 "cells_resolution": (["placed", "source"], {
                     "default": "placed",
@@ -1363,7 +1369,7 @@ class MultiStitchImages:
                 "size_reference": ("INT", {
                     "default": 1, "min": 1, "max": _MAX_IMAGES, "step": 1,
                     "tooltip": "Which image the width and height outputs describe, by its number in the "
-                               "list: 1 = the first, 2 = the second… Frames from the IMAGE input count after "
+                               "list: 1 = the first, 2 = the second… Frames from the IMAGE inputs count after "
                                "the pasted images; a number past the end means the last image. Its size "
                                "after crop and rotation, rescaled to size_megapixels when that is above 0, "
                                "with each side snapped to a multiple of size_divisible_by.",
@@ -1396,6 +1402,16 @@ class MultiStitchImages:
                                "this ratio wins, so eight images at 16:9 become 4x2 by themselves. 'off' "
                                "keeps grid_columns, which is what it has always done.",
                 }),
+                # More IMAGE inputs, last so no widget moves. Each one is its
+                # own picture (or batch), so two sources of different sizes
+                # go in side by side without an Image Batch squeezing them.
+                **{
+                    name: ("IMAGE", {
+                        "tooltip": f"Another IMAGE input, appended after images{'' if number == 2 else f'_{number - 1}'}. "
+                                   "Each input keeps its own size, like a pasted image.",
+                    })
+                    for number, name in enumerate(_EXTRA_IMAGE_INPUTS, start=2)
+                },
             },
         }
 
@@ -1449,6 +1465,7 @@ class MultiStitchImages:
         size_divisible_by=32,
         size_aspect="reference",
         grid_target_aspect="off",
+        **more_images,
     ):
         try:
             items = json.loads(images_json or "[]")
@@ -1458,13 +1475,22 @@ class MultiStitchImages:
         if not isinstance(items, list):
             raise ValueError("Multi Stitch Images: image list must be an array.")
         valid_items = [item for item in items if isinstance(item, dict)]
-        if images is not None and (images.dim() != 4 or images.shape[0] < 1):
-            raise ValueError("Multi Stitch Images: the IMAGE input must be a nonempty [batch, height, width, channels] tensor.")
-        frames = list(images) if images is not None else []
-        if len(valid_items) + len(frames) > _MAX_IMAGES:
+        # Every connected input in socket order, each batch frame by frame.
+        frames = []
+        for name, batch in [("images", images), *((name, more_images.get(name)) for name in _EXTRA_IMAGE_INPUTS)]:
+            if batch is None:
+                continue
+            if batch.dim() != 4 or batch.shape[0] < 1:
+                raise ValueError(
+                    f"Multi Stitch Images: the {name} input must be a nonempty "
+                    "[batch, height, width, channels] tensor."
+                )
+            frames.extend(batch)
+        input_frames = len(frames)
+        if len(valid_items) + input_frames > _MAX_IMAGES:
             raise ValueError(
                 f"Multi Stitch Images: maximum {_MAX_IMAGES} images per node "
-                f"({len(valid_items)} pasted + {len(frames)} from the IMAGE input)."
+                f"({len(valid_items)} pasted + {input_frames} from the IMAGE input)."
             )
 
         # Header-only pass: measure every source and its footprint on the
@@ -1537,7 +1563,7 @@ class MultiStitchImages:
                 "size_aspect": size_aspect, "grid_target_aspect": grid_target_aspect,
             },
             image,
-            input_frames=len(frames),
+            input_frames=input_frames,
         )
         # A socket past the end of the list answers with one black pixel
         # rather than nothing: a None travelling down a link fails far from

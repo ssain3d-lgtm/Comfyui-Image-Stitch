@@ -271,6 +271,14 @@ export function makeNode(nodeType, overrides = {}) {
         removeOutput(index) {
             node.outputs.splice(index, 1);
         },
+        addInput(name, type, extra) {
+            const slot = { name, type, link: null, ...extra };
+            node.inputs.push(slot);
+            return slot;
+        },
+        removeInput(index) {
+            node.inputs.splice(index, 1);
+        },
         ...overrides,
     };
     nodeType.prototype.onNodeCreated.call(node);
