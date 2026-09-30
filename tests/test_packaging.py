@@ -207,10 +207,24 @@ class PublishWorkflowTests(unittest.TestCase):
             if str(step.get("uses", "")).startswith("Comfy-Org/publish-node-action")
         )
 
-    def test_it_runs_on_a_version_change_on_main(self):
-        push = triggers(self.workflow)["push"]
-        self.assertEqual(push["branches"], ["main"])
-        self.assertIn("pyproject.toml", push["paths"])
+    def test_a_push_never_starts_it_on_its_own(self):
+        """It was once `on: push`, which raced the tests: CI red, and the registry published anyway."""
+        on = triggers(self.workflow)
+        self.assertNotIn("push", on)
+        self.assertNotIn("pull_request", on)
+        # Called by ci.yml once the tests have passed, or run by hand.
+        self.assertEqual(sorted(on), ["workflow_call", "workflow_dispatch"])
+        self.assertIn("REGISTRY_ACCESS_TOKEN", on["workflow_call"]["secrets"])
+        self.assertEqual(on["workflow_call"]["inputs"]["before"]["default"], "")
+
+    def test_it_publishes_only_when_the_version_changed(self):
+        check = next(step for step in steps_of(self.job) if step.get("id") == "version")
+        self.assertIn("scripts/version_changed.py", str(check["run"]))
+        self.assertIn("inputs.before", str(check["env"]["BEFORE"]))
+        # The script compares two commits, so the whole history must be there.
+        checkout = next(step for step in steps_of(self.job) if str(step.get("uses", "")).startswith("actions/checkout"))
+        self.assertEqual(checkout["with"]["fetch-depth"], 0)
+        self.assertIn("steps.version.outputs.changed == 'true'", str(self.publish_step["if"]))
 
     def test_the_publish_action_is_pinned_to_a_commit(self):
         # This step is handed the registry token, so it must not be able to
@@ -225,6 +239,9 @@ class PublishWorkflowTests(unittest.TestCase):
         guard = next(step for step in steps_of(self.job) if step.get("id") == "token")
         self.assertIn("REGISTRY_ACCESS_TOKEN", str(guard.get("env", {})))
         self.assertIn("steps.token.outputs.present", str(self.publish_step.get("if", "")))
+
+    def test_the_script_it_runs_exists(self):
+        self.assertTrue((ROOT / "scripts" / "version_changed.py").is_file())
 
 
 class CIWorkflowTests(unittest.TestCase):
@@ -260,6 +277,45 @@ class CIWorkflowTests(unittest.TestCase):
                 setup["with"].get("cache-dependency-path"), "requirements-ci.txt",
                 f"job {name} caches pip against the wrong file",
             )
+
+
+    def test_the_release_waits_for_every_other_job(self):
+        """The registry must never receive a commit that turned CI red."""
+        publish = self.jobs["publish"]
+        others = set(self.jobs) - {"publish"}
+        self.assertEqual(set(publish["needs"]), others, "a job the release does not wait for can fail unnoticed")
+        self.assertEqual(publish["uses"], "./.github/workflows/publish_action.yml")
+        condition = str(publish["if"])
+        self.assertIn("github.event_name == 'push'", condition)
+        self.assertIn("refs/heads/main", condition)
+        # No status function: the implicit success() is what keeps a failed or
+        # skipped job from being published over.
+        for function in ("always()", "cancelled()", "failure()", "success()"):
+            self.assertNotIn(function, condition)
+        self.assertNotIn("continue-on-error", publish)
+        self.assertIn("github.event.before", str(publish["with"]["before"]))
+        self.assertIn("REGISTRY_ACCESS_TOKEN", str(publish["secrets"]))
+
+    def test_no_test_job_can_fail_without_holding_the_release_back(self):
+        for name, job in self.jobs.items():
+            if name == "publish":
+                continue
+            self.assertNotIn("continue-on-error", job, f"{name} could fail and still let the release through")
+
+    def test_nothing_else_handles_the_registry_token_or_publishes(self):
+        for name, job in self.jobs.items():
+            if name == "publish":
+                continue
+            text = yaml.safe_dump(job)
+            self.assertNotIn("REGISTRY_ACCESS_TOKEN", text, name)
+            self.assertNotIn("publish-node-action", text, name)
+
+    def test_a_push_to_main_is_never_cancelled_by_a_later_one(self):
+        """Each commit on main carries its own release; a newer push must not take it away."""
+        concurrency = self.workflow["concurrency"]
+        self.assertIsInstance(concurrency["cancel-in-progress"], str, "a plain true also cancels pushes to main")
+        self.assertEqual(concurrency["cancel-in-progress"].strip(), "${{ github.event_name == 'pull_request' }}")
+        self.assertIn("github.sha", concurrency["group"], "pushes share a group, so one run replaces another")
 
 
 class RequirementsTests(unittest.TestCase):

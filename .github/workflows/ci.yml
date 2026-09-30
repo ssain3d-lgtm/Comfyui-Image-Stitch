@@ -9,10 +9,13 @@ on:
 permissions:
   contents: read
 
-# A new push supersedes an in-flight run on the same ref.
+# A new push to a pull request supersedes that pull request's in-flight run. A
+# push to main never does: every commit on main gets its own run, because the
+# run is also what releases it (the publish job at the end), and a release must
+# not be lost to a later push that arrived before its tests finished.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # The tests treat a missing optional dependency as a failure rather than a skip
 # when CI is set, so a runner that quietly lost PyAV or Node cannot report green
@@ -244,3 +247,17 @@ jobs:
         run: |
           mkdir -p "$TMPDIR"
           npm run test:coverage:gate
+
+  # The release. Only a push to main gets here, and only once every test job
+  # above has succeeded: a job that failed or was skipped leaves this one
+  # skipped, so the registry cannot receive a commit that turned CI red.
+  # publish_action.yml then decides whether this push changed the version at all.
+  publish:
+    name: Publish
+    needs: [changes, test, oldest-deps, windows, frontend]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/publish_action.yml
+    with:
+      before: ${{ github.event.before }}
+    secrets:
+      REGISTRY_ACCESS_TOKEN: ${{ secrets.REGISTRY_ACCESS_TOKEN }}

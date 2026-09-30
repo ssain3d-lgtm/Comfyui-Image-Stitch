@@ -1,16 +1,35 @@
-# Publishes the node to the Comfy Registry whenever the version in
-# pyproject.toml changes on main. Needs a REGISTRY_ACCESS_TOKEN repository
-# secret (an API key of the publisher named in pyproject.toml); without one
-# the job skips with a notice instead of failing.
+# Publishes the node to the Comfy Registry.
+#
+# A push never starts this on its own. ci.yml calls it from its last job, which
+# waits for every test job to succeed first, so a commit that turned the tests
+# red cannot reach the registry; and it is asked for the commit the push started
+# from, so a push that did not change the version in pyproject.toml publishes
+# nothing. "Run workflow" in the Actions tab still publishes by hand, without
+# comparing anything.
+#
+# Needs a REGISTRY_ACCESS_TOKEN repository secret (an API key of the publisher
+# named in pyproject.toml); without one the job skips with a notice instead of
+# failing.
 name: Publish to Comfy registry
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - "pyproject.toml"
+    inputs:
+      before:
+        description: "Publish only if pyproject.toml's version differs from the one at this commit. Empty: publish."
+        type: string
+        required: false
+        default: ""
+  workflow_call:
+    inputs:
+      before:
+        description: "The commit the push started from. Publish only if pyproject.toml's version differs from the one there. Empty: publish."
+        type: string
+        required: false
+        default: ""
+    secrets:
+      REGISTRY_ACCESS_TOKEN:
+        required: false
 
 permissions:
   contents: read
@@ -22,6 +41,22 @@ jobs:
     steps:
       - name: Check out code
         uses: actions/checkout@v7
+        with:
+          # All of it: the version is read at the commit the push started from
+          # as well as at the one it ended on.
+          fetch-depth: 0
+
+      - name: Did the version change?
+        id: version
+        env:
+          BEFORE: ${{ inputs.before }}
+        # Writes changed=true|false and version=… to the step's outputs, and says
+        # why in the log.
+        run: python3 scripts/version_changed.py "$BEFORE" "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Nothing to publish
+        if: steps.version.outputs.changed != 'true'
+        run: echo "::notice::pyproject.toml's version did not change in this push, so nothing is published."
 
       - name: Check for the registry token
         id: token
@@ -36,7 +71,7 @@ jobs:
           fi
 
       - name: Publish Custom Node
-        if: steps.token.outputs.present == 'true'
+        if: steps.version.outputs.changed == 'true' && steps.token.outputs.present == 'true'
         # Pinned to a commit, not @main: this step is handed the registry token,
         # so it must not change without a reviewed pull request. Dependabot
         # proposes the bumps.
