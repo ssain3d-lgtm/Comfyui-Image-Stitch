@@ -21,7 +21,9 @@ import {
     toggleSelection,
 } from "./selection.js";
 import { canvasToPngFile, captureFileName, formatTime, openFramePicker } from "./frame_picker.js";
-import { inputCardHint, inputCards, inputFramesNotShown, inputSignature, receiveInputPreviews } from "./inputs.js";
+import {
+    forgetInputCards, inputCardHint, inputCards, inputFramesNotShown, inputSignature, receiveInputPreviews,
+} from "./inputs.js";
 import {
     commitImages,
     canvasPngBlob,
@@ -1507,7 +1509,9 @@ async function copyOriginalImage(node, index) {
 }
 
 // The picture an input card shows, as a PNG: what the last run received, or
-// the Load Image's file.
+// the Load Image's file. The run's files are previews — never larger than
+// 1536px — so a bigger frame copies at the preview's size, and the notice says
+// so rather than letting the size on the card promise more.
 async function copyInputImage(node, k) {
     const card = inputCards(node)[k];
     if (!card?.item) return;
@@ -1518,7 +1522,17 @@ async function copyInputImage(node, k) {
     }
     try {
         await writePngToClipboard(originalPngBlob(card.item));
-        notify("Copied", `The picture on ${card.socket} copied to the clipboard. Ctrl+V pastes it in as an image of its own.`);
+        // The raw state: it alone knows the file's own size next to the frame's.
+        const state = loadThumb(node, card.item);
+        const copied = state.fileWidth && state.fileHeight ? `${state.fileWidth}×${state.fileHeight}` : "";
+        const whole = state.width && state.height ? `${state.width}×${state.height}` : "";
+        const reduced = copied && whole && copied !== whole;
+        notify(
+            "Copied",
+            `The picture on ${card.socket} copied to the clipboard` +
+            `${copied ? ` at ${copied}` : ""}${reduced ? ` — the preview's size; the frame itself is ${whole}` : ""}. ` +
+            "Ctrl+V pastes it in as an image of its own.",
+        );
     } catch (error) {
         notify("Copy failed", String(error?.message || error), "error");
     }
@@ -2073,6 +2087,7 @@ function clearAllImages(node) {
 // What the inputs show changed: redraw, and resize for a card more or less.
 // The pasted list is untouched, so this is not an edit and has no undo step.
 function inputsChanged(node) {
+    forgetInputCards(node);
     node._msCopyRender = null;
     refreshDomView(node);
     updateNodeSize(node);
@@ -2218,7 +2233,8 @@ function clearCardHover(node) {
 
 function cardIndexAtPoint(node, x, y) {
     if (node.flags?.collapsed) return -1;
-    for (let i = 0; i < listCount(node); i++) {
+    const total = listCount(node);
+    for (let i = 0; i < total; i++) {
         const r = thumbLayout(node, i);
         if (r.visible && inRect(x, y, r)) return i;
     }
@@ -3194,6 +3210,7 @@ app.registerExtension({
             this._msUnreadable = unreadable ? (rawWidget || rawProps || "") : null;
             const items = restored?.length ? restored : props ?? restored ?? [];
             this._msImages = normalizeItems(items);
+            forgetInputCards(this);
             hideWidget(widget);
             hideWidget(getWidget(this, "custom_spacing_color"));
             this._msThumbCache ||= new Map();

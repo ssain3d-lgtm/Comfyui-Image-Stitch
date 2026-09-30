@@ -74,12 +74,39 @@ function connectedInputs(node) {
         .sort((a, b) => a.number - b.number);
 }
 
+// The cards are asked for from everywhere — the place of every card, every hit
+// test, the status line, the preview — and each answer is a walk through the
+// graph and the thumbnail cache. With 256 images that was a walk per card per
+// frame. Within one synchronous run (a draw, a pointer event, a render) the
+// answer stands, unless the node's own handlers change it: they say so with
+// forgetInputCards. The next task asks again, because a Load Image can be
+// switched to another file, and a thumbnail can finish loading, without telling
+// anyone.
+const remembered = new WeakMap();
+
+export function forgetInputCards(node) {
+    if (node && typeof node === "object") remembered.delete(node);
+}
+
 // One card per picture the inputs will bring, in stitch order:
 //   { socket, number, item, source: "file" | "run" }  — something to show;
 //   { socket, number, item: null, source: "pending" } — only a run will tell.
 // A card from the last run is kept only while its socket is still fed by the
-// same output it was fed by then, and while its file still loads.
+// same output it was fed by then, and while its file still loads. The list is
+// shared within one run, so it is frozen: read it, never change it.
 export function inputCards(node) {
+    if (!node || typeof node !== "object") return [];
+    const known = remembered.get(node);
+    if (known) return known;
+    const cards = Object.freeze(computeInputCards(node));
+    remembered.set(node, cards);
+    queueMicrotask(() => {
+        if (remembered.get(node) === cards) remembered.delete(node);
+    });
+    return cards;
+}
+
+function computeInputCards(node) {
     const run = node?._msRunInputs;
     const cards = [];
     for (const { input, number } of connectedInputs(node)) {
@@ -141,6 +168,7 @@ export function receiveInputPreviews(node, list) {
     const previous = Object.values(node._msRunInputs?.frames || {}).flat();
     for (const item of previous) forgetThumb(node, item, kept);
     node._msRunInputs = { frames, origins, more };
+    forgetInputCards(node);
     return true;
 }
 

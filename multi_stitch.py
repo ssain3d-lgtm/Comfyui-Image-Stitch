@@ -77,9 +77,14 @@ _EXTRA_IMAGE_INPUTS = tuple(f"images_{number}" for number in range(2, _MAX_IMAGE
 # upstream nodes have run, nobody knows what a Crop Head will hand over. A
 # long batch only shows its first few, and a large frame is written smaller
 # (its true size travels with it); the run itself uses every frame as it is.
+# They are JPEG: the previews are written on every run that has an input, and a
+# PNG of a 1024px frame costs a hundred milliseconds where the stitch itself
+# costs ten. 4:4:4 at quality 95 keeps colour edges clean, which is all a card
+# or a copied picture asks of it.
 _INPUT_PREVIEW_SUBFOLDER = "multi_stitch_inputs"
 _MAX_INPUT_PREVIEWS = 32
 _INPUT_PREVIEW_MAX_SIDE = 1536
+_INPUT_PREVIEW_QUALITY = 95
 _MAX_OUTPUT_PIXELS = 128 * 1024 * 1024
 _MAX_OUTPUT_SIDE = 131_072
 _MAX_SOURCE_PIXELS = 128 * 1024 * 1024
@@ -1318,15 +1323,39 @@ def _held_back_while_unused(stitch):
     return run
 
 
+def _preview_pixels(frame: torch.Tensor) -> np.ndarray:
+    """One [1, H, W, 3] float frame as 8-bit [h, w, 3], the long side at most
+    _INPUT_PREVIEW_MAX_SIDE.
+
+    The shrinking is done first, on the float tensor, by area averaging: a 4K
+    frame is reduced once, not converted to 8 bits at full size (three
+    full-size temporaries) and only then shrunk.
+    """
+    picture = frame[0]
+    height, width = int(picture.shape[0]), int(picture.shape[1])
+    scale = min(1.0, _INPUT_PREVIEW_MAX_SIDE / max(width, height))
+    planes = picture.permute(2, 0, 1).unsqueeze(0)
+    if scale < 1.0:
+        size = (max(1, round(height * scale)), max(1, round(width * scale)))
+        planes = F.interpolate(planes, size=size, mode="area")
+    return planes[0].permute(1, 2, 0).clamp(0.0, 1.0).mul(255.0).add(0.5).to(torch.uint8).contiguous().numpy()
+
+
 def _save_input_previews(sockets: list[str], loaders: list[Loader]) -> list[dict]:
     """Write the input frames to the temp folder as the stitch saw them.
 
     One entry per frame, in stitch order: where the file is, which socket and
-    which frame of its batch it came from, and its size. The frame is the
-    loader's own output, so a transparent one is already on the spacing
-    colour, exactly as it was placed. A preview is a courtesy: anything that
-    goes wrong here leaves the node without cards, never the run without its
-    result.
+    which frame of its batch it came from, and its true size (the file itself
+    may be smaller). The frame is the loader's own output, so a transparent
+    one is already on the spacing colour, exactly as it was placed.
+
+    Nothing is deleted here. ComfyUI may answer a later run from its cache and
+    send the names of an older run again, and a file removed in the meantime
+    would leave the cards empty with no way to refill them; ComfyUI clears its
+    temp folder when it starts, which is also when its cache is gone.
+
+    A preview is a courtesy: anything that goes wrong here leaves the node
+    without cards, never the run without its result.
     """
     if not loaders:
         return []
@@ -1341,23 +1370,21 @@ def _save_input_previews(sockets: list[str], loaders: list[Loader]) -> list[dict
             seen[socket] = frame + 1
             if index >= _MAX_INPUT_PREVIEWS:
                 continue
-            pixels = load()[0].clamp(0, 1).mul(255).round().to(torch.uint8).numpy()
-            filename = f"input_{run}_{index + 1:03d}.png"
-            picture = Image.fromarray(pixels)
-            # A preview, so a 4K frame need not cost a 4K PNG on every run.
-            limit = (_INPUT_PREVIEW_MAX_SIDE, _INPUT_PREVIEW_MAX_SIDE)
-            picture.thumbnail(limit, Image.Resampling.BILINEAR, reducing_gap=2.0)
-            # Speed over size: the file lives until ComfyUI next starts.
-            picture.save(folder / filename, compress_level=1)
+            decoded = load()
+            filename = f"input_{run}_{index + 1:03d}.jpg"
+            Image.fromarray(_preview_pixels(decoded)).save(
+                folder / filename, format="JPEG", quality=_INPUT_PREVIEW_QUALITY, subsampling=0,
+            )
             previews.append({
                 "filename": filename,
                 "subfolder": _INPUT_PREVIEW_SUBFOLDER,
                 "type": "temp",
                 "socket": socket,
                 "frame": frame,
-                "width": int(pixels.shape[1]),
-                "height": int(pixels.shape[0]),
+                "width": int(decoded.shape[2]),
+                "height": int(decoded.shape[1]),
             })
+            del decoded
         if len(loaders) > _MAX_INPUT_PREVIEWS:
             # The rest are counted, not written, so the node can say so.
             previews[-1]["more"] = len(loaders) - _MAX_INPUT_PREVIEWS

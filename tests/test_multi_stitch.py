@@ -17,7 +17,7 @@ from unittest.mock import patch
 
 import numpy as np
 import torch
-from PIL import Image, ImageFile, ImageOps
+from PIL import Image, ImageFile, ImageOps, JpegImagePlugin
 
 
 # ComfyUI supplies folder_paths at runtime. CI intentionally tests this custom
@@ -1269,10 +1269,12 @@ class MultiStitchTests(unittest.TestCase):
         )
         for preview in previews:
             with Image.open(self.temp_dir / preview["subfolder"] / preview["filename"]) as saved:
-                self.assertEqual((saved.mode, saved.size), ("RGB", (preview["width"], preview["height"])))
+                self.assertEqual((saved.format, saved.mode, saved.size), ("JPEG", "RGB", (preview["width"], preview["height"])))
                 first = saved.getpixel((0, 0))
-            # The file shows the frame as it was placed, not as it arrived.
-            self.assertEqual(first, (0, 0, 255) if preview["socket"] == "images" else (128, 128, 128))
+            # The file shows the frame as it was placed, not as it arrived — to
+            # within what a JPEG of a flat colour gives back.
+            expected = (0, 0, 255) if preview["socket"] == "images" else (128, 128, 128)
+            self.assertTrue(all(abs(a - b) <= 3 for a, b in zip(first, expected, strict=True)), (preview["socket"], first))
         # Two runs never share a file, so a view of the last one cannot go stale.
         again = ms.MultiStitchImages().stitch(
             "right", False, 0, "blue", "[]", "strip", 3, "#808080", images=clear,
@@ -1292,6 +1294,44 @@ class MultiStitchTests(unittest.TestCase):
         self.assertEqual(len(previews), ms._MAX_INPUT_PREVIEWS)
         self.assertEqual(previews[-1]["more"], 3)
         self.assertEqual(len(list((self.temp_dir / ms._INPUT_PREVIEW_SUBFOLDER).iterdir())), ms._MAX_INPUT_PREVIEWS)
+
+    def test_previews_are_near_lossless_jpeg_with_full_colour_resolution(self):
+        """Cheap to write, yet a card or a copied picture must not show colour fringes."""
+        ramp = torch.linspace(0, 1, 512).view(1, 1, 512, 1).expand(1, 256, 512, 3).clone()
+        ramp[..., 1] = ramp[..., 1].flip(-1)            # green runs the other way: hard colour gradients
+        ramp[:, 96:160, 192:320, :] = torch.tensor([1.0, 0.0, 0.0])   # and a saturated red block
+        out = ms.MultiStitchImages().stitch("right", False, 0, "white", "[]", "strip", 3, "#808080", images=ramp)
+        preview = out["ui"]["multi_stitch_inputs"][0]
+        self.assertTrue(preview["filename"].endswith(".jpg"))
+        with Image.open(self.temp_dir / preview["subfolder"] / preview["filename"]) as saved:
+            self.assertEqual(JpegImagePlugin.get_sampling(saved), 0, "4:4:4: colour kept at full resolution")
+            shown = np.asarray(saved.convert("RGB"), dtype=np.float32) / 255.0
+        error = np.abs(shown - ramp[0].numpy())
+        self.assertLess(float(error.mean()), 0.01)
+        self.assertLess(float(error[96:160, 192:320].max()), 0.06, "the red block's edges stay red")
+
+    def test_a_shrunk_preview_is_the_area_average_of_the_frame(self):
+        side = ms._INPUT_PREVIEW_MAX_SIDE * 2
+        frame = torch.zeros(1, 4, side, 3)
+        frame[..., : side // 2, :] = 1.0                 # left half white, right half black
+        out = ms.MultiStitchImages().stitch("right", False, 0, "white", "[]", "strip", 3, "#808080", images=frame)
+        preview = out["ui"]["multi_stitch_inputs"][0]
+        with Image.open(self.temp_dir / preview["subfolder"] / preview["filename"]) as saved:
+            self.assertEqual(saved.size, (ms._INPUT_PREVIEW_MAX_SIDE, 2))
+            pixels = np.asarray(saved.convert("L"))
+        self.assertGreater(int(pixels[:, : ms._INPUT_PREVIEW_MAX_SIDE // 2 - 4].min()), 245)
+        self.assertLess(int(pixels[:, ms._INPUT_PREVIEW_MAX_SIDE // 2 + 4:].max()), 10)
+
+    def test_earlier_previews_are_left_alone_so_a_cached_run_can_still_show_them(self):
+        """ComfyUI can answer a later run from its cache and name an older run's files again."""
+        frame = torch.zeros(1, 8, 8, 3)
+        names = []
+        for _ in range(3):
+            out = ms.MultiStitchImages().stitch("right", False, 0, "white", "[]", "strip", 3, "#808080", images=frame)
+            names.append(out["ui"]["multi_stitch_inputs"][0]["filename"])
+        self.assertEqual(len(set(names)), 3)
+        folder = self.temp_dir / ms._INPUT_PREVIEW_SUBFOLDER
+        self.assertEqual(sorted(p.name for p in folder.iterdir()), sorted(names))
 
     def test_a_large_frame_is_previewed_smaller_but_keeps_its_true_size(self):
         long_side = ms._INPUT_PREVIEW_MAX_SIDE * 2

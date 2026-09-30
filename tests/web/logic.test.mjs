@@ -2593,7 +2593,9 @@ describe("IMAGE inputs on the node", () => {
         assert.equal(node._msImages.length, 1, "an input picture never joins the pasted list");
         nodeType.prototype.onMouseLeave.call(node);
 
-        // Picking another file on the Load Image shows that one instead.
+        // Picking another file on the Load Image shows that one instead. The
+        // pick is an action of its own, a task later than the drawing above.
+        await tick();
         dom.imageSizes.set("other.png", [20, 20]);
         node.graph.getNodeById(5).widgets[0].value = "other.png";
         paintedCalls(nodeType, node);
@@ -2709,6 +2711,8 @@ describe("IMAGE inputs on the node", () => {
         await until(() => written.length === 1);
         assert.equal(written[0].type, "image/png");
         assert.equal(`${lastToast().severity}/${lastToast().summary}`, "success/Copied");
+        assert.match(lastToast().detail, /copied to the clipboard at 16×16\. /, "says what was copied, and nothing about a preview");
+        assert.doesNotMatch(lastToast().detail, /preview/);
 
         const before = node._msRunInputs;
         nodeType.prototype.onExecuted.call(node, {});
@@ -2757,6 +2761,75 @@ describe("IMAGE inputs on the node", () => {
         paintedCalls(nodeType, node);
         await waitForThumbs(node);
         assert.deepEqual(inputs.inputCards(node).map((c) => c.source), ["run"]);
+    });
+
+    it("says so when a picture is copied smaller than the frame it stands for", async () => {
+        const node = makeNode(nodeType);
+        const graph = feed(node, [(g) => g.other(1)]);
+        graph.plug("images", 1);
+        // The run wrote a 1536px preview of a 3072×2048 frame.
+        dom.imageSizes.set("input_big_copy.jpg", [1536, 1024]);
+        nodeType.prototype.onExecuted.call(node, {
+            multi_stitch_inputs: [runResult("images", "input_big_copy.jpg", { width: 3072, height: 2048 })],
+        });
+        paintedCalls(nodeType, node);
+        await waitForThumbs(node);
+        const written = (() => {
+            const out = [];
+            define("ClipboardItem", class { constructor(parts) { this.parts = parts; } });
+            define("navigator", { clipboard: { async write(items) { out.push(await items[0].parts["image/png"]); } } });
+            return out;
+        })();
+        cardMenu(node, 0).find((o) => o.content.startsWith("Copy images picture")).callback();
+        await until(() => written.length === 1);
+        const toast = app.extensionManager.toast.log.at(-1);
+        assert.equal(`${toast.severity}/${toast.summary}`, "success/Copied");
+        assert.match(toast.detail, /at 1536×1024 — the preview's size; the frame itself is 3072×2048\./);
+    });
+
+    it("works the cards out once per run of the code, and again for the next", async () => {
+        const node = makeNode(nodeType);
+        const graph = feed(node, [(g) => g.other(1), (g) => g.other(2)]);
+        graph.plug("images", 1);
+        graph.plug("images_2", 2);
+        let walks = 0;
+        const original = node.graph.getNodeById;
+        node.graph.getNodeById = (id) => { walks += 1; return original(id); };
+        await tick();
+        const first = inputs.inputCards(node);
+        const after = walks;
+        for (let i = 0; i < 50; i++) assert.equal(inputs.inputCards(node), first, "the very same list");
+        assert.equal(walks, after, "no further walk through the graph");
+        assert.throws(() => first.push({}), TypeError, "shared, so never changed in place");
+        await tick();
+        assert.notEqual(inputs.inputCards(node), first, "the next task asks the graph again");
+        assert.ok(walks > after);
+    });
+
+    it("forgets at once when the node says something changed", async () => {
+        const node = makeNode(nodeType);
+        const graph = feed(node, [(g) => g.other(1)]);
+        graph.plug("images", 1);
+        await tick();
+        assert.deepEqual(inputs.inputCards(node).map((c) => c.source), ["pending"]);
+        // A run arrives in the same task as the question: the answer must follow it.
+        dom.imageSizes.set("input_memo_001.jpg", [8, 8]);
+        nodeType.prototype.onExecuted.call(node, { multi_stitch_inputs: [runResult("images", "input_memo_001.jpg")] });
+        assert.deepEqual(inputs.inputCards(node).map((c) => c.source), ["run"]);
+        // And so does a plug, an unplug and a graph reload.
+        graph.unplug("images");
+        assert.deepEqual(inputs.inputCards(node), []);
+        graph.other(3);
+        graph.plug("images", 3);
+        assert.deepEqual(inputs.inputCards(node).map((c) => c.source), ["pending"]);
+        node.inputs.find((i) => i.name === "images").link = null;
+        nodeType.prototype.onConfigure.call(node, { properties: {} });
+        assert.deepEqual(inputs.inputCards(node), []);
+    });
+
+    it("asks a node that is not a node for no cards", () => {
+        assert.deepEqual(inputs.inputCards(null), []);
+        assert.doesNotThrow(() => inputs.forgetInputCards(undefined));
     });
 
     it("says how many frames a long batch brought beyond the ones it shows", async () => {

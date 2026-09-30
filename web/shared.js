@@ -819,6 +819,9 @@ function startThumbLoad(node, key, state, item, release) {
                 const known = trueW > 0 && trueH > 0;
                 state.width = known ? trueW : naturalW;
                 state.height = known ? trueH : naturalH;
+                // What the file itself holds, for whoever copies the picture.
+                state.fileWidth = naturalW;
+                state.fileHeight = naturalH;
                 state.image = scaledCanvas(image, naturalW, naturalH, THUMB_MAX_SIDE);
                 state.ready = true;
             } catch (_) { failThumb(state, "error"); }
