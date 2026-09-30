@@ -32,7 +32,9 @@ assert spec and spec.loader
 spec.loader.exec_module(ms)
 
 # Core node types the example workflows may use besides this node.
-CORE_TYPES = {"PreviewImage", "LoadImage", "ImageBatch", "Note"}
+# ImageBatch is not among them on purpose: the examples show the inputs the node
+# has now, one socket per picture, instead of joining pictures into a batch first.
+CORE_TYPES = {"PreviewImage", "LoadImage", "ImageCrop", "Note"}
 
 # A pinned action reference: owner/repo@<40 hex>.
 PINNED_ACTION = re.compile(r"^[\w.-]+/[\w.-]+@[0-9a-f]{40}$")
@@ -121,7 +123,7 @@ class KoreanLocaleTests(unittest.TestCase):
 class ExampleWorkflowTests(unittest.TestCase):
     def workflows(self):
         files = sorted((ROOT / "example_workflows").glob("*.json"))
-        self.assertGreaterEqual(len(files), 2)
+        self.assertGreaterEqual(len(files), 3)
         return [(path, json.loads(path.read_text(encoding="utf-8"))) for path in files]
 
     def test_links_are_consistent(self):
@@ -169,11 +171,62 @@ class ExampleWorkflowTests(unittest.TestCase):
                     self.assertIsInstance(value, str, f"{path.name}: {name}")
             self.assertIsInstance(json.loads(values[names.index("images_json")]), list)
             self.assertEqual(node["properties"]["Node name for S&R"], "MultiStitchImages")
-            self.assertEqual([slot["name"] for slot in node["inputs"]], ["images"])
-            self.assertEqual([slot["name"] for slot in node["outputs"]], list(ms.MultiStitchImages.RETURN_NAMES))
+            # The IMAGE sockets, in order: images, then images_2, images_3… with no
+            # gap. (A workflow saved by ComfyUI also lists a socket for every
+            # widget, and the node's spare socket after the last one in use.)
+            used = [slot["name"] for slot in node["inputs"] if slot.get("type") == "IMAGE"]
+            self.assertEqual(used, ["images"] + [f"images_{n}" for n in range(2, len(used) + 1)], path.name)
+            self.assertLessEqual(len(used), ms._MAX_IMAGE_INPUTS, path.name)
+            # The node shows as many numbered outputs as it holds pictures, so a
+            # saved one may have fewer than the eight it declares — always a prefix.
+            shown = [slot["name"] for slot in node["outputs"]]
+            declared = list(ms.MultiStitchImages.RETURN_NAMES)
+            self.assertEqual(shown, declared[:len(shown)], path.name)
+            self.assertGreaterEqual(len(shown), 4, path.name)
             # The stitched image is previewed in every example.
             image_links = node["outputs"][0]["links"]
             self.assertTrue(image_links, path.name)
+
+
+    def test_examples_were_saved_by_comfyui_so_slot_numbers_are_real(self):
+        """ComfyUI numbers a node's inputs widgets included, so images_2 is not slot 1.
+
+        An example that lists only the IMAGE sockets, with link slots counted
+        among those alone, is consistent with itself and loads with its links on
+        the wrong inputs — the third Load Image landing on match_image_size —
+        and is refused when queued. Only a file saved by ComfyUI itself has the
+        numbers right, and it is recognisable by listing a socket for every
+        widget of the stitch node.
+        """
+        names = widget_names()
+        for path, workflow in self.workflows():
+            by_id = {node["id"]: node for node in workflow["nodes"]}
+            stitch = next(n for n in workflow["nodes"] if n["type"] == "MultiStitchImages")
+            listed = [slot["name"] for slot in stitch["inputs"] if "widget" in slot]
+            self.assertEqual(listed, names, f"{path.name}: re-save it from ComfyUI; a hand-written socket list shifts the links")
+            for link_id, _src, _src_slot, dst, dst_slot, link_type in workflow["links"]:
+                target = by_id[dst]["inputs"][dst_slot]
+                if link_type == "IMAGE":
+                    self.assertNotIn("widget", target, f"{path.name}: link {link_id} lands on a widget socket")
+                    self.assertEqual(target["type"], "IMAGE", f"{path.name}: link {link_id}")
+                if by_id[dst]["type"] == "MultiStitchImages":
+                    self.assertRegex(target["name"], r"^images(_[2-8])?$", f"{path.name}: link {link_id}")
+
+    def test_a_wired_image_output_needs_output_cells(self):
+        """image_N is one black pixel while output_cells is off; an example must not ship that."""
+        names = widget_names()
+        for path, workflow in self.workflows():
+            node = next(n for n in workflow["nodes"] if n["type"] == "MultiStitchImages")
+            cells_on = node["widgets_values"][names.index("output_cells")]
+            wired = [slot["name"] for slot in node["outputs"] if slot["links"] and slot["name"].startswith("image_")]
+            if wired:
+                self.assertTrue(cells_on, f"{path.name} wires {wired} with output_cells off")
+
+    def test_the_examples_are_the_ones_the_readme_names(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        for path, _ in self.workflows():
+            self.assertIn(path.stem, readme, f"{path.name} is not described in the README")
+        self.assertNotIn("grid-from-image-batch", readme)
 
 
 class VersionTests(unittest.TestCase):

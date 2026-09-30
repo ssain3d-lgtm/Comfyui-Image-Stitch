@@ -1,0 +1,720 @@
+{
+  "last_node_id": 8,
+  "last_link_id": 6,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "Note",
+      "pos": [
+        40,
+        40
+      ],
+      "size": [
+        560,
+        260
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "Multi Stitch Images — references one at a time\n\nA crop node (here the core Image Crop — swap in any head or face crop node) feeds images, and a second Load Image feeds images_2. With output_cells on, every picture also leaves on a socket of its own — image_1, image_2 — at its own size and without the padding a batch would add. That is what a model that wants its references one by one needs; image is still the stitched strip.\n\nNothing after the stitch node has to run to see what it gets: press ▶ Inputs in the node's title bar to run only the crop and the nodes before it, and the teal cards and the preview show the pictures that arrive."
+      ],
+      "color": "#432",
+      "bgcolor": "#653"
+    },
+    {
+      "id": 2,
+      "type": "LoadImage",
+      "pos": [
+        40,
+        340
+      ],
+      "size": [
+        320,
+        320
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "image",
+          "name": "image",
+          "type": "COMBO",
+          "widget": {
+            "name": "image"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "choose file to upload",
+          "name": "upload",
+          "type": "IMAGEUPLOAD",
+          "widget": {
+            "name": "upload"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "IMAGE",
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            1
+          ]
+        },
+        {
+          "localized_name": "MASK",
+          "name": "MASK",
+          "type": "MASK",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "example.png",
+        "image"
+      ]
+    },
+    {
+      "id": 3,
+      "type": "ImageCrop",
+      "pos": [
+        400,
+        340
+      ],
+      "size": [
+        315,
+        342
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "image",
+          "name": "image",
+          "type": "IMAGE",
+          "link": 1
+        },
+        {
+          "localized_name": "width",
+          "name": "width",
+          "type": "INT",
+          "widget": {
+            "name": "width"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "height",
+          "name": "height",
+          "type": "INT",
+          "widget": {
+            "name": "height"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "x",
+          "name": "x",
+          "type": "INT",
+          "widget": {
+            "name": "x"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "y",
+          "name": "y",
+          "type": "INT",
+          "widget": {
+            "name": "y"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "IMAGE",
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            2
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ImageCrop"
+      },
+      "widgets_values": [
+        320,
+        320,
+        96,
+        64
+      ]
+    },
+    {
+      "id": 4,
+      "type": "LoadImage",
+      "pos": [
+        40,
+        720
+      ],
+      "size": [
+        320,
+        320
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "image",
+          "name": "image",
+          "type": "COMBO",
+          "widget": {
+            "name": "image"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "choose file to upload",
+          "name": "upload",
+          "type": "IMAGEUPLOAD",
+          "widget": {
+            "name": "upload"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "IMAGE",
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            3
+          ]
+        },
+        {
+          "localized_name": "MASK",
+          "name": "MASK",
+          "type": "MASK",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "example.png",
+        "image"
+      ]
+    },
+    {
+      "id": 5,
+      "type": "MultiStitchImages",
+      "pos": [
+        760,
+        340
+      ],
+      "size": [
+        420,
+        784
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "images",
+          "name": "images",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 2
+        },
+        {
+          "localized_name": "direction",
+          "name": "direction",
+          "type": "COMBO",
+          "widget": {
+            "name": "direction"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "match_image_size",
+          "name": "match_image_size",
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "match_image_size"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "spacing_width",
+          "name": "spacing_width",
+          "type": "INT",
+          "widget": {
+            "name": "spacing_width"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "spacing_color",
+          "name": "spacing_color",
+          "type": "COMBO",
+          "widget": {
+            "name": "spacing_color"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "images_json",
+          "name": "images_json",
+          "type": "STRING",
+          "widget": {
+            "name": "images_json"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "layout_mode",
+          "name": "layout_mode",
+          "type": "COMBO",
+          "widget": {
+            "name": "layout_mode"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "grid_columns",
+          "name": "grid_columns",
+          "type": "INT",
+          "widget": {
+            "name": "grid_columns"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "custom_spacing_color",
+          "name": "custom_spacing_color",
+          "type": "STRING",
+          "widget": {
+            "name": "custom_spacing_color"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "output_limit",
+          "name": "output_limit",
+          "type": "COMBO",
+          "widget": {
+            "name": "output_limit"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "output_limit_px",
+          "name": "output_limit_px",
+          "type": "INT",
+          "widget": {
+            "name": "output_limit_px"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "grid_cell_width",
+          "name": "grid_cell_width",
+          "type": "INT",
+          "widget": {
+            "name": "grid_cell_width"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "grid_cell_height",
+          "name": "grid_cell_height",
+          "type": "INT",
+          "widget": {
+            "name": "grid_cell_height"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "output_cells",
+          "name": "output_cells",
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "output_cells"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "cells_resolution",
+          "name": "cells_resolution",
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "cells_resolution"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "minimum_image_side",
+          "name": "minimum_image_side",
+          "shape": 7,
+          "type": "INT",
+          "widget": {
+            "name": "minimum_image_side"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "match_reference",
+          "name": "match_reference",
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "match_reference"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "size_reference",
+          "name": "size_reference",
+          "shape": 7,
+          "type": "INT",
+          "widget": {
+            "name": "size_reference"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "size_megapixels",
+          "name": "size_megapixels",
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "size_megapixels"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "size_divisible_by",
+          "name": "size_divisible_by",
+          "shape": 7,
+          "type": "INT",
+          "widget": {
+            "name": "size_divisible_by"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "size_aspect",
+          "name": "size_aspect",
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "size_aspect"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "grid_target_aspect",
+          "name": "grid_target_aspect",
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "grid_target_aspect"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "images_2",
+          "name": "images_2",
+          "type": "IMAGE",
+          "link": 3
+        },
+        {
+          "localized_name": "images_3",
+          "name": "images_3",
+          "type": "IMAGE",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "image",
+          "name": "image",
+          "type": "IMAGE",
+          "links": [
+            4
+          ]
+        },
+        {
+          "localized_name": "cells",
+          "name": "cells",
+          "type": "IMAGE",
+          "links": null
+        },
+        {
+          "localized_name": "width",
+          "name": "width",
+          "type": "INT",
+          "links": null
+        },
+        {
+          "localized_name": "height",
+          "name": "height",
+          "type": "INT",
+          "links": null
+        },
+        {
+          "name": "image_1",
+          "type": "IMAGE",
+          "links": [
+            5
+          ]
+        },
+        {
+          "name": "image_2",
+          "type": "IMAGE",
+          "links": [
+            6
+          ]
+        },
+        {
+          "name": "image_3",
+          "type": "IMAGE",
+          "links": null
+        },
+        {
+          "name": "image_4",
+          "type": "IMAGE",
+          "links": null
+        },
+        {
+          "name": "image_5",
+          "type": "IMAGE",
+          "links": null
+        },
+        {
+          "name": "image_6",
+          "type": "IMAGE",
+          "links": null
+        },
+        {
+          "name": "image_7",
+          "type": "IMAGE",
+          "links": null
+        },
+        {
+          "name": "image_8",
+          "type": "IMAGE",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MultiStitchImages",
+        "multi_stitch_images": "[]",
+        "multi_stitch_advanced": true
+      },
+      "widgets_values": [
+        "right",
+        false,
+        8,
+        "black",
+        "[]",
+        "strip",
+        3,
+        "#808080",
+        "none",
+        2048,
+        0,
+        0,
+        true,
+        "source",
+        0,
+        "smallest",
+        1,
+        0,
+        32,
+        "reference",
+        "off"
+      ]
+    },
+    {
+      "id": 6,
+      "type": "PreviewImage",
+      "pos": [
+        1240,
+        340
+      ],
+      "size": [
+        420,
+        340
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "images",
+          "name": "images",
+          "type": "IMAGE",
+          "link": 4
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "images",
+          "name": "images",
+          "type": "IMAGE",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      }
+    },
+    {
+      "id": 7,
+      "type": "PreviewImage",
+      "pos": [
+        1240,
+        700
+      ],
+      "size": [
+        420,
+        340
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "images",
+          "name": "images",
+          "type": "IMAGE",
+          "link": 5
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "images",
+          "name": "images",
+          "type": "IMAGE",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      }
+    },
+    {
+      "id": 8,
+      "type": "PreviewImage",
+      "pos": [
+        1240,
+        1060
+      ],
+      "size": [
+        420,
+        340
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "images",
+          "name": "images",
+          "type": "IMAGE",
+          "link": 6
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "images",
+          "name": "images",
+          "type": "IMAGE",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      }
+    }
+  ],
+  "links": [
+    [
+      1,
+      2,
+      0,
+      3,
+      0,
+      "IMAGE"
+    ],
+    [
+      2,
+      3,
+      0,
+      5,
+      0,
+      "IMAGE"
+    ],
+    [
+      3,
+      4,
+      0,
+      5,
+      22,
+      "IMAGE"
+    ],
+    [
+      4,
+      5,
+      0,
+      6,
+      0,
+      "IMAGE"
+    ],
+    [
+      5,
+      5,
+      4,
+      7,
+      0,
+      "IMAGE"
+    ],
+    [
+      6,
+      5,
+      5,
+      8,
+      0,
+      "IMAGE"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 1,
+      "offset": [
+        0,
+        0
+      ]
+    }
+  },
+  "version": 0.4
+}

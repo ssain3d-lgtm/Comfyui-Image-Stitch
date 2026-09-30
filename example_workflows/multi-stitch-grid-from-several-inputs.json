@@ -1,43 +1,194 @@
 {
-  "last_node_id": 3,
-  "last_link_id": 1,
+  "last_node_id": 7,
+  "last_link_id": 5,
   "nodes": [
     {
       "id": 1,
-      "type": "Note",
+      "type": "LoadImage",
       "pos": [
         40,
         40
       ],
       "size": [
-        480,
-        170
+        320,
+        320
       ],
       "flags": {},
       "order": 0,
       "mode": 0,
-      "inputs": [],
-      "outputs": [],
-      "properties": {},
-      "widgets_values": [
-        "Multi Stitch Images — paste\n\n1. Click the Multi Stitch Images node so it is selected.\n2. Ctrl+V with images on the clipboard, or use + Add in its toolbar.\n3. Click a thumbnail to crop / rotate / flip; drag a card to reorder; right-click one to duplicate, copy, replace or remove it.\n4. Queue. The image output is the strip.\n\nOptions ▸ in the toolbar shows the advanced settings; ⧉ Copy puts the stitched result on the clipboard without queueing."
+      "inputs": [
+        {
+          "localized_name": "image",
+          "name": "image",
+          "type": "COMBO",
+          "widget": {
+            "name": "image"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "choose file to upload",
+          "name": "upload",
+          "type": "IMAGEUPLOAD",
+          "widget": {
+            "name": "upload"
+          },
+          "link": null
+        }
       ],
-      "color": "#432",
-      "bgcolor": "#653"
+      "outputs": [
+        {
+          "localized_name": "IMAGE",
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            1
+          ]
+        },
+        {
+          "localized_name": "MASK",
+          "name": "MASK",
+          "type": "MASK",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "example.png",
+        "image"
+      ]
     },
     {
       "id": 2,
-      "type": "MultiStitchImages",
+      "type": "LoadImage",
       "pos": [
         40,
-        260
+        400
       ],
       "size": [
-        420,
-        370
+        320,
+        320
       ],
       "flags": {},
       "order": 1,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "image",
+          "name": "image",
+          "type": "COMBO",
+          "widget": {
+            "name": "image"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "choose file to upload",
+          "name": "upload",
+          "type": "IMAGEUPLOAD",
+          "widget": {
+            "name": "upload"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "IMAGE",
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            2
+          ]
+        },
+        {
+          "localized_name": "MASK",
+          "name": "MASK",
+          "type": "MASK",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "example.png",
+        "image"
+      ]
+    },
+    {
+      "id": 3,
+      "type": "LoadImage",
+      "pos": [
+        40,
+        760
+      ],
+      "size": [
+        320,
+        320
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "image",
+          "name": "image",
+          "type": "COMBO",
+          "widget": {
+            "name": "image"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "choose file to upload",
+          "name": "upload",
+          "type": "IMAGEUPLOAD",
+          "widget": {
+            "name": "upload"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "IMAGE",
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            3
+          ]
+        },
+        {
+          "localized_name": "MASK",
+          "name": "MASK",
+          "type": "MASK",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "example.png",
+        "image"
+      ]
+    },
+    {
+      "id": 4,
+      "type": "MultiStitchImages",
+      "pos": [
+        460,
+        40
+      ],
+      "size": [
+        420,
+        828
+      ],
+      "flags": {},
+      "order": 3,
       "mode": 0,
       "inputs": [
         {
@@ -45,7 +196,7 @@
           "name": "images",
           "shape": 7,
           "type": "IMAGE",
-          "link": null
+          "link": 1
         },
         {
           "localized_name": "direction",
@@ -243,6 +394,24 @@
             "name": "grid_target_aspect"
           },
           "link": null
+        },
+        {
+          "localized_name": "images_2",
+          "name": "images_2",
+          "type": "IMAGE",
+          "link": 2
+        },
+        {
+          "localized_name": "images_3",
+          "name": "images_3",
+          "type": "IMAGE",
+          "link": 3
+        },
+        {
+          "localized_name": "images_4",
+          "name": "images_4",
+          "type": "IMAGE",
+          "link": null
         }
       ],
       "outputs": [
@@ -251,14 +420,16 @@
           "name": "image",
           "type": "IMAGE",
           "links": [
-            1
+            4
           ]
         },
         {
           "localized_name": "cells",
           "name": "cells",
           "type": "IMAGE",
-          "links": null
+          "links": [
+            5
+          ]
         },
         {
           "localized_name": "width",
@@ -271,27 +442,42 @@
           "name": "height",
           "type": "INT",
           "links": null
+        },
+        {
+          "name": "image_1",
+          "type": "IMAGE",
+          "links": null
+        },
+        {
+          "name": "image_2",
+          "type": "IMAGE",
+          "links": null
+        },
+        {
+          "name": "image_3",
+          "type": "IMAGE",
+          "links": null
         }
       ],
       "properties": {
         "Node name for S&R": "MultiStitchImages",
         "multi_stitch_images": "[]",
-        "multi_stitch_preview": true
+        "multi_stitch_advanced": true
       },
       "widgets_values": [
         "right",
         true,
-        0,
-        "white",
+        8,
+        "black",
         "[]",
-        "strip",
-        3,
+        "grid",
+        2,
         "#808080",
-        "none",
-        2048,
+        "max_long_side",
+        1024,
         0,
         0,
-        false,
+        true,
         "placed",
         0,
         "smallest",
@@ -303,25 +489,25 @@
       ]
     },
     {
-      "id": 3,
+      "id": 5,
       "type": "PreviewImage",
       "pos": [
-        520,
-        260
+        940,
+        40
       ],
       "size": [
         420,
-        360
+        340
       ],
       "flags": {},
-      "order": 2,
+      "order": 4,
       "mode": 0,
       "inputs": [
         {
           "localized_name": "images",
           "name": "images",
           "type": "IMAGE",
-          "link": 1
+          "link": 4
         }
       ],
       "outputs": [
@@ -335,14 +521,103 @@
       "properties": {
         "Node name for S&R": "PreviewImage"
       }
+    },
+    {
+      "id": 6,
+      "type": "PreviewImage",
+      "pos": [
+        940,
+        420
+      ],
+      "size": [
+        420,
+        340
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "images",
+          "name": "images",
+          "type": "IMAGE",
+          "link": 5
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "images",
+          "name": "images",
+          "type": "IMAGE",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      }
+    },
+    {
+      "id": 7,
+      "type": "Note",
+      "pos": [
+        460,
+        700
+      ],
+      "size": [
+        480,
+        240
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "Multi Stitch Images — a grid from several IMAGE inputs\n\nThree Load Image nodes (ComfyUI's bundled example.png) go straight into images, images_2 and images_3. Plugging one in opens the next socket, so there is always a spare; each input keeps its own size, exactly like an image pasted onto the node, and no Batch Images is needed to join them.\n\nThe node lays them out as a 2-column grid with an 8 px black gap, caps the long side at 1024 px, and output_cells fills the cells output with each picture centred in a uniform cell.\n\nImages pasted onto the node come first; the input pictures follow in socket order. Replace example.png with your own files, or feed a socket from any node that outputs an image or a batch."
+      ],
+      "color": "#432",
+      "bgcolor": "#653"
     }
   ],
   "links": [
     [
       1,
+      1,
+      0,
+      4,
+      0,
+      "IMAGE"
+    ],
+    [
+      2,
       2,
       0,
+      4,
+      22,
+      "IMAGE"
+    ],
+    [
       3,
+      3,
+      0,
+      4,
+      23,
+      "IMAGE"
+    ],
+    [
+      4,
+      4,
+      0,
+      5,
+      0,
+      "IMAGE"
+    ],
+    [
+      5,
+      4,
+      1,
+      6,
       0,
       "IMAGE"
     ]

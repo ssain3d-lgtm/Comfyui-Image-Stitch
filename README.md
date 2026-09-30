@@ -35,7 +35,7 @@
 - 노드 내부 **예상 최종 해상도 표시**
 - 노드 내부 **최종 합성 미리보기** (Queue 전에 실제 배치 확인)
 - 출력 크기 옵션: **`output_limit`**, Grid **셀 크기 고정**
-- 선택 **IMAGE 입력** 연결 + 개별 **`cells`** 출력
+- **IMAGE 입력 여러 개**(`images`, `images_2`…) — 들어오는 그림이 노드 안에 카드·미리보기로 보이고, 제목줄 **`▶ Inputs`** 로 앞쪽 노드(Crop Head 등)만 실행해 미리 확인 + 개별 **`cells`** 출력
 - **↶ / ↷ 실행 취소·다시 실행**
 - 이미지 수에 맞춰 **아래로 늘어나는 목록** (스크롤 없음)
 - 파일이 사라진 이미지 **재연결** (Crop·순서 유지)
@@ -43,99 +43,29 @@
 - 일반 `IMAGE` 출력 → `Preview Image`, `Save Image`, `VAE Encode` 등에 바로 연결
 - 추가 Python 패키지 불필요 — 동영상 서버 디코딩에만 PyAV가 쓰이고 최신 ComfyUI에는 이미 포함되어 있습니다(ComfyUI-Manager용 `requirements.txt`에도 적어 두었습니다)
 
+## 빠른 시작
+
+1. **노드 추가** — 캔버스를 더블클릭해 `Multi Stitch Images`를 검색합니다(`image/transform`).
+2. **이미지 넣기** — 노드를 클릭해 선택하고 **Ctrl+V**. `+ Add`나 드래그 앤 드롭도 됩니다.
+3. **다듬기** — 카드를 클릭하면 Crop·회전·블러, 끌면 순서 변경, 우클릭하면 복제·복사·교체·삭제입니다.
+4. **연결** — `image` 출력을 `Preview Image`나 모델 노드에 연결합니다. Queue 전에도 노드 안 미리보기에 합성 결과가 보입니다.
+
+다른 노드의 결과(예: 얼굴 크롭 노드)를 합치려면 **`images`, `images_2`…** 에 연결하세요. 제목줄의 **`▶ Inputs`** 는 그 앞쪽 노드만 실행해서 카드와 미리보기를 채워 줍니다. 모델이 레퍼런스를 **한 장씩** 받아야 하면 `output_cells`를 켜고 `image_1`, `image_2`… 를 연결하면 됩니다.
+
+바로 열어 볼 수 있는 예제는 사이드바 Templates → `Comfyui-Image-Stitch` 에 있습니다.
+
+## 최근 변경
+
 ### 1.13에서 달라진 점
 
+- **입력 미리보기가 10배 빨라졌습니다 (1.13.1)** — 입력 그림을 노드에 보여 주려고 실행마다 저장하던 미리보기가 스티치 자체보다 훨씬 오래 걸렸습니다(1024px 2장에서 약 290ms, 4K 2장에서 약 1.1초). 이제 큰 그림은 먼저 줄인 뒤 **JPEG(품질 95)** 로 저장해서 각각 약 30ms, 약 0.3초입니다. 카드 우클릭 `Copy`는 이 미리보기를 복사하므로 **최대 1536px**이고, 알림에 복사한 크기가 표시됩니다(Load Image를 바로 연결한 그림은 원본 파일 그대로 복사됩니다).
+- **카드가 많을 때 다시 가벼워졌습니다 (1.13.1)** — 입력 카드를 카드마다 다시 계산하던 것을 한 번만 하도록 바꿨습니다. 이미지 256장 + 입력 8개에서 마우스를 움직일 때마다 4.6ms 걸리던 계산이 0.3ms로 줄었습니다(보통의 장수에서는 차이를 느낄 수 없습니다).
+- **예제 워크플로우 (1.13.1)** — `Batch Images`로 묶을 필요 없이 입력 단자에 바로 연결하는 방식으로 바꿨습니다(`multi-stitch-grid-from-several-inputs`, 예전 `…-from-image-batch`의 후속). 크롭한 그림과 다른 그림을 `image_1` / `image_2`로 한 장씩 꺼내는 `multi-stitch-references-one-by-one`도 추가했습니다.
 - **`▶ Inputs` 버튼** — IMAGE 입력에 뭔가 연결되어 있으면 노드 제목줄(Size 왼쪽, Vue 모드는 툴바)에 나타납니다. 누르면 **이 노드에 연결된 앞쪽 노드들(Crop Head 등)과 이 노드까지만 실행**하고, 뒤에 이어진 H3 같은 무거운 모델은 돌리지 않습니다. 결과가 오면 입력 카드와 미리보기가 바로 채워집니다. 실행을 기다리는 입력이 있으면 초록색으로 켜지고, 자리 카드(`▶ Click to run the inputs`)를 눌러도 똑같이 실행됩니다.
 - 이를 위해 노드가 ComfyUI의 **출력 노드**가 되었습니다. 그래서 아무 데도 연결되지 않았어도 Queue할 때마다 함께 실행됩니다(가벼운 작업입니다). 대신 **아무것도 이 노드를 읽지 않을 때는 에러로 실행 전체를 멈추지 않습니다** — 이미지를 아직 안 넣은 빈 노드가 캔버스에 있어도 괜찮고, 그 에러는 나중에 뭔가를 연결하면 그 노드에서 같은 문구로 알려 줍니다. 연결되어 쓰이는 노드는 예전과 똑같이 에러를 냅니다.
 - 부분 실행을 지원하지 않는 오래된 ComfyUI에서는 버튼이 전체 실행 대신 안내만 띄웁니다.
 
-
-- **입력 이미지가 노드 안에 보입니다** — IMAGE 입력으로 들어오는 그림이 목록 끝에 **청록색 카드**로, 미리보기에도 함께 표시됩니다. 카드에는 스티치 순번(`image_N`의 N)과 들어온 단자(`in`, `in 2`…)가 적힙니다.
-- **Load Image를 바로 연결하면 연결하는 순간** 보입니다(파일이 이미 서버에 있으니까요). Load Image에서 다른 파일을 고르면 카드도 바로 바뀝니다.
-- **Crop Head처럼 계산이 필요한 노드를 거치면** 실행 전에는 결과가 존재하지 않아 `Queue once to see it` 자리 카드가 뜨고, **한 번 실행하면** 실제로 받은 그림이 카드와 미리보기에 나타나 다음 실행 때까지 유지됩니다. 단자에 다른 노드를 꽂으면 다시 자리 카드로 돌아갑니다.
-- 입력 카드는 보기 전용입니다(편집·삭제·순서 변경 없음). 우클릭하면 그 그림을 클립보드로 복사할 수 있습니다. `⧉ Copy`와 `image_N` 개수도 입력 그림을 포함해 계산합니다.
-- **수정**: 1.11의 `images_2`… 단자가 Vue 노드(Nodes 2.0) 모드에서는 생기지 않던 문제를 고쳤습니다.
-
-
-- **IMAGE 입력 여러 개** — `images`를 연결하면 **`images_2`** 가 새로 열리고, 거기에 연결하면 `images_3`… 식으로 **항상 빈 단자 하나**가 따라 생깁니다(최대 8개). 입력마다 **자기 크기를 그대로 유지**해서, 붙여 넣은 이미지를 한 장씩 추가한 것과 똑같이 들어갑니다. 예: `Load Image → Crop Head → images`, 다른 `Load Image → images_2` — 크기가 달라도 Image Batch 없이 바로 합쳐집니다.
-- 순서는 붙여 넣은 이미지 → `images` → `images_2` → … 이고, `image_N` 개별 출력·`size_reference` 번호도 이 순서를 따릅니다.
-- 갤러리 기록의 `+ N from IMAGE` 가 입력 프레임 수 대신 전체 이미지 수를 세던 문제도 고쳤습니다.
-
-### 1.10에서 달라진 점
-
-- **갤러리 미리보기가 찌그러지던 문제 수정 (1.10.1)** — 그리드 행 높이가 `auto`라 패널 높이를 행끼리 나눠 갖는 바람에, 카드 안에서 유일하게 줄어들 수 있는 **사진이 132px → 53px로 눌리고** 이름 줄까지 버튼에 가려졌습니다. UI 배율이 클수록 심했습니다. 행이 내용에 맞춰 커지도록 고쳤고, **미리보기도 180px로 키웠습니다.**
-
-- **이미지마다 개별 출력 단자** — `output_cells`를 켜면 **`image_1` … `image_8`** 단자가 생겨 이미지를 한 장씩 따로 뺄 수 있습니다. 노드에는 **가지고 있는 이미지 수만큼만** 표시되고, 연결된 단자는 절대 사라지지 않습니다. 레퍼런스를 한 장씩 따로 넣어야 하는 모델에 바로 연결할 수 있습니다.
-- **여백이 붙지 않습니다** — ComfyUI의 `IMAGE` 배치는 크기가 같아야 해서 `cells`는 모든 프레임을 같은 셀에 담고 나머지를 배경색으로 채웁니다. 개별 단자는 그럴 필요가 없어서, `image_2`는 **합성 결과에서 가지는 크기 그대로**(`cells_resolution = source`면 원본 크기) 나옵니다.
-- `IMAGE` 입력을 연결하면 실행 전에는 장수를 알 수 없으므로 단자 8개가 전부 보입니다. 이미지 수보다 뒤쪽 단자는 1픽셀 검정 이미지를 냅니다(빈 값이 흘러가면 엉뚱한 노드에서 터지기 때문입니다).
-- 새 단자는 `image`·`cells`·`width`·`height` **뒤**에 붙어서 기존 워크플로우의 연결이 밀리지 않습니다.
-
-### 1.9에서 달라진 점
-
-- **우클릭 `Copy image #N to clipboard`가 원본을 주던 문제 수정 (1.9.1)** — 카드도, 옆의 크기 표시도, 미리보기도 전부 Crop된 모습을 보여 주는데 클립보드만 원본을 줬습니다. 이제 **카드에 보이는 그대로**(Crop·회전·반전·블러 적용) 원본 해상도로 복사합니다. 업로드한 파일 그대로가 필요하면 바로 아래 **`Copy image #N as uploaded`** 를 쓰면 됩니다(편집된 이미지에만 나타납니다).
-
-- **편집기에서 다음/이전 이미지로 바로 이동** — Cancel 옆의 `‹` `›` 또는 **좌우 방향키**로 편집기를 닫지 않고 옮겨 갑니다. 지금까지는 `Apply → 닫힘 → 카드 찾기 → 클릭 → 로딩 → 편집`을 장마다 반복해야 했는데, 그 왕복이 사라집니다. 헤더가 위치를 알려 주고(`Edit image 2 of 5`) 양 끝에서는 멈춥니다.
-- **그냥 넘겨보는 건 공짜입니다** — 실제로 뭔가 바꿨을 때만 저장되므로, 목록을 훑어봐도 실행 취소 기록이 쌓이지 않고 카드도 안 건드립니다. 이미지마다 실행 취소 단위는 그대로 분리됩니다.
-
-### 1.8에서 달라진 점
-
-- **블러 브러시** — 편집기에 `◍ Blur` 탭이 생겼습니다. 드래그해서 얼굴·번호판·워터마크 등을 가릴 수 있고, **Brush**로 두께, **Blur**로 강도를 조절합니다(둘 다 이미지 실제 픽셀 기준, 포인터의 원이 실제 브러시 크기). `Ctrl+Z`로 마지막 스트로크 취소, `Clear blur`로 전체 삭제.
-- **원본을 건드리지 않습니다** — Crop·회전처럼 **좌표로 저장**되므로 워크플로우에 남고, 편집기를 다시 열면 그대로 있고, 회전하면 그림과 함께 돌아가고, 갤러리에서 불러와도 유지됩니다. 카드 썸네일·미리보기·`⧉ Copy`에도 모두 반영됩니다.
-- 16비트 이미지도 안전합니다 — Pillow 필터가 16비트/float 모드를 거부해서, 그쪽을 쓰면 RGB로 변환하며 계조를 버려야 했습니다. 텐서에서 직접 가우시안을 돌립니다.
-
-### 1.7에서 달라진 점
-
-- **편집기에서 우클릭 복사 수정 (1.7.1)** — 예전에는 브라우저 기본 메뉴의 "이미지 복사"가 실행돼서 **격자·크롭 테두리·어두운 영역이 그대로 박힌 그림**이 복사됐습니다. 이제 편집기가 우클릭을 직접 받아 **`Copy crop to clipboard`**(Crop된 부분만, 원본 해상도로, 회전/반전 반영)과 **`Copy whole image to clipboard`** 두 가지를 제공합니다.
-
-- **갤러리 중복 정리** — 같은 구성인지를 **파일 이름이 아니라 이미지 내용(크기 + 해시)** 으로 판단합니다. 같은 사진을 다시 붙여넣으면 새 파일로 올라가기 때문에 예전에는 똑같이 생긴 항목이 하나 더 생겼지만, 이제는 기존 항목의 사용 횟수만 올라갑니다. 중복된 파일은 어느 항목에서도 안 쓰이게 되어 `Clean up unused files…`로 지울 수 있습니다.
-
-- **해상도 표시** — 카드 **오른쪽 아래 모서리**에 그 이미지의 **픽셀 크기**가 작게 표시됩니다. Crop한 이미지는 **Crop 후 크기**가 ✂ 배지와 같은 주황색으로 나오고, 카드에 마우스를 올리면 상태 줄에 `3000 × 2000 → 1400 × 2000`처럼 원본과 결과가 함께 표시됩니다.
-- **편집기 헤더가 Crop 크기를 실시간으로 셉니다** — 지금까지는 원본 크기만 보여 줘서 Crop 결과 해상도를 Apply 후에야 알 수 있었습니다. 이제 드래그하는 동안 `1080 × 1920 → 792 × 1411`이 계속 갱신되어 **원하는 픽셀 크기에 맞춰** Crop할 수 있습니다.
-- 이 숫자는 서버가 실제로 자를 때 쓰는 계산(`_crop_box`)과 같은 함수에서 나오므로, 화면에 보이는 해상도와 실행 결과가 어긋나지 않습니다.
-
-### 1.6에서 달라진 점
-
-- **이미지 편집기 확대 / 이동** — 큰 사진일수록 Crop이 거칠어지던 문제를 없앴습니다. 4000px 사진이 1000px로 그려지면 화면 1픽셀이 Crop 4픽셀이었습니다. 이제 **최대 16배**까지 확대됩니다: 휠은 **포인터 위치를 기준으로** 확대해 보고 있던 부분이 그대로 있고, `+ / − / Fit` 버튼과 키보드 `+ / - / 0`도 같은 일을 합니다.
-- 이동은 **휠 버튼 드래그** 또는 **Space + 좌클릭 드래그** — 좌클릭은 Crop 그리기용으로 그대로 남습니다. 확대하면 핸들이 잡히는 범위와 최소 Crop 크기도 함께 줄어들어 **픽셀 단위로 다듬을 수 있습니다**.
-
-### 1.5에서 달라진 점
-
-- **`grid_target_aspect`** — Grid 모드에서 열 수를 직접 정하는 대신 **완성될 캔버스의 비율**을 지정하면, 가능한 모든 열 수를 실제로 배치해 보고 그 비율에 가장 가까운 것을 고릅니다. 정사각 8장 기준 `16:9` → 4×2, `1:1` → 3×3, `9:16` → 2×4. 기본값 `off`는 지금까지처럼 `grid_columns`를 그대로 씁니다.
-- 열 수는 실행당 한 번 정해져서 **예상 크기·실제 합성·`cells` 출력이 모두 같은 그리드**를 씁니다. 노드 안 미리보기도 같은 계산을 mirror하므로 Queue 전에 결과 배치를 그대로 볼 수 있습니다.
-
-### 1.4에서 달라진 점
-
-- **여러 장 한 번에 편집** — 카드의 **번호를 클릭하면 선택**됩니다(다시 누르면 해제). 선택된 카드는 테두리로 표시되고 상태 줄이 개수를 알려 줍니다. 선택된 카드를 우클릭하면 **그룹 전용 메뉴**가 열려 `Crop … to`(비율 일괄 적용)·회전·반전·Crop 초기화·복제·맨 앞/뒤로 이동·삭제를 **한 번의 실행 취소 단위로** 처리합니다. 선택된 카드 하나를 끌면 **그룹 전체가 함께 이동**합니다.
-- 노드 우클릭 메뉴에 `Select all images` / `Deselect …` 가 추가됐습니다.
-- 수식키(Ctrl·Shift)를 쓰지 않는 이유: ComfyUI가 노드의 `onMouseDown`에 넘기는 이벤트는 **어떤 키를 눌러도 수식키가 모두 false**로 오고, Ctrl+드래그는 캔버스의 다중 노드 선택이 이미 쓰고 있습니다. 실제 ComfyUI에서 측정한 뒤 번호 배지 방식을 택했습니다.
-
-### 1.3에서 달라진 점
-
-- **`size_aspect`** — `width`/`height` 출력의 **비율**을 고를 수 있습니다. `reference`(기본)는 예전과 똑같이 기준 이미지의 비율을 따르고, `9:16`처럼 지정하면 그 비율로 바꾸되 **픽셀 수는 그대로** 유지합니다. 원본이 3:4인데 모델에는 9:16으로 넣어야 할 때 노드를 더 붙이지 않아도 됩니다.
-- **Nodes 2.0 열 수가 캔버스와 같아졌습니다** — Vue 모드가 노드 폭과 무관하게 3열로 고정돼 있어 같은 노드가 캔버스에서는 8열, Vue에서는 3열로 보이던 문제를 고쳤습니다. 양쪽이 `shared.js`의 같은 함수를 씁니다.
-- **Vue 모드 높이를 실측합니다** — 툴바가 두 줄로 접히는데도 한 줄로 계산해 15px 모자라던 것을 DOM 실측 + `ResizeObserver`로 바꿨습니다.
-
-### 1.2에서 달라진 점
-
-- **툴바 한 줄** `+ Add · Clear · ⧉ Copy · ↶ ↷ · Preview · Options`와 **접히는 고급 옵션** — 기본 상태 위젯 10행 → 5행. 기본값이 아닌 옵션은 접혀 있어도 보입니다.
-- **`⧉ Copy`** — 합성 결과를 Queue 없이 브라우저에서 만들어 클립보드에 넣습니다.
-- **`match_image_size` 기본값이 `true`** — 새 노드는 처음부터 이미지 높이(세로 Strip은 너비)를 맞춰 붙입니다. 저장된 워크플로우는 자기 값을 유지합니다.
-- **`match_reference`** — `match_image_size`의 기준을 첫 번째 / 가장 큰 / 가장 작은 이미지 중에서 고릅니다(`Options ▸` 안). 기본값 `smallest`는 순서를 바꾸지 않아도 확대 없이 높이를 맞춥니다. 이 옵션이 생기기 전에 저장한 워크플로우는 예전 동작인 `first`로 열립니다.
-- **동영상에서 장면 캡처** — 동영상을 넣으면 프레임 선택기가 열리고, 캡처한 프레임은 보통 이미지처럼 편집·합성됩니다. 동영상은 temp 폴더에만 잠시 있다가 캡처가 끝나면 지워집니다. 브라우저가 못 여는 코덱은 서버의 PyAV가 대신 디코딩하고, 재생되는 동영상도 "server capture"로 프레임 단위 정확한 캡처를 받을 수 있습니다.
-- **`width` / `height` 출력과 크기 패널** — 기준 이미지(기본 첫 번째)의 크기를 `size_aspect` 비율로 바꾸고(기본은 원본 비율 유지) `size_megapixels`로 조정한 뒤 `size_divisible_by`(기본 32) 배수로 맞춘 값을 출력합니다. 제목줄의 **`📐 Size`** 버튼을 켜면 노드 아래에 비율 상자와 `672 x 1184 | 9:16 | 0.80 MP | divisible by 32` 같은 읽기가 붙습니다.
-- **목록이 아래로 늘어남** — 스크롤 대신 이미지 수만큼 노드가 아래로 커져 모든 카드가 보입니다.
-- 모든 위젯과 출력에 **툴팁** — 마우스를 올리면 설명이 보입니다.
-- **한국어 UI** — ComfyUI 언어를 한국어로 두면 위젯 이름·선택지·툴팁·노드 설명이 한국어로 표시됩니다.
-- **예제 워크플로우** 2개 — 템플릿 브라우저의 `Comfyui-Image-Stitch` 항목(붙여넣기 → Strip, IMAGE 배치 → Grid + cells).
-- 전체 이력은 [CHANGELOG.md](CHANGELOG.md)에 있습니다.
-
-### 1.1에서 달라진 점
-
-- 새 노드는 **원본 크기 유지**가 기본이었습니다: `match_image_size = false`, `output_limit = none` (1.2에서 `match_image_size` 기본값은 다시 `true`가 되었고, `output_limit = none`은 그대로입니다). 저장된 워크플로우는 자기 설정을 그대로 유지하고 출력 연결도 바뀌지 않습니다.
-- `cells` 출력에 **`cells_resolution = source`** 가 추가되어 개별 이미지를 축소 없이 원본 크기로 받을 수 있습니다.
-- **`minimum_image_side`** — 배치된 이미지의 짧은 변이 지정값보다 작아지면 디코딩 전에 실행을 중단합니다(기본 0 = 끄기).
-- 참조 파일이 바뀌면(크기·수정 시각) 노드가 **자동으로 다시 실행**됩니다.
-- 썸네일 원본 디코딩을 **동시에 2개**로 제한하고, PNG 끝에 붙은 EXIF도 디코딩 없이 읽습니다.
+이전 버전의 변경 내역은 [CHANGELOG.md](CHANGELOG.md)에 있습니다.
 
 > 아래 한국어 이미지는 이해를 돕기 위해 일부 버튼/설명을 번역한 가이드 이미지입니다. 실제 노드의 옵션 이름은 ComfyUI 언어 설정에 따라 영문 또는 한국어로 표시됩니다.
 
@@ -255,6 +185,13 @@ Crop / 회전 / 반전 정보만 workflow에 저장하는 **비파괴 방식**�
 - 툴바 **`⧉ Copy`** → 합성 결과 복사
 - Drag 판정 거리는 ComfyUI Canvas 좌표가 아닌 **실제 화면 픽셀 기준**이라 Zoom 배율에 영향을 덜 받습니다. 그 거리를 넘지 않고 떼면 클릭으로 처리되어 편집기가 열립니다.
 
+## 여러 장 한 번에 편집
+
+- 카드의 **번호가 체크박스**입니다 — 클릭하면 선택, 다시 누르면 해제됩니다. 선택된 카드는 테두리로 표시되고 상태 줄이 개수를 알려 줍니다.
+- 선택된 카드를 우클릭하면 **그룹 전용 메뉴**가 열려 `Crop … to`(비율 일괄 적용)·회전·반전·Crop 초기화·복제·맨 앞/뒤로 이동·삭제를 **한 번의 실행 취소 단위로** 처리합니다.
+- 선택된 카드 하나를 끌면 **그룹 전체가 함께 이동**합니다. 노드 우클릭 메뉴의 `Select all images` / `Deselect …` 로 전체 선택·해제도 할 수 있습니다.
+- Ctrl·Shift 같은 수식키를 쓰지 않는 이유: ComfyUI가 노드에 넘기는 마우스 이벤트는 어떤 키를 눌러도 수식키가 모두 false로 오고, Ctrl+드래그는 캔버스의 다중 노드 선택이 이미 쓰고 있기 때문입니다.
+
 ## Strip / Grid
 
 ### Strip
@@ -348,6 +285,7 @@ grid_columns = 3
 
 - 선택 입력 **`images`**, **`images_2` … `images_8`** (IMAGE, 하나를 연결하면 다음 단자가 열림): 연결된 배치의 프레임들이 입력 순서대로 붙여넣은 이미지 **뒤에** 추가됩니다. 생성/업스케일 결과를 저장·재업로드 없이 바로 합칠 수 있고, 붙여넣은 이미지 없이 배치만 연결하면 "배치 → 그리드" 노드로도 씁니다. RGBA 프레임은 배경색 위에 합성되고 1채널은 RGB로 확장됩니다. 들어오는 그림은 청록색 입력 카드와 미리보기에 표시됩니다 — Load Image를 바로 연결하면 즉시, 계산이 필요한 노드를 거치면 한 번 실행한 뒤부터(1.12). **`▶ Inputs`** 는 앞쪽 노드와 이 노드만 실행해서 그 그림을 가져옵니다(1.13). 붙여넣은 이미지 + 프레임 합계가 256장 상한이고, 각 프레임에도 원본 1장 크기 한도가 적용됩니다. 프레임은 자기 차례에만 CPU float32로 변환되므로 GPU 배치를 연결해도 한꺼번에 복사되지 않습니다.
 - 출력 **`image`**: 합성 결과. 출력 **`cells`**: `output_cells = true`일 때 이미지마다 한 프레임씩, **같은 크기의 셀** 가운데에 배경색으로 패딩한 배치 `[N, H, W, 3]`입니다. 얼굴 클로즈업처럼 개별 참조를 따로 넘길 때 씁니다. `false`면 `image`와 같은 텐서를 내보내 출력이 비지 않습니다. 셀 배치 전체에도 같은 크기 안전 한도가 적용되며, 이 검사는 디코딩 전에 끝납니다.
+- 출력 **`image_1` … `image_8`** (`output_cells`를 켜면 생깁니다): 이미지를 **한 장씩 따로** 꺼냅니다. 레퍼런스를 한 장씩 받아야 하는 모델에 바로 연결할 수 있습니다. 노드에는 가지고 있는 그림 수만큼만 보이고(들어올 그림이 아직 계산 전이면 8개 전부), **연결된 단자는 절대 사라지지 않습니다.** `cells` 배치와 달리 **여백이 붙지 않아서** `image_2`는 합성 결과에서 가지는 크기 그대로(`cells_resolution = source`면 원본 크기) 나옵니다. 그림 수보다 뒤쪽 단자는 1픽셀 검정 이미지를 냅니다(빈 값이 흘러가면 엉뚱한 노드에서 터지기 때문입니다). 새 단자는 `image`·`cells`·`width`·`height` **뒤**에 붙어서 기존 워크플로우의 연결이 밀리지 않습니다.
 - **`cells_resolution`** (`output_cells`가 켜져 있을 때 표시): `placed`(기본)는 합성 결과에 놓인 크기 그대로, 셀은 가장 큰 배치 크기입니다. `source`는 **리사이즈 전 원본(Crop 적용) 크기**로 넣고 셀은 가장 큰 원본 크기가 됩니다 — 합성본은 작게 만들면서 개별 참조는 원본 해상도로 받고 싶을 때 씁니다. 이미지별 파일이 필요하면 `cells` 배치를 배치 분리 노드로 나누세요.
 
 ## 파라미터
@@ -423,7 +361,7 @@ white / black / red / green / blue / custom
 
 ## 예제 워크플로우 · 한국어 UI
 
-**예제 워크플로우** — ComfyUI 템플릿 브라우저(사이드바의 Templates)에 `Comfyui-Image-Stitch` 항목으로 두 워크플로우가 나타납니다. `multi-stitch-paste-strip`은 노드를 선택하고 Ctrl+V 하는 기본 흐름이고, `multi-stitch-grid-from-image-batch`는 ComfyUI에 포함된 `example.png` 세 장을 `Batch Images`로 묶어 `images` 입력에 넣고 2열 Grid와 `cells` 출력까지 보여 주므로 바로 Queue 할 수 있습니다. 파일은 `example_workflows/`에 있습니다.
+**예제 워크플로우** — ComfyUI 템플릿 브라우저(사이드바의 Templates)에 `Comfyui-Image-Stitch` 항목으로 세 워크플로우가 나타납니다. `multi-stitch-paste-strip`은 노드를 선택하고 Ctrl+V 하는 기본 흐름입니다. `multi-stitch-grid-from-several-inputs`는 ComfyUI에 포함된 `example.png` 세 장을 `images`·`images_2`·`images_3`에 바로 연결하고(연결하면 다음 단자가 열립니다) 2열 Grid와 `cells` 출력까지 보여 줍니다. `multi-stitch-references-one-by-one`은 크롭한 그림(코어 `Image Crop` — 얼굴 크롭 노드로 바꿔 쓰세요)과 다른 그림을 넣고, 각각을 `image_1`·`image_2` 출력으로 한 장씩 꺼냅니다. 모두 바로 Queue 할 수 있고, 제목줄의 `▶ Inputs`로 앞쪽 노드만 실행해 볼 수도 있습니다. 파일은 `example_workflows/`에 있습니다.
 
 **한국어 UI** — 설정(⚙) → Locale을 한국어로 두면 이 노드의 위젯 이름, 선택지, 툴팁, 노드 설명이 한국어로 표시됩니다(`locales/ko/nodeDefs.json`). 노드 이름 `Multi Stitch Images`와 이 문서의 파라미터 표기는 영문 그대로라 검색과 대조가 그대로 됩니다. 툴바 버튼의 문구는 영문입니다.
 
@@ -485,7 +423,7 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 - **Estimated final resolution** displayed inside the node
 - **Composite preview** inside the node — the real layout before you queue
 - Output size options: **`output_limit`** and a fixed Grid **cell size**
-- Optional **IMAGE input** plus a per-image **`cells`** output
+- **Several IMAGE inputs** (`images`, `images_2`…) — what arrives shows on the node as cards and in the preview, and **`▶ Inputs`** in the title bar runs just the nodes feeding them (a Crop Head, say) to check ahead — plus a per-image **`cells`** output
 - **↶ / ↷ undo and redo**
 - A list that **grows downward** with the images (no scrolling)
 - **Relink** an image whose file went missing, keeping its crop and order
@@ -493,102 +431,29 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 - Standard `IMAGE` output → `Preview Image`, `Save Image`, `VAE Encode`, etc.
 - No extra Python packages required — only server-side video decoding uses PyAV, which current ComfyUI already installs (and `requirements.txt` lists it for ComfyUI-Manager)
 
+## Quick start
+
+1. **Add the node** — double-click the canvas and search for `Multi Stitch Images` (`image/transform`).
+2. **Add images** — click the node to select it and press **Ctrl+V**. `+ Add` and drag-and-drop work too.
+3. **Tidy up** — click a card to crop, rotate or blur it, drag it to reorder, right-click it to duplicate, copy, replace or remove.
+4. **Connect** — wire `image` to `Preview Image` or a model node. The node's own preview shows the stitched result before you queue.
+
+To stitch what other nodes produce (a face crop, say), plug them into **`images`, `images_2`…** The **`▶ Inputs`** button in the title bar runs only the nodes feeding them and fills in the cards and the preview. If a model wants its references **one at a time**, turn `output_cells` on and wire `image_1`, `image_2`…
+
+Ready-made examples are under Templates → `Comfyui-Image-Stitch` in the sidebar.
+
+## Recent changes
+
 ### What changed in 1.13
 
+- **Input previews are ten times faster (1.13.1)** — the previews written on every run so the node can show what its inputs bring took far longer than the stitch itself (about 290 ms for two 1024px frames, about 1.1 s for two 4K ones). A large frame is now shrunk first and saved as a **JPEG (quality 95)**: about 30 ms and about 0.3 s. `Copy` on a card's right-click menu copies that preview, so it is **at most 1536px**, and the notice says the size it copied (a Load Image connected directly is copied from its own file, unreduced).
+- **Many cards are light again (1.13.1)** — the input cards were worked out again for every card; they are worked out once now. With 256 images and 8 inputs the work behind each mouse move went from 4.6 ms to 0.3 ms (at ordinary counts the difference cannot be felt).
+- **Example workflows (1.13.1)** — no `Batch Images` to join the pictures: they go straight into the input sockets (`multi-stitch-grid-from-several-inputs`, the successor of `…-from-image-batch`). `multi-stitch-references-one-by-one` is new: a cropped picture and another one, each taken out on its own `image_1` / `image_2`.
 - **`▶ Inputs`** — while something is plugged into an IMAGE input, the title bar (left of Size; the toolbar in the Vue mode) offers it. It **runs only the nodes feeding this one (a Crop Head and whatever it reads) and this node**, never the heavy model after it, and the input cards and the preview fill in as soon as the pictures arrive. It lights up while an input waits for a run, and a placeholder card (`▶ Click to run the inputs`) does the same.
 - That makes the node an **output node** in ComfyUI's terms, so it runs on every Queue even when nothing reads it (it is cheap). In return, **while nothing reads it, its errors never stop the run**: a fresh node with nothing pasted yet can sit on the canvas, and the error waits, word for word, for whatever gets wired to it. A node that is in use fails exactly as before.
 - On a ComfyUI too old to run part of a workflow the button says so instead of running everything.
 
-
-- **The input pictures show on the node** — what arrives on the IMAGE inputs appears as **teal cards** at the end of the list and in the preview, each marked with its place in the stitch (the N of `image_N`) and the socket it came in on (`in`, `in 2`…).
-- **A Load Image plugged in directly shows the moment it is connected** — its file is on the server already — and follows it when another file is picked.
-- **Through a node that has to compute, like Crop Head**, there is nothing to show before a run: a `Queue once to see it` placeholder holds its place, and **after one run** the picture the node actually received shows until the next run. Plugging something else into that socket brings the placeholder back.
-- Input cards are for looking at (no edit, no remove, no reordering); right-click one to copy its picture. `⧉ Copy` and the number of `image_N` sockets count them too.
-- **Fixed**: 1.11's `images_2`… sockets never appeared in the Vue node (Nodes 2.0) mode.
-
-
-- **Several IMAGE inputs** — connecting `images` opens **`images_2`**, connecting that opens `images_3`, and so on: there is **always one spare socket** (up to eight). Each input **keeps its own size**, exactly as if its picture had been pasted in. For example `Load Image → Crop Head → images` and another `Load Image → images_2` — different sizes, no Image Batch needed.
-- Order is pasted images, then `images`, `images_2`, …; the `image_N` outputs and `size_reference` count the same way.
-- The gallery's `+ N from IMAGE` counted every image instead of the input frames; fixed.
-
-### What changed in 1.10
-
-- **The gallery's previews were a strip (1.10.1)** — the grid split the panel's height between its rows instead of sizing them to their contents, and the picture was the only thing in a card able to shrink. Rows size to content now, and the previews are bigger besides.
-
-- **Each image can leave on its own socket** — `output_cells` also fills **`image_1` … `image_8`**, and the node shows exactly as many as it holds images, never dropping one that is wired. For a model that wants its references one at a time rather than as a batch.
-- **No padding** — a ComfyUI `IMAGE` batch must be one size, so `cells` pads; a socket of its own does not. `image_2` is image 2 at the size it has in the stitched result, or its own with `cells_resolution = source`.
-- The numbered sockets come after the existing four, so no saved workflow's links shift.
-
-### What changed in 1.9
-
-- **`Copy image #N to clipboard` gave you the untouched file (1.9.1)** — the card, the size beside it and the preview all showed the crop; only the clipboard did not. It now copies the picture as the card shows it, at full resolution. **`Copy image #N as uploaded`** sits beside it for the original, and appears only once an image has been edited.
-
-- **The editor walks the list** — `‹` `›` beside Cancel, or the arrow keys, keep the edit and move to the next image without closing the panel. `Apply → close → find the card → click → wait → edit` becomes one key.
-- **Walking past an image costs nothing** — the step commits only where something was changed, so browsing adds no undo steps. The header counts where you are and the arrows stop at either end.
-
-### What changed in 1.8
-
-- **A blur brush in the editor.** `◍ Blur` switches from cropping to painting: drag to blur a face, a plate, a watermark. **Brush** sets the width, **Blur** the strength, both in the picture's own pixels; `Ctrl+Z` takes back a stroke and `Clear blur` removes them all.
-- **Stored, not burnt in** — like the crop, the strokes are numbers on the item, so the source file is untouched, a rotation carries them round with the picture, and the cards, the preview and `⧉ Copy` all show them.
-- The blur runs on the tensor, not through Pillow's filters, which refuse the 16-bit and float modes the high-depth path exists to protect.
-
-### What changed in 1.7
-
-- **Right-click copy in the editor (1.7.1)** — it used to fall through to the browser's menu, whose "Copy image" hands over the canvas as drawn, grid and crop outline included. The editor answers it now: **`Copy crop to clipboard`** gives the crop alone at full resolution, **`Copy whole image to clipboard`** gives the picture.
-
-- **The gallery no longer fills up with the same composition.** It tells images apart by content (size and hash) instead of by file name, so the same photo pasted again — stored under a new name, as every upload is — does not make a second entry indistinguishable from the first. The duplicate files become unreferenced, ready for `Clean up unused files…`.
-
-- **Every image says what it measures.** A card carries its pixel size in its **bottom-right corner**, at half the card's type size, and a cropped card carries the size the crop leaves, in the amber its ✂ badge already uses. Hover a card and the status line shows both — `3000 × 2000 → 1400 × 2000`.
-- **The editor counts the crop while you drag it.** Its header showed the source size and nothing else, so the size a crop produced could only be found out after applying it; it now reads `1080 × 1920 → 792 × 1411` and follows the rectangle, which is what lets you crop *to* a size instead of towards one.
-- Both numbers come from the function the server crops with, rounding included, so the UI cannot report a resolution the run would not produce.
-
-### What changed in 1.6
-
-- **Zoom and pan in the image editor.** A crop could only be as precise as the image was small — a 4000px photo drawn at 1000px moved four pixels per screen pixel. The editor now zooms to **16×**: the wheel zooms **around the pointer** so the detail under it stays still, and `+ / − / Fit` and the keys `+ / - / 0` do the same.
-- Pan with a **middle-button drag** or **space held with the left button**, leaving the left button free for drawing a crop. Zooming in shrinks the grab areas and the minimum crop with it, so a crop can be trimmed **to the pixel**.
-
-### What changed in 1.5
-
-- **`grid_target_aspect`** — in grid mode, name the shape the finished canvas should have instead of fixing the column count. Every count is laid out and the one landing closest wins: eight squares become 4x2 at `16:9`, 3x3 at `1:1`, 2x4 at `9:16`. `off` keeps `grid_columns`, as before.
-- The choice is made once per run, so the estimate, the composition and the `cells` output describe the same grid — and the in-node preview mirrors it, checked against the backend by the parity test.
-
-### What changed in 1.4
-
-- **Edit several images at once** — a card's **number is its checkbox**: click to pick it out, click again to drop it. Selected cards are outlined and counted in the status line, and right-clicking one gives a menu about the whole group: crop them all to a shape, rotate, flip, reset the crop, duplicate, move to either end, remove — each **one undo step**. Dragging one selected card carries the whole group.
-- `Select all images` / `Deselect …` are on the node's own menu.
-- No modifier keys: the frontend hands a node's `onMouseDown` an event with every modifier false whichever key is held, and Ctrl-drag is the canvas's own multi-node selection. Measured in a running ComfyUI before the badge was chosen.
-
-### What changed in 1.3
-
-- **`size_aspect`** — the `width` / `height` outputs can take a **shape**, from the widget or from the chips under the size panel's box. `reference` (the default) follows the reference image exactly as before; pick `9:16` and they take that ratio while **keeping the same pixel count**. No second node needed when the source is 3:4 but the model wants 9:16.
-- **Nodes 2.0 uses the same columns as the canvas** — the Vue mode was fixed at three columns whatever the node's width, so one node showed 8 columns on the canvas and 3 in Vue. Both call one function in `shared.js` now.
-- **The Vue view measures its own height** — its toolbar wraps to two rows at the default width but was counted as one, leaving it 15px short. It is read from the DOM now, with a `ResizeObserver` for resizes.
-
-### What changed in 1.2
-
-- **One toolbar row** `+ Add · Clear · ⧉ Copy · ↶ ↷ · Preview · Options` and **folded advanced options** — a fresh node shows five widget rows instead of ten. A non-default option stays visible while folded.
-- **`⧉ Copy`** renders the stitched result in the browser and puts it on the clipboard without queueing.
-- **`match_image_size` defaults to `true`** — a new node lines images up by height (width in a vertical strip) from the start. Saved workflows keep their own value.
-- **`match_reference`** — choose the image `match_image_size` matches to: first, largest or smallest (under `Options ▸`). The default, `smallest`, lines images up without upscaling and without reordering; a workflow saved before the option existed opens with `first`, as it behaved then.
-- **Gallery** — `🖼` in the title bar (left of the `?`, beside `📐 Size`) lists every composition this node type has stitched, each with a preview. A run records the image list, its crops, the order and the settings as one entry; stitching the same composition again keeps one entry and counts the use. **The same composition means the same pictures, by content — size and hash — not by file name**, so re-pasting a photo that is stored again under a fresh name does not leave a second entry that looks identical; the duplicate files it made stop being referenced and `Clean up unused files…` can reclaim them. One picture used twice in a composition is still two images. `Load` puts a composition back into the node, images and settings together; `Add` appends only its images. Names are editable, 200 entries are kept and the least recently used go first — `☆` on a preview **pins** an entry, which sorts it to the front and puts it out of the cap's reach — and `Load` and `Add` count as using an entry, so one you keep reaching for stays. Entries are files under `input/multi_stitch/gallery/`, so they survive a restart. `save every run` turns the recording off, leaving `＋ Save current`; that setting lives with the gallery on the server, so no node widget is added and no saved workflow shifts. The header says how much `input/multi_stitch` holds and how much of it no entry references, and `Clean up unused files…` deletes exactly that: never a file an open node uses, though a workflow saved on disk cannot be detected, which the confirmation says. Deleting an entry keeps its files unless you choose `Delete + files`.
-- **Card controls** — an image card carries one button, the `×` at its top right, plus its number (and the crop / rotation marks). The `×` is answered before the card is picked up, so pressing it never turns into a drag. **Click to edit, drag to reorder, right-click for the rest**. Right-clicking a card opens **the card's own menu**, titled `Image #N` and holding only `Edit image #N…`, `Duplicate image #N`, `Copy image #N to clipboard`, `Replace image #N…` and `Remove image #N` — not five more lines on the node's long menu. `Duplicate` adds another card here; `Copy … to clipboard` puts the image on the clipboard for Ctrl+V or another program. The node's own menu (title, widgets, empty space) is unchanged and keeps what is about the node: `Copy stitched result`, the size panel and the gallery. While a card is dragged a blue bar marks the slot it would drop into. (A video card keeps its `×`, since clicking it opens the frame picker.) **Widening the node adds columns** rather than stretching the cards — three at the default 420px, eight at 1200px — so a wider node shows more images and a shorter list. Hovering a card turns the status line into **`Click to edit · drag to reorder · right-click for more`** and the cursor into a pointer, so the gestures say themselves where they are used.
-- **Duplicate** — adds the same image once more, right after it. It points at the file already uploaded, so nothing is uploaded again, and the copy's crop, rotation and flips are edited independently of the original. The step is undoable.
-- **Vue node mode** — with ComfyUI's **Vue Nodes** (Nodes 2.0) setting on, the node body is a Vue component, so the canvas-drawn status line, toolbar, preview band, thumbnails and size panel did not appear. They are now rendered as DOM in that mode, with the buttons and cards calling exactly the same functions as the canvas. The widget that carries them is never saved with the workflow.
-- **Frames from a video** — adding a video opens a frame picker; captured frames are edited and stitched like any image, and the video lives only in the temp folder until the captures are done. A codec the browser cannot play is decoded by PyAV on the server, and "server capture" gives a decoder-exact frame for playable videos too.
-- **`width` / `height` outputs and a size panel** — the reference image's size (the first by default), rescaled to `size_megapixels` and snapped to a multiple of `size_divisible_by` (32 by default). The **`📐 Size`** button in the title bar adds a panel under the node with a box of that aspect and a readout such as `672 x 1184 | 9:16 | 0.80 MP | divisible by 32`.
-- **The list grows downward** — instead of scrolling, the node gets taller with the images so every card is visible.
-- **Tooltips** on every widget and output.
-- **Korean UI** — with ComfyUI's locale set to Korean, widget names, option labels, tooltips and the node description are shown in Korean.
-- **Two example workflows** in the template browser under `Comfyui-Image-Stitch` (paste → strip, IMAGE batch → grid + cells).
-- Full history in [CHANGELOG.md](CHANGELOG.md).
-
-### What changed in 1.1
-
-- New nodes kept **native size** by default: `match_image_size = false`, `output_limit = none` (1.2 returns `match_image_size` to `true`; `output_limit = none` stays). Saved workflows keep their own settings, and the output slots are unchanged.
-- The `cells` output gains **`cells_resolution = source`** for the individual images at their original size, unscaled.
-- **`minimum_image_side`** stops execution before decoding when any placed image's short side would fall below the value (default 0 = off).
-- A referenced file that changes on disk (size or modification time) makes the node **re-execute automatically**.
-- At most **two** thumbnail decodes run at once, and a PNG whose EXIF sits after the pixel data is still read without decoding.
+Earlier changes are in [CHANGELOG.md](CHANGELOG.md).
 
 ## Full workflow example
 
@@ -706,6 +571,13 @@ A card carries no buttons: the whole picture is the target, and everything else 
 - **`⧉ Copy`** in the toolbar → copies the stitched result
 - Drag threshold is measured in **real browser pixels**, not ComfyUI graph coordinates, so canvas zoom does not make normal clicks behave like drags. Release inside that threshold and it counts as a click, opening the editor.
 
+## Editing several at once
+
+- A card's **number is its checkbox** — click to pick it out, click again to drop it. Selected cards are outlined and counted in the status line.
+- Right-click a selected card for a menu about the whole group: crop them all to a shape, rotate, flip, reset the crop, duplicate, move to either end, remove — each **one undo step**.
+- Dragging one selected card carries the whole group. `Select all images` / `Deselect …` are on the node's own menu.
+- No modifier keys: the frontend hands a node's mouse events every modifier as false whichever key is held, and Ctrl-drag is the canvas's own multi-node selection.
+
 ## Strip / Grid
 
 ### Strip
@@ -784,6 +656,7 @@ The outputs are meant for an `Empty Latent Image` or a resize node. The **`📐 
 
 - Optional inputs **`images`**, **`images_2` … `images_8`** (IMAGE; connecting one opens the next): frames of each connected batch are appended, input by input, **after** the pasted images, so a generated or upscaled result is stitched without saving and re-adding it — with nothing pasted, the node works as a batch-to-grid tool. RGBA frames are composited onto the background colour; single-channel frames are expanded to RGB. What comes in shows as teal input cards and in the preview — straight away from a Load Image connected directly, after one run from anything that has to compute first (1.12). **`▶ Inputs`** runs just the nodes feeding this one, and this one, to fetch them (1.13). Pasted images plus frames share the 256 cap, and each frame is held to the same per-image size limit. A frame is converted to CPU float32 only when its turn comes, so a GPU batch is not copied wholesale.
 - Output **`image`**: the stitched result. Output **`cells`**: with `output_cells = true`, one frame per image, each centred in a **uniform cell** and padded with the background colour, as a batch `[N, H, W, 3]` — for passing individual references, such as a face close-up, on their own. With it off, `cells` is the same tensor as `image`, so the output is never empty. The cells batch is subject to the same size safety limit, checked before anything is decoded.
+- Outputs **`image_1` … `image_8`** (they appear when `output_cells` is on): every picture **on a socket of its own**, for a model that wants its references one at a time. The node shows as many as it holds pictures (all eight while an input's pictures are not known yet), and **a wired socket never disappears**. Unlike the `cells` batch they carry **no padding**: `image_2` is image 2 at the size it has in the stitched result (its own size with `cells_resolution = source`). A socket past the end of the list answers with one black pixel, since a `None` travelling down a link fails far from here. The new sockets come **after** `image`, `cells`, `width` and `height`, so no saved workflow's links shift.
 - **`cells_resolution`** (shown while `output_cells` is on): `placed` (default) uses each image at the size it occupies in the composite, in a cell of the largest placed size. `source` uses the **cropped original before any resize**, in a cell of the largest source size — for a small composite alongside full-resolution individual references. For one file per image, split the `cells` batch with a batch-splitting node.
 
 ## Parameters
@@ -857,7 +730,7 @@ If the limit would be exceeded, execution stops with the estimated resolution, m
 
 ## Example workflows · Korean UI
 
-**Example workflows** — ComfyUI's template browser (Templates in the sidebar) lists two workflows under `Comfyui-Image-Stitch`. `multi-stitch-paste-strip` is the everyday flow: select the node and Ctrl+V. `multi-stitch-grid-from-image-batch` batches three copies of ComfyUI's bundled `example.png` with `Batch Images` into the `images` input and shows a two-column grid plus the `cells` output, so it queues as-is. The files live in `example_workflows/`.
+**Example workflows** — ComfyUI's template browser (Templates in the sidebar) lists three workflows under `Comfyui-Image-Stitch`. `multi-stitch-paste-strip` is the everyday flow: select the node and Ctrl+V. `multi-stitch-grid-from-several-inputs` plugs three copies of ComfyUI's bundled `example.png` straight into `images`, `images_2` and `images_3` (plugging one in opens the next socket) and shows a two-column grid plus the `cells` output. `multi-stitch-references-one-by-one` takes a cropped picture (the core `Image Crop` — swap in a face-crop node) and another one, and hands each out on its own `image_1` / `image_2` output. All of them queue as-is, and `▶ Inputs` in the title bar runs just the nodes feeding the stitch. The files live in `example_workflows/`.
 
 **Korean UI** — with Settings (⚙) → Locale set to Korean, this node's widget names, option labels, tooltips and description appear in Korean (`locales/ko/nodeDefs.json`). The node name `Multi Stitch Images` and the parameter names in this document stay in English, so search and cross-reference keep working. The toolbar labels are English.
 
