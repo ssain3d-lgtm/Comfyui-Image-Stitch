@@ -13,7 +13,7 @@
 numpy>=2.2.6,<3
 pillow>=12.3.0,<13
 torch>=2.14.1,<3
-aiohttp>=3.14.3,<4
+aiohttp>=3.14.5,<4
 
 # Server-side video decoding for the frame picker routes.
 av>=12,<20
