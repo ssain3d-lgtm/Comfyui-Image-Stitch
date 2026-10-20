@@ -90,6 +90,67 @@ class GalleryTests(unittest.TestCase):
         self.assertNotIn(pair["id"], (first["id"], other["id"]))
         self.assertEqual(len(gallery.list_entries()), 3)
 
+    def test_blur_and_paint_are_part_of_what_makes_an_image_itself(self):
+        # A face blurred out is not the composition it was before, and a cover
+        # painted over it is another. Left out of the key, they were all one
+        # entry, and the one stored was whichever was recorded first.
+        blur = {"strength": 0.01, "strokes": [{"r": 0.05, "pts": [[0.5, 0.5]]}]}
+        paint = {"strokes": [{"r": 0.05, "c": "#808080", "a": 1.0, "pts": [[0.5, 0.5]]}]}
+        recolour = {"strokes": [{**paint["strokes"][0], "c": "#ff0000"}]}
+        settings = {"direction": "right"}
+        plain = gallery.record([_item("a.png")], settings, self.preview())
+        blurred = gallery.record([_item("a.png", blur=blur)], settings, None)
+        painted = gallery.record([_item("a.png", paint=paint)], settings, None)
+        both = gallery.record([_item("a.png", blur=blur, paint=paint)], settings, None)
+        other = gallery.record([_item("a.png", paint=recolour)], settings, None)
+        ids = [entry["id"] for entry in (plain, blurred, painted, both, other)]
+        self.assertEqual(len(set(ids)), 5, "five different pictures of the same file")
+
+        # What comes back is what went in.
+        stored = {entry["id"]: entry["images"][0] for entry in gallery.list_entries()}
+        self.assertEqual(stored[blurred["id"]]["blur"], blur)
+        self.assertEqual(stored[painted["id"]]["paint"], paint)
+        self.assertNotIn("paint", stored[plain["id"]])
+
+        # The same strokes are the same composition.
+        again = gallery.record([_item("a.png", paint=json.loads(json.dumps(paint)))], settings, None)
+        self.assertEqual(again["id"], painted["id"])
+        self.assertEqual(again["uses"], 2)
+
+    def test_an_entry_keyed_before_blur_counted_is_rekeyed_not_duplicated(self):
+        blur = {"strength": 0.01, "strokes": [{"r": 0.05, "pts": [[0.5, 0.5]]}]}
+        settings = {"direction": "right"}
+        entry = gallery.record([_item("a.png", blur=blur)], settings, None)
+        json_path, _ = gallery._entry_paths(entry["id"])
+        stored = json.loads(json_path.read_text(encoding="utf-8"))
+        # What the previous version wrote: its key could not see the blur.
+        stored["key_v"] = 2
+        stored["key"] = gallery.composition_key([_item("a.png")], settings)
+        json_path.write_text(json.dumps(stored), encoding="utf-8")
+
+        again = gallery.record([_item("a.png", blur=blur)], settings, None)
+        self.assertEqual(again["id"], entry["id"])
+        self.assertEqual(len(gallery.list_entries()), 1)
+        # And it no longer answers to the picture without the blur.
+        plain = gallery.record([_item("a.png")], settings, None)
+        self.assertNotEqual(plain["id"], entry["id"])
+
+    def test_a_version_two_entry_with_no_strokes_is_upgraded_without_reading_its_files(self):
+        # Version 3 changed the key only for an entry whose images carry a blur
+        # or paint, so the rest are not worth rehashing for the upgrade.
+        entry = gallery.record([_item("a.png"), _item("b.png")], {"direction": "right"}, None)
+        json_path, _ = gallery._entry_paths(entry["id"])
+        stored = json.loads(json_path.read_text(encoding="utf-8"))
+        stored["key_v"] = 2
+        json_path.write_text(json.dumps(stored), encoding="utf-8")
+
+        with patch.object(gallery, "composition_key", side_effect=AssertionError("rehashed")):
+            key = gallery._entry_key(gallery.list_entries()[0])
+        self.assertEqual(key, entry["key"], "the key it already had still stands")
+        upgraded = json.loads(json_path.read_text(encoding="utf-8"))
+        self.assertEqual((upgraded["key_v"], upgraded["key"]), (gallery._KEY_VERSION, entry["key"]),
+                         "written back, so the question is not asked again")
+
     def test_an_entry_from_before_content_keys_is_matched_and_upgraded_once(self):
         entry = gallery.record([_item("a.png")], {"direction": "right"}, None)
         json_path, _ = gallery._entry_paths(entry["id"])

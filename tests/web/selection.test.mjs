@@ -77,6 +77,42 @@ describe("editing several at once", () => {
         assert.equal(n._msImages[1].flip_h, false);
     });
 
+    it("carries the blur and the paint with the picture through a turn or a flip", () => {
+        // Strokes are stored against the transformed picture, as the crop is, so
+        // a turn that moved only the crop would leave a blurred face behind.
+        const n = node(2);
+        const blur = { strength: 0.01, strokes: [{ r: 0.05, pts: [[0.2, 0.3], [0.4, 0.3]] }] };
+        const paint = { strokes: [{ r: 0.04, c: "#808080", a: 0.5, pts: [[0.2, 0.3]] }] };
+        Object.assign(n._msImages[0], { blur, paint });
+        const close = (got, want) => got.every((point, i) => point.every((v, j) => Math.abs(v - want[i][j]) < 1e-9));
+
+        // A quarter turn clockwise sends (x, y) to (1 - y, x).
+        assert.equal(sel.rotateSelected(n, [0, 1], 90), 2);
+        const turned = n._msImages[0];
+        assert.ok(close(turned.blur.strokes[0].pts, [[0.7, 0.2], [0.7, 0.4]]), JSON.stringify(turned.blur));
+        assert.ok(close(turned.paint.strokes[0].pts, [[0.7, 0.2]]), JSON.stringify(turned.paint));
+        assert.deepEqual(
+            [turned.blur.strength, turned.blur.strokes[0].r, turned.paint.strokes[0].r, turned.paint.strokes[0].c, turned.paint.strokes[0].a],
+            [0.01, 0.05, 0.04, "#808080", 0.5],
+            "only the points move",
+        );
+        assert.equal("blur" in n._msImages[1] || "paint" in n._msImages[1], false, "an image with none gets none");
+
+        // Turned back, they are where they started.
+        sel.rotateSelected(n, [0], 270);
+        assert.ok(close(n._msImages[0].blur.strokes[0].pts, [[0.2, 0.3], [0.4, 0.3]]));
+        assert.ok(close(n._msImages[0].paint.strokes[0].pts, [[0.2, 0.3]]));
+
+        sel.flipSelected(n, [0], "h");
+        assert.ok(close(n._msImages[0].blur.strokes[0].pts, [[0.8, 0.3], [0.6, 0.3]]));
+        sel.flipSelected(n, [0], "v");
+        assert.ok(close(n._msImages[0].paint.strokes[0].pts, [[0.8, 0.7]]));
+        // Both at once is a half turn; one more flip each undoes it.
+        sel.flipSelected(n, [0], "h");
+        sel.flipSelected(n, [0], "v");
+        assert.ok(close(n._msImages[0].paint.strokes[0].pts, [[0.2, 0.3]]));
+    });
+
     it("crops them to a shape, centred, and leaves the ones still loading", () => {
         const n = node(3);
         const dims = { "f0.png": { w: 1000, h: 1000 }, "f1.png": { w: 2000, h: 1000 }, "f2.png": null };

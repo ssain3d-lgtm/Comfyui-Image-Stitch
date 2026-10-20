@@ -45,11 +45,14 @@ SETTING_KEYS = (
     "minimum_image_side", "match_reference", "size_reference", "size_megapixels",
     "size_divisible_by", "size_aspect", "grid_target_aspect",
 )
-_ITEM_KEYS = ("filename", "subfolder", "type", "crop", "rotation", "flip_h", "flip_v", "source", "blur")
+_ITEM_KEYS = ("filename", "subfolder", "type", "crop", "rotation", "flip_h", "flip_v", "source", "blur", "paint")
 # What makes one image in a composition itself: the picture, and the edits on
-# it. The name is not among them — see composition_key.
-_EDIT_KEYS = ("crop", "rotation", "flip_h", "flip_v")
-_KEY_VERSION = 2
+# it — the blur and the paint included, since a face taken out is not the
+# composition it was. The name is not among them — see composition_key.
+_EDIT_KEYS = ("crop", "rotation", "flip_h", "flip_v", "blur", "paint")
+# 3: the blur and the paint count. An entry keyed by 2 is rekeyed from the
+# images it holds the next time it is compared, as 1 was before it.
+_KEY_VERSION = 3
 _HASH_CHUNK = 1 << 20
 _HASH_CACHE_LIMIT = 2048
 # path -> (size, mtime_ns, fingerprint). A stored image is never written twice
@@ -188,6 +191,11 @@ def composition_key(images: list[dict], settings: dict) -> str:
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()
 
 
+def _has_strokes(entry: dict) -> bool:
+    """Whether any image of a stored entry carries a blur or paint field."""
+    return any(isinstance(image, dict) and ("blur" in image or "paint" in image) for image in entry.get("images") or [])
+
+
 def _entry_key(entry: dict) -> str:
     """A stored entry's composition key.
 
@@ -196,6 +204,14 @@ def _entry_key(entry: dict) -> str:
     written back, so the hashing happens once per entry, not once per run.
     """
     if entry.get("key_v") == _KEY_VERSION and isinstance(entry.get("key"), str):
+        return entry["key"]
+    if entry.get("key_v") == 2 and isinstance(entry.get("key"), str) and not _has_strokes(entry):
+        # Version 3 counts the blur and the paint, which changes the key only of
+        # an entry that has some. For every other the two agree, and reading
+        # every file of a full gallery to find that out would be the price of
+        # an upgrade.
+        entry["key_v"] = _KEY_VERSION
+        _write_entry(entry)
         return entry["key"]
     entry["key"] = composition_key(entry.get("images") or [], entry.get("settings") or {})
     entry["key_v"] = _KEY_VERSION

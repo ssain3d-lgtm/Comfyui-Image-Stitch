@@ -336,18 +336,31 @@ _MAX_BLUR_POINTS = 20_000
 _MAX_BLUR_RADIUS = 0.5
 _MAX_BLUR_STRENGTH = 0.25
 
+# Paint is blur's sibling and answers to the same kind of limits. Each stroke
+# carries its own colour and opacity, so one picture can hold a grey cover and
+# a red circle.
+_MAX_PAINT_STROKES = 200
+_MAX_PAINT_POINTS = 20_000
+_MAX_PAINT_RADIUS = 0.5
+# A stroke is drawn on a mask finer than the picture and averaged back down,
+# which is what gives it a smooth edge. The finer the mask the more it costs,
+# so it is never more than this many samples, however large the stroke is.
+_PAINT_MAX_SUPERSAMPLE = 4
+_PAINT_SUPERSAMPLE_BUDGET = 32 * 1024 * 1024
+_HEX_COLOUR = re.compile(r"#[0-9a-fA-F]{6}")
 
-def _blur_number(value: object) -> float | None:
+
+def _stroke_number(value: object) -> float | None:
     """A real number, or None for anything else — a string, a null, a NaN."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return float(value) if math.isfinite(value) else None
 
 
-def _blur_point(point: object) -> tuple[float, float] | None:
+def _stroke_point(point: object) -> tuple[float, float] | None:
     if not isinstance(point, (list, tuple)) or len(point) != 2:
         return None
-    x, y = _blur_number(point[0]), _blur_number(point[1])
+    x, y = _stroke_number(point[0]), _stroke_number(point[1])
     if x is None or y is None:
         return None
     # A stroke drawn off the edge keeps going: only absurd values are cut.
@@ -364,7 +377,7 @@ def _normalize_blur(item: object) -> dict | None:
     blur = item.get("blur") if isinstance(item, dict) else None
     if not isinstance(blur, dict) or not isinstance(blur.get("strokes"), list):
         return None
-    strength = _blur_number(blur.get("strength"))
+    strength = _stroke_number(blur.get("strength"))
     if strength is None or strength <= 0:
         return None
 
@@ -373,12 +386,12 @@ def _normalize_blur(item: object) -> dict | None:
     for raw in blur["strokes"][:_MAX_BLUR_STROKES]:
         if not isinstance(raw, dict) or not isinstance(raw.get("pts"), list):
             continue
-        radius = _blur_number(raw.get("r"))
+        radius = _stroke_number(raw.get("r"))
         if radius is None or radius <= 0:
             continue
         points = []
         for point in raw["pts"][:budget]:
-            mapped = _blur_point(point)
+            mapped = _stroke_point(point)
             if mapped is not None:
                 points.append(mapped)
         budget -= len(points)
@@ -476,6 +489,141 @@ def _apply_blur(
     weights = _gaussian_blur(weights.view(1, 1, height, width), min(8.0, sigma * 0.3))
     mixed = blurred * weights + planes * (1.0 - weights)
     return mixed.movedim(1, -1).clamp_(0.0, 1.0)
+
+
+def _paint_colour(value: object) -> str | None:
+    """"#rrggbb" in lower case, or None for anything that is not that."""
+    if isinstance(value, str) and _HEX_COLOUR.fullmatch(value):
+        return value.lower()
+    return None
+
+
+def _normalize_paint(item: object) -> dict | None:
+    """The paint strokes an item carries, or None when there are none to draw.
+
+    Coordinates and radii mean what they mean for blur: fractions of the
+    *transformed* image, and of its longest side. A stroke with no colour
+    ("#rrggbb") or no opacity has nothing to draw and is dropped.
+    """
+    paint = item.get("paint") if isinstance(item, dict) else None
+    if not isinstance(paint, dict) or not isinstance(paint.get("strokes"), list):
+        return None
+
+    budget = _MAX_PAINT_POINTS
+    strokes = []
+    for raw in paint["strokes"][:_MAX_PAINT_STROKES]:
+        if not isinstance(raw, dict) or not isinstance(raw.get("pts"), list):
+            continue
+        radius = _stroke_number(raw.get("r"))
+        opacity = _stroke_number(raw.get("a"))
+        colour = _paint_colour(raw.get("c"))
+        if radius is None or radius <= 0 or opacity is None or opacity <= 0 or colour is None:
+            continue
+        points = []
+        for point in raw["pts"][:budget]:
+            mapped = _stroke_point(point)
+            if mapped is not None:
+                points.append(mapped)
+        budget -= len(points)
+        if points:
+            strokes.append({
+                "r": min(radius, _MAX_PAINT_RADIUS), "pts": points, "c": colour, "a": min(opacity, 1.0),
+            })
+        if budget <= 0:
+            break
+    return {"strokes": strokes} if strokes else None
+
+
+def _paint_window(
+    stroke: dict,
+    size: tuple[int, int],
+    box: tuple[int, int, int, int],
+    shape: tuple[int, int],
+) -> tuple[int, int, int, int] | None:
+    """The pixels of the cropped picture a stroke can reach: (left, top, right, bottom).
+
+    A stroke is only ever drawn and blended inside this window, so a dab on a
+    large picture costs the size of the dab and not the size of the picture.
+    None when the stroke lies wholly outside the piece that was kept.
+    """
+    long_side = max(max(size), 1)
+    reach = max(0.5, stroke["r"] * long_side) + 1.0
+    xs = [x * size[0] - box[0] for x, _ in stroke["pts"]]
+    ys = [y * size[1] - box[1] for _, y in stroke["pts"]]
+    left = max(0, math.floor(min(xs) - reach))
+    top = max(0, math.floor(min(ys) - reach))
+    right = min(shape[0], math.ceil(max(xs) + reach))
+    bottom = min(shape[1], math.ceil(max(ys) + reach))
+    if left >= right or top >= bottom:
+        return None
+    return left, top, right, bottom
+
+
+def _paint_coverage(
+    stroke: dict,
+    size: tuple[int, int],
+    box: tuple[int, int, int, int],
+    window: tuple[int, int, int, int],
+) -> np.ndarray:
+    """How much of each pixel of `window` the stroke covers, floats from 0 to 1.
+
+    The stroke is one shape: a path that crosses itself covers a pixel once, so
+    a translucent stroke is not darker where it overlaps itself. It is drawn at
+    a few times the picture's resolution and averaged down, which is what makes
+    the edge smooth where Pillow's own drawing leaves a staircase.
+    """
+    left, top, right, bottom = window
+    width, height = right - left, bottom - top
+    factor = max(1, min(_PAINT_MAX_SUPERSAMPLE, math.isqrt(_PAINT_SUPERSAMPLE_BUDGET // (width * height))))
+    long_side = max(max(size), 1)
+    radius = max(0.5, stroke["r"] * long_side) * factor
+    # The picture's coordinates run along the edges of its pixels and Pillow's
+    # through their middles: half a sample apart.
+    points = [
+        ((x * size[0] - box[0] - left) * factor - 0.5, (y * size[1] - box[1] - top) * factor - 0.5)
+        for x, y in stroke["pts"]
+    ]
+    mask = Image.new("L", (width * factor, height * factor), 0)
+    draw = ImageDraw.Draw(mask)
+    if len(points) > 1:
+        draw.line(points, fill=255, width=max(1, round(radius * 2)), joint="curve")
+    # Round caps, which ImageDraw.line does not give its ends, and the dot a
+    # single tap leaves behind. Pillow's ellipse box includes its far edge.
+    dot = radius - 0.5
+    for x, y in (points[0], points[-1]):
+        draw.ellipse((x - dot, y - dot, x + dot, y + dot), fill=255)
+    if factor > 1:
+        mask = mask.reduce(factor)
+    return np.asarray(mask, dtype=np.float32) / 255.0
+
+
+def _apply_paint(
+    image: torch.Tensor,
+    spec: dict,
+    size: tuple[int, int],
+    box: tuple[int, int, int, int],
+) -> torch.Tensor:
+    """`image` — one cropped, transformed picture — with the paint laid over it.
+
+    The strokes go on in the order they were drawn, each at its own opacity, so
+    two that overlap build up the way brush strokes do. It works on the tensor,
+    like the blur, so a 16-bit file stays 16-bit. `image` is changed in place
+    and returned: it is the one decode this picture has, nothing else holds it.
+    """
+    height, width = image.shape[1], image.shape[2]
+    for stroke in spec["strokes"]:
+        window = _paint_window(stroke, size, box, (width, height))
+        if window is None:
+            continue
+        left, top, right, bottom = window
+        coverage = _paint_coverage(stroke, size, box, window)
+        if not coverage.any():
+            continue
+        alpha = torch.from_numpy(coverage * stroke["a"]).view(1, bottom - top, right - left, 1)
+        colour = torch.tensor([int(stroke["c"][i:i + 2], 16) / 255.0 for i in (1, 3, 5)], dtype=image.dtype)
+        region = image[:, top:bottom, left:right, :]
+        region.mul_(1.0 - alpha).add_(colour * alpha)
+    return image
 
 
 def _crop_box(width: int, height: int, crop: object) -> tuple[int, int, int, int]:
@@ -684,7 +832,11 @@ def _load_image(
 
     tensor = torch.from_numpy(array).unsqueeze(0)
     blur = _normalize_blur(item)
-    return tensor if blur is None else _apply_blur(tensor, blur, (width, height), box)
+    if blur is not None:
+        tensor = _apply_blur(tensor, blur, (width, height), box)
+    # On top of the blur, so a cover hides what a blur under it would only smear.
+    paint = _normalize_paint(item)
+    return tensor if paint is None else _apply_paint(tensor, paint, (width, height), box)
 
 
 def _resize_exact(image: torch.Tensor, height: int, width: int) -> torch.Tensor:

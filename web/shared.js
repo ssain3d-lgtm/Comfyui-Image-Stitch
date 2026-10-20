@@ -482,6 +482,99 @@ export function blurKey(blur) {
     return `${spec.strength}:${spec.strokes.map(({ r, pts }) => `${r}/${pts.length}/${pts[0]}/${pts.at(-1)}`).join(";")}`;
 }
 
+// Paint is blur's sibling: strokes in the same coordinates, fractions of the
+// transformed image with radii against its longest side, but each stroke
+// carries its own colour and opacity — one picture can hold a grey cover and a
+// red circle. Mirrors the _MAX_PAINT_* limits in multi_stitch.py.
+export const MAX_PAINT_STROKES = 200;
+export const MAX_PAINT_POINTS = 20000;
+export const MAX_PAINT_RADIUS = 0.5;
+const HEX_COLOUR = /^#[0-9a-f]{6}$/i;
+
+// The strokes an item carries, or null when there is nothing to draw. A stroke
+// with no "#rrggbb" colour or no opacity has nothing to draw and is dropped.
+export function normalizePaint(paint) {
+    if (!paint || typeof paint !== "object" || !Array.isArray(paint.strokes)) return null;
+
+    let budget = MAX_PAINT_POINTS;
+    const strokes = [];
+    for (const raw of paint.strokes.slice(0, MAX_PAINT_STROKES)) {
+        if (!raw || !Array.isArray(raw.pts)) continue;
+        const radius = finite(raw.r);
+        const opacity = finite(raw.a);
+        if (radius === null || radius <= 0 || opacity === null || opacity <= 0) continue;
+        if (typeof raw.c !== "string" || !HEX_COLOUR.test(raw.c)) continue;
+        const pts = [];
+        for (const point of raw.pts.slice(0, budget)) {
+            if (!Array.isArray(point) || point.length !== 2) continue;
+            const x = finite(point[0]);
+            const y = finite(point[1]);
+            if (x === null || y === null) continue;
+            pts.push([Math.min(Math.max(x, -0.5), 1.5), Math.min(Math.max(y, -0.5), 1.5)]);
+        }
+        budget -= pts.length;
+        if (pts.length) {
+            strokes.push({ r: Math.min(radius, MAX_PAINT_RADIUS), pts, c: raw.c.toLowerCase(), a: Math.min(opacity, 1) });
+        }
+        if (budget <= 0) break;
+    }
+    return strokes.length ? { strokes } : null;
+}
+
+export function isPainted(item) {
+    return normalizePaint(item?.paint) !== null;
+}
+
+// Whether the pixels themselves differ from the file's, apart from the crop:
+// what decides if a picture has to be drawn through renderTransformedImage.
+export function hasPixelEdits(item) {
+    return isTransformed(item) || isBlurred(item) || isPainted(item);
+}
+
+function mapPaintPoints(paint, transform, map) {
+    const spec = normalizePaint(paint);
+    if (!spec) return null;
+    return {
+        strokes: spec.strokes.map((stroke) => ({
+            ...stroke,
+            pts: stroke.pts.map(([x, y]) => {
+                const out = map({ x, y, w: 0, h: 0 }, transform);
+                return [out.x, out.y];
+            }),
+        })),
+    };
+}
+
+export function paintSourceToView(paint, transform) {
+    return mapPaintPoints(paint, transform, cropSourceToView);
+}
+
+export function paintViewToSource(paint, transform) {
+    return mapPaintPoints(paint, transform, cropViewToSource);
+}
+
+// Identifies the paint for a cache key: every coordinate counts, so a stroke
+// taken back and drawn again a little differently makes a new rendering.
+export function paintKey(paint) {
+    const spec = normalizePaint(paint);
+    if (!spec) return "";
+    let hash = 2166136261;
+    const mix = (n) => {
+        hash = Math.imul(hash ^ n, 16777619) >>> 0;
+    };
+    for (const { r, pts, c, a } of spec.strokes) {
+        mix(Math.round(r * 1e5));
+        mix(Math.round(a * 1e3));
+        for (const letter of c) mix(letter.charCodeAt(0));
+        for (const [x, y] of pts) {
+            mix(Math.round(x * 1e5));
+            mix(Math.round(y * 1e5));
+        }
+        mix(0x7fffffff);
+    }
+    return `${spec.strokes.length}:${hash.toString(36)}`;
+}
+
 export function isCropped(crop) {
     const c = normalizeCrop(crop);
     return Math.abs(c.x) > CROPPED_EPSILON || Math.abs(c.y) > CROPPED_EPSILON ||
@@ -919,6 +1012,94 @@ export function paintBlur(ctx, source, blur, place) {
     ctx.drawImage(layer, 0, 0);
 }
 
+// The layer a translucent stroke is drawn on. It only ever grows: a stroke
+// repaints on every pointer move, and giving a canvas a new size each time is
+// what makes a painting tool feel heavy. Only the part a stroke needs is
+// cleared and read back, so what is left beyond it is never seen.
+let strokeLayerCanvas = null;
+function strokeLayer(width, height) {
+    strokeLayerCanvas ||= document.createElement("canvas");
+    if (strokeLayerCanvas.width < width || strokeLayerCanvas.height < height) {
+        strokeLayerCanvas.width = Math.max(strokeLayerCanvas.width, width);
+        strokeLayerCanvas.height = Math.max(strokeLayerCanvas.height, height);
+    }
+    const layerCtx = strokeLayerCanvas.getContext("2d");
+    layerCtx.setTransform(1, 0, 0, 1, 0, 0);
+    layerCtx.clearRect(0, 0, width, height);
+    return strokeLayerCanvas;
+}
+
+// One stroke as a single shape of one colour: the path with round ends, and
+// the dot a tap leaves.
+function fillStroke(ctx, points, radius, colour) {
+    ctx.strokeStyle = ctx.fillStyle = colour;
+    ctx.lineCap = ctx.lineJoin = "round";
+    ctx.lineWidth = radius * 2;
+    if (points.length > 1) {
+        ctx.beginPath();
+        points.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+        ctx.stroke();
+    }
+    for (const [x, y] of [points[0], points.at(-1)]) {
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.fill();
+    }
+}
+
+// Lays the paint strokes of `paint` over whatever `ctx` already shows, in the
+// order they were drawn. `place` is the one paintBlur takes: it maps the
+// transformed image onto the destination, so the editor can call this for the
+// part of a zoomed image it happens to be showing.
+//
+// An opaque stroke goes straight on. A translucent one is drawn opaque on a
+// layer of its own and laid on once at its opacity, so a path that crosses
+// itself is not darker where it does — only a second stroke builds up. The
+// layer is only as big as the stroke, which is what keeps a dab on a large
+// picture cheap.
+export function paintStrokes(ctx, paint, place) {
+    const spec = normalizePaint(paint);
+    if (!spec) return;
+    const { width, height, scale, offsetX = 0, offsetY = 0, destW, destH } = place;
+    const longSide = Math.max(width, height);
+    for (const { r, pts, c, a } of spec.strokes) {
+        const radius = Math.max(0.5, r * longSide) * scale;
+        const points = pts.map(([x, y]) => [(x * width - offsetX) * scale, (y * height - offsetY) * scale]);
+        let left = Infinity;
+        let top = Infinity;
+        let right = -Infinity;
+        let bottom = -Infinity;
+        for (const [x, y] of points) {
+            left = Math.min(left, x);
+            top = Math.min(top, y);
+            right = Math.max(right, x);
+            bottom = Math.max(bottom, y);
+        }
+        left = Math.max(0, Math.floor(left - radius - 1));
+        top = Math.max(0, Math.floor(top - radius - 1));
+        right = Math.min(destW, Math.ceil(right + radius + 1));
+        bottom = Math.min(destH, Math.ceil(bottom + radius + 1));
+        if (right <= left || bottom <= top) continue;
+
+        if (a >= 1) {
+            ctx.save();
+            fillStroke(ctx, points, radius, c);
+            ctx.restore();
+            continue;
+        }
+        const layer = strokeLayer(right - left, bottom - top);
+        const layerCtx = layer.getContext("2d");
+        layerCtx.save();
+        layerCtx.translate(-left, -top);
+        fillStroke(layerCtx, points, radius, c);
+        layerCtx.restore();
+        ctx.save();
+        ctx.globalAlpha = a;
+        ctx.drawImage(layer, 0, 0, right - left, bottom - top, left, top, right - left, bottom - top);
+        ctx.restore();
+    }
+}
+
 // maxSide > 0 bounds the result's long edge; 0 renders at the source's size,
 // which the crop editor needs for pixel-accurate handles.
 export function renderTransformedImage(source, item, maxSide = 0) {
@@ -949,6 +1130,14 @@ export function renderTransformedImage(source, item, maxSide = 0) {
             destW: canvas.width, destH: canvas.height,
         });
     }
+    // On top of the blur, as the server lays it: a cover hides what a blur
+    // under it would only smear.
+    if (item?.paint) {
+        paintStrokes(ctx, item.paint, {
+            width: dims.width, height: dims.height, scale,
+            destW: canvas.width, destH: canvas.height,
+        });
+    }
     return canvas;
 }
 
@@ -963,14 +1152,14 @@ export function loadTransformedThumb(node, item) {
 
     node._msTransformedCache ||= new Map();
     const t = normalizeTransform(item);
-    const transformKey = `r${t.rotation}:h${t.flip_h ? 1 : 0}:v${t.flip_v ? 1 : 0}:b${blurKey(item?.blur)}`;
+    const transformKey = `r${t.rotation}:h${t.flip_h ? 1 : 0}:v${t.flip_v ? 1 : 0}:b${blurKey(item?.blur)}:p${paintKey(item?.paint)}`;
     const key = thumbKey(item);
     const cached = node._msTransformedCache.get(key);
     if (cached && cached.transformKey === transformKey) return cached;
 
     const dims = transformedDimensions(raw.width, raw.height, t);
-    const painted = { ...t, blur: item?.blur };
-    const identity = t.rotation === 0 && !t.flip_h && !t.flip_v && !isBlurred(item);
+    const painted = { ...t, blur: item?.blur, paint: item?.paint };
+    const identity = !hasPixelEdits(item);
     const state = {
         image: identity ? raw.image : renderTransformedImage(raw.image, painted, THUMB_MAX_SIDE),
         width: dims.width,

@@ -151,6 +151,18 @@ describe("dom view", () => {
         handle.destroy();
     });
 
+    it("marks a card with paint on it, apart from the blur", () => {
+        const blur = { strength: 0.02, strokes: [{ r: 0.1, pts: [[0.4, 0.4]] }] };
+        const paint = { strokes: [{ r: 0.1, c: "#808080", a: 1, pts: [[0.4, 0.4]] }] };
+        const node = fakeNode([item("a.png", { paint }), item("b.png", { blur, paint })]);
+        const handle = view.installDomView(node, actionSpy().actions);
+        const badges = (index) => cards(handle.root)[index].children
+            .find((child) => child.className === "badges").children.map((span) => span.textContent);
+        assert.deepEqual(badges(0), ["1", "✎"]);
+        assert.deepEqual(badges(1), ["2", "◍", "✎"], "both, when both are there");
+        handle.destroy();
+    });
+
     it("leaves the size off a card whose image has not loaded", () => {
         const node = fakeNode([item("a.png", { pending: true })]);
         const handle = view.installDomView(node, actionSpy().actions);

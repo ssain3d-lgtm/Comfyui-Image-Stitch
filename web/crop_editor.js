@@ -10,11 +10,16 @@ import {
     isTextEntry,
     blurSourceToView,
     MAX_BLUR_STROKES,
+    MAX_PAINT_STROKES,
     blurViewToSource,
     normalizeBlur,
     normalizeCrop,
+    normalizePaint,
     normalizeTransform,
     paintBlur,
+    paintSourceToView,
+    paintStrokes,
+    paintViewToSource,
     renderTransformedImage,
     sizeText,
     swallowKey,
@@ -52,10 +57,14 @@ function installStyles() {
 /* The rule below sets display on an element the editor hides with [hidden],
    and an author rule outranks the browser's own [hidden] one whatever its
    specificity, so say it here. */
-.ms-crop-brush{display:flex;align-items:center;gap:8px;color:#cfcfcf;font-size:12px}
-.ms-crop-brush[hidden]{display:none}
+.ms-crop-brush,.ms-crop-brush .for-paint{display:flex;align-items:center;gap:8px;color:#cfcfcf;font-size:12px}
+.ms-crop-brush[hidden],.ms-crop-brush [hidden]{display:none}
 .ms-crop-brush input[type=range]{width:96px;accent-color:#8ab4f8}
 .ms-crop-brush .value{min-width:42px;text-align:right;font-variant-numeric:tabular-nums}
+.ms-swatches{display:flex;align-items:center;gap:5px}
+.ms-crop-controls .swatch{width:22px;height:22px;min-width:22px;padding:0;border-radius:50%;border:2px solid #5f6368}
+.ms-crop-controls .swatch.active{border-color:#8ab4f8;box-shadow:0 0 0 2px #35435d}
+.ms-crop-brush input[type=color]{width:30px;height:24px;padding:0;border:1px solid #5f6368;border-radius:6px;background:#303134;cursor:pointer}
 .ms-crop-menu{position:fixed;z-index:100001;background:#2b2b2b;border:1px solid #4a4a4a;border-radius:6px;padding:3px;display:flex;flex-direction:column;min-width:190px;box-shadow:0 6px 20px rgba(0,0,0,.55);font-size:13px}
 .ms-crop-menu button{background:transparent;border:0;color:#e6e6e6;text-align:left;padding:6px 10px;border-radius:4px;cursor:pointer;font:inherit}
 .ms-crop-menu button:hover{background:#3d5a80}
@@ -105,6 +114,19 @@ function cursorForMode(mode) {
         move: "move",
         new: "crosshair",
     }[mode] || "crosshair";
+}
+
+// The colours on offer for paint: three to cover with, three to mark with. The
+// colour input next to them takes any other.
+const SWATCHES = [
+    ["#808080", "Grey"], ["#ffffff", "White"], ["#000000", "Black"],
+    ["#ff0000", "Red"], ["#00cc44", "Green"], ["#ffd400", "Yellow"],
+];
+
+// The editor's own copy of an item's paint strokes, so drawing one more never
+// reaches into the item until Apply.
+function copyPaint(paint) {
+    return (normalizePaint(paint)?.strokes || []).map((stroke) => ({ ...stroke, pts: [...stroke.pts] }));
 }
 
 // Decodes one of the node's images, or throws in the editor's own voice.
@@ -158,10 +180,16 @@ export async function openCropEditor(node, index) {
           <span class="ms-crop-tools">
             <button class="tool-crop active" title="Crop, rotate and flip">✂ Crop</button>
             <button class="tool-blur" title="Paint a blur over part of the picture">◍ Blur</button>
+            <button class="tool-paint" title="Paint a colour over part of the picture: opaque to cover it, faint to mark it">✎ Paint</button>
           </span>
           <span class="ms-crop-brush" hidden>
             <label>Brush <input type="range" class="brush-size" min="2" max="100" step="1"><span class="value size-value"></span></label>
-            <label>Blur <input type="range" class="brush-strength" min="1" max="100" step="1"><span class="value strength-value"></span></label>
+            <label class="for-blur">Blur <input type="range" class="brush-strength" min="1" max="100" step="1"><span class="value strength-value"></span></label>
+            <span class="for-paint" hidden>
+              <label>Opacity <input type="range" class="paint-opacity" min="5" max="100" step="5"><span class="value opacity-value"></span></label>
+              <span class="ms-swatches"></span>
+              <input type="color" class="paint-color" title="Any other colour">
+            </span>
             <button class="blur-undo" title="Undo the last stroke (Ctrl+Z)">↶ Stroke</button>
             <button class="blur-clear" title="Remove every stroke">Clear blur</button>
           </span>
@@ -196,12 +224,21 @@ export async function openCropEditor(node, index) {
     const brushBar = overlay.querySelector(".ms-crop-brush");
     const cropButton = overlay.querySelector(".tool-crop");
     const blurButton = overlay.querySelector(".tool-blur");
+    const paintButton = overlay.querySelector(".tool-paint");
     const sizeSlider = overlay.querySelector(".brush-size");
     const strengthSlider = overlay.querySelector(".brush-strength");
     const sizeValue = overlay.querySelector(".size-value");
     const strengthValue = overlay.querySelector(".strength-value");
+    const forBlur = overlay.querySelector(".for-blur");
+    const forPaint = overlay.querySelector(".for-paint");
+    const opacitySlider = overlay.querySelector(".paint-opacity");
+    const opacityValue = overlay.querySelector(".opacity-value");
+    const colourInput = overlay.querySelector(".paint-color");
+    const swatchBar = overlay.querySelector(".ms-swatches");
+    const clearButton = overlay.querySelector(".blur-clear");
     const CROP_HINT = hint.textContent;
     const BLUR_HINT = "Drag to paint a blur • Ctrl+Z takes a stroke back • the crop and the rotation still apply";
+    const PAINT_HINT = "Drag to paint • opaque covers, faint marks • Ctrl+Z takes a stroke back";
     let hintText = CROP_HINT;
     // The row wraps around this text, so a short message in its place would
     // move Cancel and Apply. Freeze the box at the width the hint already has.
@@ -231,10 +268,20 @@ export async function openCropEditor(node, index) {
     let spaceHeld = false;
     // The blur brush. Strokes are fractions of the transformed image, as the
     // crop is, and radii fractions of its longest side, which a quarter turn
-    // leaves alone. `painting` is the stroke being drawn.
+    // leaves alone. `painting` is the stroke being drawn, of the kind in
+    // `paintingKind`. The paint brush is the same thing with a colour and an
+    // opacity on every stroke, in a list of its own: `strokes` is the blur's.
     let tool = "crop";
     let strokes = (normalizeBlur(item.blur)?.strokes || []).map((stroke) => ({ r: stroke.r, pts: [...stroke.pts] }));
+    let paintList = copyPaint(item.paint);
+    // The colour and opacity the next paint stroke gets. They belong to the
+    // editor, not to the picture, so they stay put as it moves to the next
+    // one — covering a face on every photo is one colour, picked once.
+    let paintColour = normalizePaint(item.paint)?.strokes.at(-1).c ?? SWATCHES[0][0];
+    let paintOpacity = normalizePaint(item.paint)?.strokes.at(-1).a ?? 1;
+    let lastBrush = "blur";
     let painting = null;
+    let paintingKind = "blur";
     let brushAt = null;
     let brushRadius = 0;
     let blurStrength = 0;
@@ -319,12 +366,24 @@ export async function openCropEditor(node, index) {
         return strokes.length ? { strength: blurStrength / longSide(), strokes } : null;
     }
 
+    function paintValue() {
+        return paintList.length ? { strokes: paintList } : null;
+    }
+
     // The strokes plus whatever is being painted right now, so a stroke shows
     // its blur as it is drawn rather than when the button comes up.
     function liveBlur() {
-        const live = painting ? [...strokes, painting] : strokes;
+        const live = painting && paintingKind === "blur" ? [...strokes, painting] : strokes;
         return live.length ? { strength: blurStrength / longSide(), strokes: live } : null;
     }
+
+    function livePaint() {
+        const live = painting && paintingKind === "paint" ? [...paintList, painting] : paintList;
+        return live.length ? { strokes: live } : null;
+    }
+
+    // Whether a brush is in hand, and so the pointer paints instead of cropping.
+    const brushing = () => tool === "blur" || tool === "paint";
 
     // The crop as the item stores it: a fraction of the working image.
     function cropFraction() {
@@ -343,15 +402,17 @@ export async function openCropEditor(node, index) {
         transform = normalizeTransform(item);
         working = renderTransformedImage(source, transform);
         strokes = (normalizeBlur(item.blur)?.strokes || []).map((stroke) => ({ r: stroke.r, pts: [...stroke.pts] }));
+        paintList = copyPaint(item.paint);
         painting = null;
         drag = null;
         pan = null;
         brushAt = null;
 
         const storedBlur = normalizeBlur(item.blur);
+        const storedPaint = normalizePaint(item.paint);
         // A brush a thirtieth of the picture across, and a blur strong enough
         // to take a face out at that size: both adjustable, neither needing to be.
-        sizeSlider.value = String(Math.round((storedBlur?.strokes[0]?.r ?? 0.03) * 1000));
+        sizeSlider.value = String(Math.round((storedBlur?.strokes[0]?.r ?? storedPaint?.strokes[0]?.r ?? 0.03) * 1000));
         strengthSlider.value = String(Math.round((storedBlur?.strength ?? 0.01) * 2000));
 
         const initialCrop = normalizeCrop(item.crop);
@@ -439,11 +500,13 @@ export async function openCropEditor(node, index) {
         ctx.drawImage(working, view.x, view.y, view.w, view.h, 0, 0, canvas.width, canvas.height);
         // Over a clean picture, never baked into it: a stroke can still be
         // taken back, and a rotation re-renders from the untouched source.
-        paintBlur(ctx, working, liveBlur(), {
+        const placed = {
             width: working.width, height: working.height,
             scale: canvas.width / view.w, offsetX: view.x, offsetY: view.y,
             destW: canvas.width, destH: canvas.height,
-        });
+        };
+        paintBlur(ctx, working, liveBlur(), placed);
+        paintStrokes(ctx, livePaint(), placed);
         zoomLevel.textContent = `${Math.round(working.width / view.w * 100)}%`;
         // The size the image is, and the size this crop makes it: the question
         // the editor is open to answer, answered while the crop is dragged.
@@ -472,7 +535,7 @@ export async function openCropEditor(node, index) {
         ctx.lineTo(x + w, y + 2 * h / 3);
         ctx.stroke();
 
-        if (tool === "blur" && brushAt) {
+        if (brushing() && brushAt) {
             const scale = canvas.width / view.w;
             ctx.save();
             ctx.beginPath();
@@ -513,6 +576,7 @@ export async function openCropEditor(node, index) {
         const sourceCrop = cropViewToSource(cropFraction(), previous);
         // The strength is only along for the ride; the points are what move.
         const sourceStrokes = strokes.length ? blurViewToSource({ strength: 1, strokes }, previous) : null;
+        const sourcePaint = paintList.length ? paintViewToSource({ strokes: paintList }, previous) : null;
 
         transform = normalizeTransform(next);
         working = renderTransformedImage(source, transform);
@@ -527,6 +591,7 @@ export async function openCropEditor(node, index) {
         });
 
         strokes = sourceStrokes ? (blurSourceToView(sourceStrokes, transform)?.strokes || []) : [];
+        paintList = sourcePaint ? (paintSourceToView(sourcePaint, transform)?.strokes || []) : [];
         readBrush();
 
         // A quarter turn swaps the axes, so a locked aspect no longer applies.
@@ -569,8 +634,12 @@ export async function openCropEditor(node, index) {
         }
 
         const p = point(event);
-        if (tool === "blur") {
+        if (brushing()) {
+            paintingKind = tool;
             painting = { r: brushRadius / longSide(), pts: [normalizedPoint(p)] };
+            // A paint stroke is born with the colour and opacity in hand, and
+            // keeps them: changing either later is for the next stroke.
+            if (tool === "paint") Object.assign(painting, { c: paintColour, a: paintOpacity });
             brushAt = p;
             canvas.setPointerCapture(event.pointerId);
             event.preventDefault();
@@ -603,7 +672,7 @@ export async function openCropEditor(node, index) {
 
         const p = point(event);
 
-        if (tool === "blur") {
+        if (brushing()) {
             brushAt = p;
             // One point per third of a brush width: a stroke is a shape, not a
             // recording of the mouse, and the workflow stores what is kept.
@@ -657,9 +726,15 @@ export async function openCropEditor(node, index) {
             try { canvas.releasePointerCapture(event.pointerId); } catch (_) {}
         }
         if (painting) {
-            strokes.push(painting);
+            if (paintingKind === "paint") {
+                paintList.push(painting);
+                if (paintList.length > MAX_PAINT_STROKES) paintList = paintList.slice(-MAX_PAINT_STROKES);
+            } else {
+                strokes.push(painting);
+                if (strokes.length > MAX_BLUR_STROKES) strokes = strokes.slice(-MAX_BLUR_STROKES);
+            }
+            lastBrush = paintingKind;
             painting = null;
-            if (strokes.length > MAX_BLUR_STROKES) strokes = strokes.slice(-MAX_BLUR_STROKES);
             render();
         }
         drag = null;
@@ -679,7 +754,7 @@ export async function openCropEditor(node, index) {
         canvas.style.cursor = spaceHeld ? "grab" : "crosshair";
     });
     canvas.addEventListener("pointerleave", (event) => {
-        if (tool === "blur") {
+        if (brushing()) {
             // The ring belongs to the pointer, so it leaves with it.
             if (!painting) {
                 brushAt = null;
@@ -773,15 +848,20 @@ export async function openCropEditor(node, index) {
         tool = next;
         cropButton.classList.toggle("active", next === "crop");
         blurButton.classList.toggle("active", next === "blur");
-        brushBar.hidden = next !== "blur";
+        paintButton.classList.toggle("active", next === "paint");
+        brushBar.hidden = next === "crop";
+        forBlur.hidden = next !== "blur";
+        forPaint.hidden = next !== "paint";
+        clearButton.textContent = next === "paint" ? "Clear paint" : "Clear blur";
         brushAt = null;
-        canvas.style.cursor = next === "blur" ? "none" : "crosshair";
-        hintText = next === "blur" ? BLUR_HINT : CROP_HINT;
+        canvas.style.cursor = next === "crop" ? "crosshair" : "none";
+        hintText = next === "blur" ? BLUR_HINT : next === "paint" ? PAINT_HINT : CROP_HINT;
         say(null);
         render();
     }
     cropButton.onclick = () => setTool("crop");
     blurButton.onclick = () => setTool("blur");
+    paintButton.onclick = () => setTool("paint");
     sizeSlider.oninput = () => {
         readBrush();
         render();
@@ -790,14 +870,52 @@ export async function openCropEditor(node, index) {
         readBrush();
         render();
     };
+
+    // The colour in hand: a swatch, or anything the colour input offers. The
+    // swatch that matches lights up; a colour of the input's own lights none.
+    const swatches = SWATCHES.map(([colour, name]) => {
+        const swatch = document.createElement("button");
+        swatch.type = "button";
+        swatch.className = "swatch";
+        swatch.title = name;
+        swatch.style.background = colour;
+        swatch.onclick = () => chooseColour(colour);
+        swatchBar.appendChild(swatch);
+        return [colour, swatch];
+    });
+    function chooseColour(colour) {
+        paintColour = colour.toLowerCase();
+        colourInput.value = paintColour;
+        for (const [value, swatch] of swatches) swatch.classList.toggle("active", value === paintColour);
+    }
+    colourInput.oninput = () => chooseColour(colourInput.value);
+    opacitySlider.oninput = () => {
+        paintOpacity = Number(opacitySlider.value) / 100;
+        opacityValue.textContent = `${Math.round(paintOpacity * 100)}%`;
+    };
+    opacitySlider.value = String(Math.round(paintOpacity * 100));
+    opacitySlider.oninput();
+    chooseColour(paintColour);
+
+    // Strokes are taken back from the brush in hand; with the crop tool on,
+    // from whichever brush was used last, then the other.
+    const undoable = () => {
+        if (tool === "paint") return paintList.length ? "paint" : null;
+        if (tool === "blur") return strokes.length ? "blur" : null;
+        const order = lastBrush === "paint" ? ["paint", "blur"] : ["blur", "paint"];
+        return order.find((kind) => (kind === "paint" ? paintList : strokes).length) || null;
+    };
     const undoStroke = () => {
-        if (!strokes.length) return;
-        strokes = strokes.slice(0, -1);
+        const kind = undoable();
+        if (kind === "paint") paintList = paintList.slice(0, -1);
+        else if (kind === "blur") strokes = strokes.slice(0, -1);
+        else return;
         render();
     };
     overlay.querySelector(".blur-undo").onclick = undoStroke;
-    overlay.querySelector(".blur-clear").onclick = () => {
-        strokes = [];
+    clearButton.onclick = () => {
+        if (tool === "paint") paintList = [];
+        else strokes = [];
         render();
     };
 
@@ -852,6 +970,9 @@ export async function openCropEditor(node, index) {
         if (JSON.stringify(normalizeBlur(item.blur)) !== JSON.stringify(normalizeBlur(blurValue()))) {
             return true;
         }
+        if (JSON.stringify(normalizePaint(item.paint)) !== JSON.stringify(normalizePaint(paintValue()))) {
+            return true;
+        }
         const crop = normalizeCrop(item.crop);
         const now = cropFraction();
         return ["x", "y", "w", "h"].some((k) => Math.abs(crop[k] - now[k]) > CROPPED_EPSILON);
@@ -900,6 +1021,9 @@ export async function openCropEditor(node, index) {
         const blur = normalizeBlur(blurValue());
         if (blur) item.blur = { strength: +blur.strength.toFixed(6), strokes: blur.strokes };
         else delete item.blur;
+        const paint = normalizePaint(paintValue());
+        if (paint) item.paint = paint;
+        else delete item.paint;
         const fraction = cropFraction();
         item.crop = {
             x: +fraction.x.toFixed(6),
@@ -969,7 +1093,7 @@ export async function openCropEditor(node, index) {
             swallowKey(event);
             event.preventDefault();
             step(event.key === "ArrowLeft" ? -1 : 1);
-        } else if ((event.ctrlKey || event.metaKey) && /^z$/i.test(event.key) && strokes.length) {
+        } else if ((event.ctrlKey || event.metaKey) && /^z$/i.test(event.key) && undoable()) {
             swallowKey(event);
             event.preventDefault();
             undoStroke();

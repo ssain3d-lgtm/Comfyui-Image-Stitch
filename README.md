@@ -19,6 +19,7 @@
 - **Duplicate**로 같은 이미지 한 장 더 넣기 — 사본은 따로 Crop·회전할 수 있습니다
 - **카드마다 해상도 표시** — Crop한 이미지는 Crop 후 크기까지, 편집기 헤더는 드래그 중에도 실시간
 - **블러 브러시** — 편집기에서 얼굴·번호판 등을 칠해서 가림. 두께/강도 조절, 원본 비파괴
+- **페인트 브러시** — 편집기에서 색을 칠해 가리거나(불투명) 표시(반투명). 색·투명도·두께 조절, 스트로크마다 색이 따로 저장, 원본 비파괴
 - **`⧉ Copy` 버튼 → 합성 결과를 Queue 없이 바로 클립보드 복사**
 - **동영상에서 장면 캡처** — 프레임 단위로 찾아 원본 해상도 PNG로 목록에 추가, 동영상은 저장 공간을 차지하지 않음. 브라우저가 못 여는 코덱은 서버(PyAV)가 디코딩
 - **기준 이미지 크기 출력** — `width`/`height` 출력 단자와 크기 패널: 기준 이미지 크기를 MP 목표로 조정하고 배수(기본 32)로 맞춤
@@ -47,7 +48,7 @@
 
 1. **노드 추가** — 캔버스를 더블클릭해 `Multi Stitch Images`를 검색합니다(`image/transform`).
 2. **이미지 넣기** — 노드를 클릭해 선택하고 **Ctrl+V**. `+ Add`나 드래그 앤 드롭도 됩니다.
-3. **다듬기** — 카드를 클릭하면 Crop·회전·블러, 끌면 순서 변경, 우클릭하면 복제·복사·교체·삭제입니다.
+3. **다듬기** — 카드를 클릭하면 Crop·회전·블러·페인트, 끌면 순서 변경, 우클릭하면 복제·복사·교체·삭제입니다.
 4. **연결** — `image` 출력을 `Preview Image`나 모델 노드에 연결합니다. Queue 전에도 노드 안 미리보기에 합성 결과가 보입니다.
 
 다른 노드의 결과(예: 얼굴 크롭 노드)를 합치려면 **`images`, `images_2`…** 에 연결하세요. 제목줄의 **`▶ Inputs`** 는 그 앞쪽 노드만 실행해서 카드와 미리보기를 채워 줍니다. 모델이 레퍼런스를 **한 장씩** 받아야 하면 `output_cells`를 켜고 `image_1`, `image_2`… 를 연결하면 됩니다.
@@ -56,14 +57,12 @@
 
 ## 최근 변경
 
-### 1.13에서 달라진 점
+### 1.14에서 달라진 점
 
-- **입력 미리보기가 10배 빨라졌습니다 (1.13.1)** — 입력 그림을 노드에 보여 주려고 실행마다 저장하던 미리보기가 스티치 자체보다 훨씬 오래 걸렸습니다(1024px 2장에서 약 290ms, 4K 2장에서 약 1.1초). 이제 큰 그림은 먼저 줄인 뒤 **JPEG(품질 95)** 로 저장해서 각각 약 30ms, 약 0.3초입니다. 카드 우클릭 `Copy`는 이 미리보기를 복사하므로 **최대 1536px**이고, 알림에 복사한 크기가 표시됩니다(Load Image를 바로 연결한 그림은 원본 파일 그대로 복사됩니다).
-- **카드가 많을 때 다시 가벼워졌습니다 (1.13.1)** — 입력 카드를 카드마다 다시 계산하던 것을 한 번만 하도록 바꿨습니다. 이미지 256장 + 입력 8개에서 마우스를 움직일 때마다 4.6ms 걸리던 계산이 0.3ms로 줄었습니다(보통의 장수에서는 차이를 느낄 수 없습니다).
-- **예제 워크플로우 (1.13.1)** — `Batch Images`로 묶을 필요 없이 입력 단자에 바로 연결하는 방식으로 바꿨습니다(`multi-stitch-grid-from-several-inputs`, 예전 `…-from-image-batch`의 후속). 크롭한 그림과 다른 그림을 `image_1` / `image_2`로 한 장씩 꺼내는 `multi-stitch-references-one-by-one`도 추가했습니다.
-- **`▶ Inputs` 버튼** — IMAGE 입력에 뭔가 연결되어 있으면 노드 제목줄(Size 왼쪽, Vue 모드는 툴바)에 나타납니다. 누르면 **이 노드에 연결된 앞쪽 노드들(Crop Head 등)과 이 노드까지만 실행**하고, 뒤에 이어진 H3 같은 무거운 모델은 돌리지 않습니다. 결과가 오면 입력 카드와 미리보기가 바로 채워집니다. 실행을 기다리는 입력이 있으면 초록색으로 켜지고, 자리 카드(`▶ Click to run the inputs`)를 눌러도 똑같이 실행됩니다.
-- 이를 위해 노드가 ComfyUI의 **출력 노드**가 되었습니다. 그래서 아무 데도 연결되지 않았어도 Queue할 때마다 함께 실행됩니다(가벼운 작업입니다). 대신 **아무것도 이 노드를 읽지 않을 때는 에러로 실행 전체를 멈추지 않습니다** — 이미지를 아직 안 넣은 빈 노드가 캔버스에 있어도 괜찮고, 그 에러는 나중에 뭔가를 연결하면 그 노드에서 같은 문구로 알려 줍니다. 연결되어 쓰이는 노드는 예전과 똑같이 에러를 냅니다.
-- 부분 실행을 지원하지 않는 오래된 ComfyUI에서는 버튼이 전체 실행 대신 안내만 띄웁니다.
+- **페인트 브러시** — 편집기의 `◍ Blur` 옆 **`✎ Paint`** 탭에서 사진 위에 색을 칠합니다. **불투명하게 칠하면 가리기**(얼굴, 번호판, 모델이 바꿔야 할 부분), **반투명하게 칠하면 표시**(고칠 곳을 동그라미로 둘러싸기)입니다. 두께·투명도·색(회색, 흰색, 검정, 빨강, 초록, 노랑, 그리고 아무 색)을 고르고, `Ctrl+Z`로 마지막 스트로크를 취소하며 `Clear paint`로 전부 지웁니다.
+- 스트로크마다 **색과 투명도가 따로 저장**되므로 한 장에 회색 덮개와 빨간 동그라미를 함께 둘 수 있습니다. 스트로크 하나는 하나의 모양이라, 자기 자신을 가로질러도 겹친 곳이 더 진해지지 않고 다른 스트로크가 겹칠 때만 진해집니다.
+- 블러처럼 **좌표로 저장되어 원본은 그대로**이고, 카드·미리보기·`⧉ Copy`·갤러리·스티치 결과(`cells`, `image_N` 포함)에 모두 반영됩니다. 카드에는 ✎ 표시가 붙고, 블러와 함께 있으면 블러 위에 칠해집니다.
+- **고쳤습니다 (블러에도 해당)** — ① 블러·페인트만 다른 구성이 갤러리에서 같은 항목 하나로 합쳐져 처음 기록한 쪽만 남았습니다. ② 카드 여러 장을 한꺼번에 회전·뒤집으면 크롭만 따라가고 블러 위치는 제자리에 남았습니다. ③ 블러·페인트를 바꾼 뒤 `⧉ Copy`를 다시 누르면 바꾸기 전에 만든 이미지가 복사됐습니다.
 
 이전 버전의 변경 내역은 [CHANGELOG.md](CHANGELOG.md)에 있습니다.
 
@@ -137,7 +136,7 @@ git pull
    - 썸네일은 긴 변 **512px**로 축소한 사본만 유지하므로 고해상도 이미지를 많이 넣어도 브라우저 메모리가 원본 크기만큼 늘지 않습니다. 편집기와 실제 합성은 항상 원본을 사용합니다.
 4. 편집할 이미지는 **썸네일을 한 번 클릭**합니다.
 5. 순서를 바꾸려면 **카드를 그대로 끌어다 놓습니다**. 끄는 동안 놓일 자리가 **파란 막대**로 표시됩니다.
-   - 썸네일을 **우클릭**하면 `Edit · Duplicate · Copy to clipboard · Replace · Remove` 메뉴가 나옵니다. `Copy image #N to clipboard`는 **편집 전 원본 이미지 전체**를 클립보드에 넣습니다 — 그대로 **Ctrl+V**로 다시 붙여 넣거나 다른 프로그램에 붙일 수 있습니다.
+   - 썸네일을 **우클릭**하면 `Edit · Duplicate · Copy to clipboard · Replace · Remove` 메뉴가 나옵니다. `Copy image #N to clipboard`는 카드에 보이는 **편집된 모습**(Crop·회전·블러·페인트 적용)을 클립보드에 넣습니다 — 그대로 **Ctrl+V**로 다시 붙여 넣거나 다른 프로그램에 붙일 수 있습니다. 편집한 이미지에는 `Copy as uploaded`(원본 파일)가 하나 더 있습니다.
    - 툴바의 **`⧉ Copy`** 버튼(또는 우클릭 → `Copy stitched result`)은 지금 설정대로 **합성된 결과**를 원본 해상도로 브라우저에서 만들어 PNG로 클립보드에 넣습니다 — Queue를 돌리지 않아도 됩니다.
 6. `layout_mode`를 선택합니다.
    - `strip` → 기존 Stitch Images처럼 한 줄/한 열로 연결
@@ -167,6 +166,7 @@ git pull
 - **크기 표시**: 헤더가 `1080 × 1920 → 792 × 1411`처럼 **원본 크기와 지금 Crop의 크기**를 드래그하는 동안 계속 보여 줍니다
 - **`‹` `›` 또는 좌우 방향키**: 편집기를 닫지 않고 다음/이전 이미지로. 바꾼 게 있을 때만 저장됩니다
 - **`◍ Blur` 탭**: 드래그해서 블러 칠하기. **Brush**=두께, **Blur**=강도, `Ctrl+Z`=마지막 스트로크 취소, `Clear blur`=전체 삭제. Crop·회전과 마찬가지로 좌표로 저장되어 원본은 그대로입니다
+- **`✎ Paint` 탭**: 드래그해서 색 칠하기. **Brush**=두께, **Opacity**=투명도, 색 견본(회색·흰색·검정·빨강·초록·노랑)과 색 선택기, `Ctrl+Z`=마지막 스트로크 취소, `Clear paint`=전체 삭제. **불투명하게 칠하면 가리기, 반투명하게 칠하면 표시**입니다. 스트로크마다 색과 투명도가 따로 저장되고, 블러와 같은 좌표 방식이라 원본은 그대로이며 블러 위에 칠해집니다
 - **우클릭**: `Copy crop to clipboard`(Crop된 부분만 원본 해상도로) / `Copy whole image to clipboard` — 편집기의 격자나 테두리는 복사되지 않습니다
 - **확대 / 이동**: 휠(포인터 기준 확대), `+ / − / Fit` 버튼, 키보드 `+ / - / 0`. 이동은 **휠 버튼 드래그** 또는 **Space + 좌클릭 드래그**. 최대 16배까지 확대되며, 확대하면 핸들이 잡는 범위와 최소 Crop 크기도 함께 작아져 픽셀 단위로 다듬을 수 있습니다.
 
@@ -180,7 +180,7 @@ Crop / 회전 / 반전 정보만 workflow에 저장하는 **비파괴 방식**�
 
 - **카드 클릭**(누르고 그 자리에서 떼기) → Edit 즉시 열기
 - **카드를 끌기** → 순서 변경. 놓일 자리가 **파란 막대**로 카드 사이에 표시되고, 끌리는 카드는 반투명해집니다.
-- **카드 우클릭** → `Edit · Duplicate · Copy to clipboard · Replace · Remove` — 복사는 **Crop·회전·블러가 적용된 모습**이고, 편집한 이미지에는 `Copy as uploaded`(원본 파일)가 하나 더 붙습니다
+- **카드 우클릭** → `Edit · Duplicate · Copy to clipboard · Replace · Remove` — 복사는 **Crop·회전·블러·페인트가 적용된 모습**이고, 편집한 이미지에는 `Copy as uploaded`(원본 파일)가 하나 더 붙습니다
 - 카드 **오른쪽 아래 모서리**에 **그 이미지의 픽셀 크기**가 작게 표시됩니다. Crop한 카드는 Crop 후 크기를 주황색으로 보여 주고, 마우스를 올리면 상태 줄에 원본 크기까지 함께 나옵니다.
 - 툴바 **`⧉ Copy`** → 합성 결과 복사
 - Drag 판정 거리는 ComfyUI Canvas 좌표가 아닌 **실제 화면 픽셀 기준**이라 Zoom 배율에 영향을 덜 받습니다. 그 거리를 넘지 않고 떼면 클릭으로 처리되어 편집기가 열립니다.
@@ -411,6 +411,7 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 - **Duplicate an image** — the card menu adds the same file once more, right after it, croppable and rotatable on its own
 - **Pixel size on every card** — and what a crop leaves of it, counted live in the editor while you drag
 - **Blur brush** — paint over a face or a plate in the editor; adjustable width and strength, stored as coordinates, source untouched
+- **Paint brush** — lay a colour over part of a picture: opaque to cover it, faint to mark it; adjustable width, opacity and colour, each stroke keeps its own, source untouched
 - **Reference-image size outputs** — `width`/`height` outputs and a size panel: the reference image's size rescaled to a megapixel target and snapped to a multiple (32 by default)
 - One toolbar row `+ Add · Clear · ⧉ Copy · ↶ ↷ · Preview · Options` — advanced options stay **folded**, only non-default ones show
 - Per-image **Crop / 90° Rotate / Flip H / Flip V**
@@ -435,7 +436,7 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 
 1. **Add the node** — double-click the canvas and search for `Multi Stitch Images` (`image/transform`).
 2. **Add images** — click the node to select it and press **Ctrl+V**. `+ Add` and drag-and-drop work too.
-3. **Tidy up** — click a card to crop, rotate or blur it, drag it to reorder, right-click it to duplicate, copy, replace or remove.
+3. **Tidy up** — click a card to crop, rotate, blur or paint on it, drag it to reorder, right-click it to duplicate, copy, replace or remove.
 4. **Connect** — wire `image` to `Preview Image` or a model node. The node's own preview shows the stitched result before you queue.
 
 To stitch what other nodes produce (a face crop, say), plug them into **`images`, `images_2`…** The **`▶ Inputs`** button in the title bar runs only the nodes feeding them and fills in the cards and the preview. If a model wants its references **one at a time**, turn `output_cells` on and wire `image_1`, `image_2`…
@@ -444,14 +445,12 @@ Ready-made examples are under Templates → `Comfyui-Image-Stitch` in the sideba
 
 ## Recent changes
 
-### What changed in 1.13
+### What changed in 1.14
 
-- **Input previews are ten times faster (1.13.1)** — the previews written on every run so the node can show what its inputs bring took far longer than the stitch itself (about 290 ms for two 1024px frames, about 1.1 s for two 4K ones). A large frame is now shrunk first and saved as a **JPEG (quality 95)**: about 30 ms and about 0.3 s. `Copy` on a card's right-click menu copies that preview, so it is **at most 1536px**, and the notice says the size it copied (a Load Image connected directly is copied from its own file, unreduced).
-- **Many cards are light again (1.13.1)** — the input cards were worked out again for every card; they are worked out once now. With 256 images and 8 inputs the work behind each mouse move went from 4.6 ms to 0.3 ms (at ordinary counts the difference cannot be felt).
-- **Example workflows (1.13.1)** — no `Batch Images` to join the pictures: they go straight into the input sockets (`multi-stitch-grid-from-several-inputs`, the successor of `…-from-image-batch`). `multi-stitch-references-one-by-one` is new: a cropped picture and another one, each taken out on its own `image_1` / `image_2`.
-- **`▶ Inputs`** — while something is plugged into an IMAGE input, the title bar (left of Size; the toolbar in the Vue mode) offers it. It **runs only the nodes feeding this one (a Crop Head and whatever it reads) and this node**, never the heavy model after it, and the input cards and the preview fill in as soon as the pictures arrive. It lights up while an input waits for a run, and a placeholder card (`▶ Click to run the inputs`) does the same.
-- That makes the node an **output node** in ComfyUI's terms, so it runs on every Queue even when nothing reads it (it is cheap). In return, **while nothing reads it, its errors never stop the run**: a fresh node with nothing pasted yet can sit on the canvas, and the error waits, word for word, for whatever gets wired to it. A node that is in use fails exactly as before.
-- On a ComfyUI too old to run part of a workflow the button says so instead of running everything.
+- **Paint brush** — **`✎ Paint`**, beside `◍ Blur` in the editor, lays a colour over part of the picture. **Opaque, it covers** (a face, a plate, the part a model should replace); **faint, it marks** (a circle round what an edit should change). Pick the width, the opacity and the colour (grey, white, black, red, green, yellow, or any other); `Ctrl+Z` takes back a stroke and `Clear paint` removes them all.
+- **Every stroke keeps its own colour and opacity**, so one picture can hold a grey cover and a red circle. A stroke is one shape: a path that crosses itself is not darker where it does, a second stroke over it is.
+- Stored as coordinates like the blur, so **the source file is never modified**, and shown everywhere the picture is: the cards, the preview, `⧉ Copy`, the gallery and the stitched result (`cells` and `image_N` included). The card gets a ✎ badge; with a blur as well, the paint goes on top of it.
+- **Fixed, and it applied to the blur too** — (1) compositions that differed only by their blur or paint were one gallery entry, and only the first recorded was kept; (2) turning or flipping several cards at once moved the crop but left the blur where it was; (3) `⧉ Copy` after changing a blur or paint copied the image made before the change.
 
 Earlier changes are in [CHANGELOG.md](CHANGELOG.md).
 
@@ -523,7 +522,7 @@ Then fully restart ComfyUI. If frontend changes are still cached, refresh the br
    - Thumbnails keep only a copy scaled to **512px** on the long edge, so many high-resolution images do not grow browser memory by their full size. The editor and the actual stitch always use the original.
 4. **Single-click a thumbnail** to Crop / Rotate / Flip it.
 5. To reorder, **drag the card itself**; a blue bar shows the slot it would drop into.
-   - **Right-click** a card for `Edit · Duplicate · Copy to clipboard · Replace · Remove`. `Copy image #N to clipboard` puts the **whole original image, before any edits**, on the clipboard — paste it back with **Ctrl+V** or into another program.
+   - **Right-click** a card for `Edit · Duplicate · Copy to clipboard · Replace · Remove`. `Copy image #N to clipboard` puts the picture **as the card shows it** (crop, rotation, blur and paint applied) on the clipboard — paste it back with **Ctrl+V** or into another program. An edited image also offers `Copy as uploaded` for the original file.
    - The **`⧉ Copy`** button in the toolbar (or right-click → `Copy stitched result`) renders the **stitched result** with the current settings, at full resolution, in the browser and puts it on the clipboard as PNG — no queue needed.
 6. Choose `layout_mode`.
    - `strip` → classic one-row / one-column stitching
@@ -553,6 +552,7 @@ Single-click the thumbnail image area to open the editor.
 - **The size, live**: the header shows the image's size and what the crop leaves of it — `1080 × 1920 → 792 × 1411` — updated while the crop is dragged
 - **`‹` `›` or the arrow keys**: move to the next or previous image without closing the editor; the edit is kept only where you made one
 - **`◍ Blur` tab**: drag to paint a blur. **Brush** is the width, **Blur** the strength, `Ctrl+Z` takes back a stroke, `Clear blur` removes them all. Stored as coordinates like the crop, so the source file is never modified
+- **`✎ Paint` tab**: drag to lay a colour on the picture. **Brush** is the width, **Opacity** how much of the picture shows through, then six colour swatches (grey, white, black, red, green, yellow) and a colour input for any other; `Ctrl+Z` takes back a stroke, `Clear paint` removes them all. **Opaque covers, faint marks.** Every stroke keeps its own colour and opacity; stored as coordinates like the blur, so the source file is never modified, and laid over the blur
 - **Right-click**: `Copy crop to clipboard` (the crop alone, at full resolution) or `Copy whole image to clipboard` — never the grid and outline drawn over the picture
 - **Zoom and pan**: the wheel zooms around the pointer, `+ / − / Fit` and the keys `+ / - / 0` do the same from the keyboard. Pan with a **middle-button drag** or **space held with the left button**. Up to 16×, and zooming in shrinks the grab areas and the minimum crop with it, so a crop can be trimmed to the pixel.
 

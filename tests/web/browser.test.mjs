@@ -451,6 +451,139 @@ describe("crop editor", () => {
         await page.close();
     });
 
+    it("paints a colour only where the brush goes, as a cover or as a faint mark", async () => {
+        const { page, errors } = await openPage();
+        await page.evaluate(() => {
+            window.__node = window.__makeNode("check.png");
+            window.__openCropEditor(window.__node, 0);
+        });
+        const canvas = page.locator(".ms-crop-canvas");
+        await canvas.waitFor();
+        await page.click(".tool-paint");
+        assert.equal(await page.locator(".ms-crop-brush").isVisible(), true, "the brush row shows with the tool");
+        assert.equal(await page.locator(".for-paint").isVisible(), true, "with the colour and opacity controls");
+        assert.equal(await page.locator(".for-blur").isVisible(), false, "and without the blur strength");
+        assert.equal(await page.locator(".blur-clear").textContent(), "Clear paint");
+        const box = await canvas.boundingBox();
+
+        // The canvas pixel at a fraction of its size, as [r, g, b].
+        const pixel = (fx, fy) => page.evaluate(([x, y]) => {
+            const target = document.querySelector(".ms-crop-canvas");
+            const data = target.getContext("2d").getImageData(Math.round(target.width * x), Math.round(target.height * y), 1, 1).data;
+            return [data[0], data[1], data[2]];
+        }, [fx, fy]);
+        const stroke = async (fy, from = 0.35, to = 0.65) => {
+            await page.mouse.move(box.x + box.width * from, box.y + box.height * fy);
+            await page.mouse.down();
+            await page.mouse.move(box.x + box.width * ((from + to) / 2), box.y + box.height * fy, { steps: 5 });
+            await page.mouse.move(box.x + box.width * to, box.y + box.height * fy, { steps: 5 });
+            await page.mouse.up();
+        };
+        const corner = await pixel(0.06, 0.06);
+
+        // The first colour in the row is the grey cover, opaque.
+        await stroke(0.3);
+        const [r, g, b] = await pixel(0.5, 0.3);
+        assert.deepEqual([r, g, b], [128, 128, 128], "an opaque stroke is the colour, whatever was under it");
+        assert.deepEqual(await pixel(0.06, 0.06), corner, "and the rest of the picture is as it was");
+
+        // A red swatch, at a fifth of the opacity: the picture shows through.
+        await page.click('.swatch[title="Red"]');
+        await page.locator(".paint-opacity").fill("20");
+        assert.equal(await page.locator(".opacity-value").textContent(), "20%");
+        const under = await pixel(0.5, 0.6);
+        await stroke(0.6);
+        const [fr, fg, fb] = await pixel(0.5, 0.6);
+        assert.ok(fr > under[0] - 1 && fg < under[1] + 1 && fb < under[2] + 1, `red-tinted ${under} → ${[fr, fg, fb]}`);
+        assert.notDeepEqual([fr, fg, fb], [255, 0, 0], "but it is a tint, not a cover");
+
+        // A stroke that crosses itself is not darker where it does.
+        await page.locator(".paint-opacity").fill("50");
+        const base = await pixel(0.5, 0.85);
+        await page.mouse.move(box.x + box.width * 0.35, box.y + box.height * 0.85);
+        await page.mouse.down();
+        await page.mouse.move(box.x + box.width * 0.65, box.y + box.height * 0.85, { steps: 6 });
+        await page.mouse.move(box.x + box.width * 0.35, box.y + box.height * 0.85, { steps: 6 });
+        await page.mouse.up();
+        const once = await pixel(0.5, 0.85);
+        await stroke(0.85, 0.35, 0.65);
+        const twice = await pixel(0.5, 0.85);
+        // How far a pixel is from pure red, whichever square of the board it is on.
+        const away = ([r, g, b]) => Math.abs(255 - r) + g + b;
+        assert.ok(Math.abs(away(once) - away(base) / 2) <= 4, `half-covered once (${base} → ${once})`);
+        assert.ok(away(twice) < away(once) - 20, `a second stroke does build up (${once} → ${twice})`);
+
+        // The colour input takes any colour, and lights no swatch.
+        await page.locator(".paint-color").fill("#336699");
+        assert.equal(await page.locator(".swatch.active").count(), 0);
+
+        await page.click(".apply");
+        const item = await page.evaluate(() => window.__node._msImages[0]);
+        assert.equal(item.paint.strokes.length, 4);
+        assert.deepEqual(item.paint.strokes.map((s) => [s.c, s.a]),
+            [["#808080", 1], ["#ff0000", 0.2], ["#ff0000", 0.5], ["#ff0000", 0.5]], "each stroke keeps what was in hand when it was drawn");
+        assert.ok(item.paint.strokes[0].pts.length >= 2 && item.paint.strokes[0].r > 0);
+        assert.equal("blur" in item, false, "painting is not blurring");
+        assert.deepEqual(errors, []);
+        await page.close();
+    });
+
+    it("carries paint through a rotation, takes it back with Ctrl+Z and drops it with Clear paint", async () => {
+        const { page, errors } = await openPage();
+        await page.evaluate(() => {
+            window.__node = window.__makeNode("check.png");
+            window.__openCropEditor(window.__node, 0);
+        });
+        const canvas = page.locator(".ms-crop-canvas");
+        await canvas.waitFor();
+        await page.click(".tool-paint");
+        const box = await canvas.boundingBox();
+        const dab = async (fx, fy = 0.3) => {
+            await page.mouse.move(box.x + box.width * fx, box.y + box.height * fy);
+            await page.mouse.down();
+            await page.mouse.move(box.x + box.width * (fx + 0.08), box.y + box.height * fy, { steps: 4 });
+            await page.mouse.up();
+        };
+        const pixel = (fx, fy) => page.evaluate(([x, y]) => {
+            const target = document.querySelector(".ms-crop-canvas");
+            return Array.from(target.getContext("2d").getImageData(Math.round(target.width * x), Math.round(target.height * y), 1, 1).data.slice(0, 3));
+        }, [fx, fy]);
+
+        const plain = await pixel(0.54, 0.3);
+        await dab(0.2);
+        await dab(0.5);
+        assert.deepEqual(await pixel(0.54, 0.3), [128, 128, 128], "the second dab is on the picture");
+        // With the crop tool on, Ctrl+Z reaches the brush used last.
+        await page.click(".tool-crop");
+        await page.keyboard.press("Control+z");
+        await page.click(".tool-paint");
+        assert.deepEqual(await pixel(0.54, 0.3), plain, "and Ctrl+Z took it back");
+
+        // A quarter turn carries the first one along with the picture: it was
+        // a short line near the top left, so it is a short line near the top
+        // right now, and runs down instead of across.
+        await page.click(".rotate-right");
+        assert.deepEqual(await pixel(0.7, 0.24), [128, 128, 128], "turned with the picture");
+        await page.click(".apply");
+        const item = await page.evaluate(() => window.__node._msImages[0]);
+        assert.equal(item.rotation, 90);
+        assert.equal(item.paint.strokes.length, 1);
+        for (const [x, y] of item.paint.strokes[0].pts) {
+            assert.ok(x > 0.5 && y < 0.5, `${x},${y} turned from the top left to the top right`);
+        }
+
+        await page.evaluate(() => window.__openCropEditor(window.__node, 0));
+        await canvas.waitFor();
+        await page.click(".tool-paint");
+        assert.equal(await page.locator(".swatch.active").count(), 1, "the colour of the last stroke is back in hand");
+        await page.click(".blur-clear");
+        await page.click(".apply");
+        assert.equal(await page.evaluate(() => "paint" in window.__node._msImages[0]), false,
+            "with no strokes left the item carries no paint at all");
+        assert.deepEqual(errors, []);
+        await page.close();
+    });
+
     it("walks the list without closing, keeping an edit only where one was made", async () => {
         const { page, errors } = await openPage();
         await page.evaluate(() => {
@@ -616,6 +749,113 @@ describe("copy stitched result", () => {
         assert.ok(near(r.gap, [0, 0, 255]), `gap ${r.gap}`);
         assert.ok(near(r.right, [220, 30, 90]), `right ${r.right}`);
         assert.equal(r.stillCopying, false);
+        assert.deepEqual(errors, []);
+        await page.close();
+    });
+});
+
+describe("paint outside the editor", () => {
+    it("shows in the card's thumbnail and in the stitched copy, and only where it was painted", async () => {
+        const { page, errors } = await openPage();
+        const r = await page.evaluate(async () => {
+            const node = window.__makeNode("check.png");
+            const item = node._msImages[0];
+            item.paint = { strokes: [{ r: 0.1, c: "#ff0000", a: 1, pts: [[0.5, 0.5]] }] };
+            node.widgets = [
+                { name: "direction", value: "right", options: {} }, { name: "match_image_size", value: false, options: {} },
+                { name: "spacing_width", value: 0, options: {} }, { name: "spacing_color", value: "blue", options: {} },
+                { name: "layout_mode", value: "strip", options: {} },
+            ];
+            window.__loadTransformedThumb(node, item);
+            await new Promise((resolve, reject) => {
+                const started = Date.now();
+                const timer = setInterval(() => {
+                    const states = [...node._msThumbCache.values()];
+                    if (states.length === 1 && states.every((s) => s.ready || s.failed)) { clearInterval(timer); resolve(); }
+                    if (Date.now() - started > 10000) { clearInterval(timer); reject(new Error("thumbnails never settled")); }
+                }, 20);
+            });
+            const read = (canvas, x, y) => [...canvas.getContext("2d").getImageData(x, y, 1, 1).data].slice(0, 3);
+
+            // The card's thumbnail is the picture with the paint on it.
+            const thumb = window.__loadTransformedThumb(node, item);
+            const card = { centre: read(thumb.image, 150, 100), corner: read(thumb.image, 3, 3), size: [thumb.width, thumb.height] };
+            // And taking the paint off gives the plain picture back, not a stale rendering.
+            delete item.paint;
+            const plain = window.__loadTransformedThumb(node, item);
+            const unpainted = read(plain.image, 150, 100);
+            item.paint = { strokes: [{ r: 0.1, c: "#ff0000", a: 1, pts: [[0.5, 0.5]] }] };
+
+            window.__toasts.length = 0;
+            const options = [];
+            window.__nodeType.prototype.getExtraMenuOptions.call(node, { graph_mouse: [200, 40] }, options);
+            await options.find((o) => o?.content === "Copy stitched result").callback();
+            await new Promise((resolve) => setTimeout(resolve, 200));
+            const items = await navigator.clipboard.read();
+            const blob = await items.find((i) => i.types.includes("image/png")).getType("image/png");
+            const bitmap = await createImageBitmap(blob);
+            const c = document.createElement("canvas");
+            c.width = bitmap.width; c.height = bitmap.height;
+            c.getContext("2d").drawImage(bitmap, 0, 0);
+            return { card, unpainted, copy: { size: [bitmap.width, bitmap.height], centre: read(c, 150, 100), corner: read(c, 3, 3) } };
+        });
+        assert.deepEqual(r.card.centre, [255, 0, 0], "painted red under the brush");
+        assert.deepEqual(r.card.corner, [0, 0, 0], "and the rest of the board as it was");
+        assert.deepEqual(r.card.size, [300, 200], "the paint does not change the size");
+        assert.deepEqual(r.unpainted, [255, 255, 255], "without the paint it is the plain picture again");
+        assert.deepEqual(r.copy.size, [300, 200]);
+        assert.deepEqual(r.copy.centre, [255, 0, 0], "the copied result has it too, at the full size");
+        assert.deepEqual(r.copy.corner, [0, 0, 0]);
+        assert.deepEqual(errors, []);
+        await page.close();
+    });
+});
+
+describe("the copy cache", () => {
+    it("is not served after the picture was blurred or painted, only after nothing changed", async () => {
+        const { page, errors } = await openPage();
+        const r = await page.evaluate(async () => {
+            const node = window.__makeNode("check.png");
+            const item = node._msImages[0];
+            node.widgets = [
+                { name: "direction", value: "right", options: {} }, { name: "match_image_size", value: false, options: {} },
+                { name: "spacing_width", value: 0, options: {} }, { name: "spacing_color", value: "blue", options: {} },
+                { name: "layout_mode", value: "strip", options: {} },
+            ];
+            window.__loadTransformedThumb(node, item);
+            await new Promise((resolve, reject) => {
+                const started = Date.now();
+                const timer = setInterval(() => {
+                    const states = [...node._msThumbCache.values()];
+                    if (states.length === 1 && states.every((s) => s.ready || s.failed)) { clearInterval(timer); resolve(); }
+                    if (Date.now() - started > 10000) { clearInterval(timer); reject(new Error("thumbnails never settled")); }
+                }, 20);
+            });
+            const copy = async () => {
+                const options = [];
+                window.__nodeType.prototype.getExtraMenuOptions.call(node, { graph_mouse: [200, 40] }, options);
+                await options.find((o) => o?.content === "Copy stitched result").callback();
+                await new Promise((resolve) => setTimeout(resolve, 150));
+                const items = await navigator.clipboard.read();
+                const blob = await items.find((i) => i.types.includes("image/png")).getType("image/png");
+                const bitmap = await createImageBitmap(blob);
+                const c = document.createElement("canvas");
+                c.width = bitmap.width; c.height = bitmap.height;
+                const ctx = c.getContext("2d");
+                ctx.drawImage(bitmap, 0, 0);
+                return [...ctx.getImageData(150, 100, 1, 1).data].slice(0, 3);
+            };
+            const out = { plain: await copy() };
+            item.paint = { strokes: [{ r: 0.1, c: "#ff0000", a: 1, pts: [[0.5, 0.5]] }] };
+            out.painted = await copy();
+            delete item.paint;
+            item.blur = { strength: 0.05, strokes: [{ r: 0.2, pts: [[0.5, 0.5]] }] };
+            out.blurred = await copy();
+            return out;
+        });
+        assert.deepEqual(r.plain, [255, 255, 255], "the middle of the board is white to begin with");
+        assert.deepEqual(r.painted, [255, 0, 0], "a second copy has the paint on it, not the first copy again");
+        assert.ok(r.blurred[0] < 250 && r.blurred[0] > 5, `and one after a blur has the blur (${r.blurred})`);
         assert.deepEqual(errors, []);
         await page.close();
     });

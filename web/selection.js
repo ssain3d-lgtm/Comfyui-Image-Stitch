@@ -4,10 +4,35 @@
 // node._msSelected and nothing else, so the caller decides when to commit (one
 // history entry per batch) and how to tell the user what happened. Each edit
 // returns how many images it changed, or -1 when it could not run.
-import { defaultCrop, MAX_IMAGES, normalizeCrop, normalizeTransform, cropSourceToView, cropViewToSource } from "./shared.js";
+import {
+    blurSourceToView,
+    blurViewToSource,
+    cropSourceToView,
+    cropViewToSource,
+    defaultCrop,
+    MAX_IMAGES,
+    normalizeCrop,
+    normalizeTransform,
+    paintSourceToView,
+    paintViewToSource,
+} from "./shared.js";
 
 function imagesOf(node) {
     return Array.isArray(node?._msImages) ? node._msImages : [];
+}
+
+// The blur and the paint are stored against the transformed picture, as the
+// crop is, so a turn or a flip has to carry them along or they would stay
+// where the face was: back to the source, then forward into the new view.
+function carryStrokes(item, previous, next) {
+    for (const [key, toSource, toView] of [
+        ["blur", blurViewToSource, blurSourceToView],
+        ["paint", paintViewToSource, paintSourceToView],
+    ]) {
+        if (!item[key]) continue;
+        const moved = toView(toSource(item[key], previous), next);
+        if (moved) item[key] = moved;
+    }
 }
 
 // The selection as a sorted list of indices that still exist. Reading it
@@ -84,6 +109,7 @@ export function rotateSelected(node, targets, delta) {
         const next = normalizeTransform({ ...previous, rotation: previous.rotation + delta });
         item.rotation = next.rotation;
         item.crop = normalizeCrop(cropSourceToView(source, next));
+        carryStrokes(item, previous, next);
         changed += 1;
     }
     return changed;
@@ -102,6 +128,7 @@ export function flipSelected(node, targets, axis) {
         item.flip_h = next.flip_h;
         item.flip_v = next.flip_v;
         item.crop = normalizeCrop(cropSourceToView(source, next));
+        carryStrokes(item, previous, next);
         changed += 1;
     }
     return changed;

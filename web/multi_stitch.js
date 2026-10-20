@@ -25,6 +25,7 @@ import {
     forgetInputCards, inputCardHint, inputCards, inputFramesNotShown, inputSignature, receiveInputPreviews,
 } from "./inputs.js";
 import {
+    blurKey,
     commitImages,
     canvasPngBlob,
     clipboardUnavailable,
@@ -34,9 +35,11 @@ import {
     getWidget,
     hideWidget,
     historyOf,
+    hasPixelEdits,
     imageUrl,
     isBlurred,
     isCropped,
+    isPainted,
     sizeText,
     isTransformed,
     layoutPlacements,
@@ -53,6 +56,7 @@ import {
     NODE_MIN_WIDTH,
     normalizeCrop,
     normalizeTransform,
+    paintKey,
     redoImages,
     referenceSize,
     aspectRatio,
@@ -680,7 +684,7 @@ function drawContained(ctx, image, crop, rect) {
 
 // Whether anything about this image differs from the file it came from.
 function isEdited(item) {
-    return isCropped(item?.crop) || isTransformed(item) || isBlurred(item);
+    return isCropped(item?.crop) || hasPixelEdits(item);
 }
 
 function transformedCropDims(node, item) {
@@ -957,12 +961,16 @@ function drawCard(ctx, node, item, index, r) {
         badgeX += 28;
     }
 
-    if (isBlurred(item)) {
+    // The blur and the paint share one badge, so a picture with both costs one
+    // more glyph and not another box: the card is narrow.
+    const marks = `${isBlurred(item) ? "◍" : ""}${isPainted(item) ? "✎" : ""}`;
+    if (marks) {
+        const width = marks.length > 1 ? 38 : 24;
         ctx.fillStyle = "rgba(0,0,0,.72)";
-        ctx.fillRect(badgeX, r.y + 3, 24, 19);
+        ctx.fillRect(badgeX, r.y + 3, width, 19);
         ctx.fillStyle = "#f6b73c";
-        ctx.fillText("◍", badgeX + 5, r.y + 17);
-        badgeX += 27;
+        ctx.fillText(marks, badgeX + 5, r.y + 17);
+        badgeX += width + 3;
     }
 
     if (isTransformed(item)) {
@@ -1443,7 +1451,7 @@ async function originalPngBlob(item) {
 async function editedRender(item) {
     const source = await loadFullImage(imageUrl(item));
     try {
-        const view = isTransformed(item) || isBlurred(item) ? renderTransformedImage(source, item, 0) : source;
+        const view = hasPixelEdits(item) ? renderTransformedImage(source, item, 0) : source;
         const size = mediaSize(view);
         const box = cropPixelBox(size.w, size.h, item.crop);
         if (box.w * box.h > COPY_MAX_PIXELS) {
@@ -1770,7 +1778,7 @@ async function renderComposite(node, planned, { width, height, onProgress, alive
         const { source, release } = await loadBoundedSource(item, neededSourceSize(node, item, dest));
         try {
             if (alive && !alive()) return null;
-            const view = isTransformed(item) || isBlurred(item) ? renderTransformedImage(source, item, 0) : source;
+            const view = hasPixelEdits(item) ? renderTransformedImage(source, item, 0) : source;
             const size = mediaSize(view);
             const box = cropPixelBox(size.w, size.h, item.crop);
             drawImageScaled(ctx, view, box.x, box.y, box.w, box.h, dest.x, dest.y, dest.w, dest.h);
@@ -1824,7 +1832,9 @@ function needsSharpPreview(node, planned, drawScale) {
 function previewContentKey(node, planned) {
     const s = planned.settings;
     return JSON.stringify([
-        planned.items.map((i) => [i.type, i.subfolder, i.filename, normalizeCrop(i.crop), normalizeTransform(i)]),
+        planned.items.map((i) => [
+            i.type, i.subfolder, i.filename, normalizeCrop(i.crop), normalizeTransform(i), blurKey(i.blur), paintKey(i.paint),
+        ]),
         [s.layout, s.direction, s.match, s.matchReference, s.gridColumns, s.spacing,
             s.cellWidth, s.cellHeight, s.spacingColor, s.customColor],
         planned.failed,

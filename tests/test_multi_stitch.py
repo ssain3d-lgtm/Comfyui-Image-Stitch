@@ -3,6 +3,7 @@ import importlib
 import importlib.util
 import inspect
 import json
+import math
 import os
 import random
 import re
@@ -220,6 +221,149 @@ class MultiStitchTests(unittest.TestCase):
             "strength": 0.02, "strokes": [{"r": 0.1, "pts": [[0.5, 0.5]] * 9000}] * 4,
         }})
         self.assertEqual(sum(len(s["pts"]) for s in crowded["strokes"]), ms._MAX_BLUR_POINTS)
+
+    def _plain(self, name="plain.png", size=(100, 100), value=200):
+        """A flat grey file, so every change in the result is the paint's."""
+        path = self.root / name
+        Image.fromarray(np.full((size[1], size[0], 3), value, np.uint8), "RGB").save(path)
+        return {"filename": name, "type": "input", "crop": {"x": 0, "y": 0, "w": 1, "h": 1},
+                "rotation": 0, "flip_h": False, "flip_v": False}
+
+    @staticmethod
+    def _paint(*strokes):
+        """Paint as the editor stores it; each stroke says only what differs from red, opaque, 10%."""
+        return {"strokes": [dict({"r": 0.1, "c": "#ff0000", "a": 1.0}, **stroke) for stroke in strokes]}
+
+    def test_an_opaque_paint_stroke_covers_exactly_what_it_touches(self):
+        item = self._plain("wide.png", size=(400, 300))
+        # Away from the origin on purpose: the stroke is blended in a window of
+        # its own, and the window's offset has to land on the right pixels.
+        paint = self._paint({"r": 0.05, "pts": [[0.6, 0.7], [0.8, 0.7]]})
+        plain = ms._load_image(item)
+        painted = ms._load_image(dict(item, paint=paint))
+
+        self.assertEqual(tuple(painted.shape), tuple(plain.shape))
+        # 400 px long side, so the brush is 20 px; the path runs x 240..320 at y 210.
+        for x, y in ((240, 210), (280, 210), (320, 210), (232, 210), (328, 210), (280, 192), (280, 228)):
+            self.assertRgb(painted[0, y, x], (1, 0, 0))
+        for x, y in ((280, 180), (280, 240), (200, 210), (350, 210)):
+            self.assertRgb(painted[0, y, x], (200 / 255,) * 3)
+        changed = (painted != plain).any(dim=-1)[0]
+        self.assertTrue(bool(changed[170:250, 200:350].any()))
+        changed[170:250, 200:350] = False
+        self.assertFalse(bool(changed.any()), "nothing outside the stroke's reach moved, to the bit")
+
+    def test_paint_opacity_mixes_the_colour_with_the_picture(self):
+        item = self._plain(value=255)
+        black = {"c": "#000000", "a": 0.25, "r": 0.2, "pts": [[0.5, 0.5]]}
+        painted = ms._load_image(dict(item, paint=self._paint(black)))
+        self.assertRgb(painted[0, 50, 50], (0.75,) * 3, atol=1e-4)
+        # Strokes go on in order, each over the last, so two build up as brush
+        # strokes do: 0.75 of what 0.75 left.
+        twice = ms._load_image(dict(item, paint=self._paint(black, black)))
+        self.assertRgb(twice[0, 50, 50], (0.5625,) * 3, atol=1e-4)
+
+    def test_a_stroke_is_one_shape_even_where_its_path_crosses_itself(self):
+        item = self._plain(value=255)
+        there_and_back = {"c": "#000000", "a": 0.5, "r": 0.06, "pts": [[0.2, 0.5], [0.8, 0.5], [0.2, 0.5]]}
+        painted = ms._load_image(dict(item, paint=self._paint(there_and_back)))
+        self.assertRgb(painted[0, 50, 50], (0.5,) * 3, atol=1e-4)
+        self.assertRgb(painted[0, 50, 22], (0.5,) * 3, atol=1e-4)
+
+    def test_a_paint_edge_is_smooth_and_covers_the_right_area(self):
+        item = self._plain(size=(200, 200), value=0)
+        dot = {"c": "#ffffff", "a": 1.0, "r": 0.1, "pts": [[0.5, 0.5]]}
+        painted = ms._load_image(dict(item, paint=self._paint(dot)))
+        covered = painted[0, :, :, 0]
+        self.assertAlmostEqual(float(covered.sum()), math.pi * 20 ** 2, delta=math.pi * 20 ** 2 * 0.02,
+                               msg="a 20 px brush covers a 20 px disc")
+        rim = (covered > 0.02) & (covered < 0.98)
+        self.assertGreater(int(rim.sum()), 60, "the rim has in-between values, not a staircase")
+        self.assertTrue(torch.allclose(covered, covered.flip(1), atol=0.06), "left and right match")
+        self.assertTrue(torch.allclose(covered, covered.flip(0), atol=0.06), "top and bottom match")
+
+    def test_a_paint_stroke_follows_the_crop_and_the_rotation(self):
+        item = self._plain("wide.png", size=(200, 100))
+        paint = self._paint({"r": 0.05, "pts": [[0.25, 0.5]]})
+        grey = (200 / 255,) * 3
+
+        # Strokes are stored against the transformed picture, as the crop is: a
+        # quarter turn makes it 100 wide and 200 tall, and the stroke sits a
+        # quarter of the way across *that*.
+        turned = ms._load_image(dict(item, paint=paint, rotation=90))
+        self.assertEqual(tuple(turned.shape), (1, 200, 100, 3))
+        self.assertRgb(turned[0, 100, 25], (1, 0, 0))
+        self.assertRgb(turned[0, 100, 75], grey)
+
+        # And a crop takes its own piece of the picture with the stroke in it.
+        cropped = ms._load_image(dict(item, paint=paint, crop={"x": 0.0, "y": 0.0, "w": 0.5, "h": 1.0}))
+        self.assertEqual(tuple(cropped.shape), (1, 100, 100, 3))
+        self.assertRgb(cropped[0, 50, 50], (1, 0, 0))
+        shifted = ms._load_image(dict(item, paint=paint, crop={"x": 0.5, "y": 0.0, "w": 0.5, "h": 1.0}))
+        self.assertTrue(torch.equal(shifted, ms._load_image(dict(item, crop={"x": 0.5, "y": 0.0, "w": 0.5, "h": 1.0}))),
+                        "the stroke is in the half that was cut away, so this half is as it was")
+
+        away = dict(item, paint=self._paint({"r": 0.02, "pts": [[1.4, 1.4]]}))
+        self.assertTrue(torch.equal(ms._load_image(away), ms._load_image(item)))
+
+    def test_paint_keeps_a_high_depth_file_high_depth(self):
+        item = self._checkerboard("deep.png", size=(100, 100), deep=True)
+        plain = ms._load_image(item)
+        painted = ms._load_image(dict(item, paint=self._paint({"r": 0.1, "c": "#00ff00", "pts": [[0.5, 0.5]]})))
+        self.assertLess(float(plain.max()), 0.95, "a 16-bit mid-grey is not white")
+        self.assertRgb(painted[0, 50, 50], (0, 1, 0))
+        self.assertTrue(torch.equal(plain[0, 0:5, 0:5], painted[0, 0:5, 0:5]))
+
+    def test_paint_lies_over_the_blur(self):
+        item = self._checkerboard()
+        blur = {"strength": 0.02, "strokes": [{"r": 0.2, "pts": [[0.5, 0.5]]}]}
+        paint = self._paint({"r": 0.1, "c": "#00ff00", "pts": [[0.5, 0.5]]})
+        plain = ms._load_image(item)
+        both = ms._load_image(dict(item, blur=blur, paint=paint))
+        self.assertRgb(both[0, 100, 100], (0, 1, 0))
+        ring = (slice(64, 72), slice(96, 104))
+        self.assertGreater(float(plain[0][ring].std()), 0.4)
+        self.assertLess(float(both[0][ring].std()), 0.15, "outside the paint the blur is still there")
+
+    def test_paint_strokes_from_a_workflow_are_checked_not_trusted(self):
+        good = {"r": 0.1, "c": "#AABBCC", "a": 0.5, "pts": [[0.5, 0.5]]}
+
+        def without(key):
+            return {k: v for k, v in good.items() if k != key}
+
+        for junk in (None, 5, {}, {"strokes": "no"}, {"strokes": [5]},
+                     {"strokes": [dict(good, c="red")]}, {"strokes": [dict(good, c="#fff")]},
+                     {"strokes": [dict(good, c="#gggggg")]}, {"strokes": [dict(good, c=None)]},
+                     {"strokes": [without("c")]}, {"strokes": [without("a")]}, {"strokes": [without("r")]},
+                     {"strokes": [dict(good, a=0)]}, {"strokes": [dict(good, a="x")]},
+                     {"strokes": [dict(good, a=True)]}, {"strokes": [dict(good, a=float("nan"))]},
+                     {"strokes": [dict(good, r=0)]}, {"strokes": [dict(good, pts=[[0, "x"], [None, 1]])]}):
+            self.assertIsNone(ms._normalize_paint({"paint": junk}), repr(junk))
+
+        # What survives is clamped rather than refused, as it is for blur.
+        spec = ms._normalize_paint({"paint": {
+            "strokes": [dict(good, r=9, a=7, pts=[[-40, 40]])] * (ms._MAX_PAINT_STROKES + 30),
+        }})
+        self.assertEqual(len(spec["strokes"]), ms._MAX_PAINT_STROKES)
+        self.assertEqual(spec["strokes"][0], {"r": ms._MAX_PAINT_RADIUS, "pts": [(-0.5, 1.5)], "c": "#aabbcc", "a": 1.0})
+
+        crowded = ms._normalize_paint({"paint": {"strokes": [dict(good, pts=[[0.5, 0.5]] * 9000)] * 4}})
+        self.assertEqual(sum(len(s["pts"]) for s in crowded["strokes"]), ms._MAX_PAINT_POINTS)
+
+        # One bad stroke does not take the good ones with it.
+        mixed = ms._normalize_paint({"paint": {"strokes": [dict(good, c="red"), good]}})
+        self.assertEqual([s["c"] for s in mixed["strokes"]], ["#aabbcc"])
+
+    def test_paint_reaches_the_stitched_result_through_the_node(self):
+        item = dict(self._plain("p.png", size=(40, 40)), paint=self._paint({"r": 0.25, "pts": [[0.5, 0.5]]}))
+        out, *_ = stitched(
+            direction="right", match_image_size=True, spacing_width=0, spacing_color="white",
+            images_json=json.dumps([item]), layout_mode="strip", grid_columns=3,
+            custom_spacing_color="#808080",
+        )
+        self.assertEqual(tuple(out.shape), (1, 40, 40, 3))
+        self.assertRgb(out[0, 20, 20], (1, 0, 0))
+        self.assertRgb(out[0, 0, 0], (200 / 255,) * 3)
 
     def test_grid_positions_are_unique_and_in_bounds(self):
         rows, cols, count = 2, 3, 5

@@ -1773,6 +1773,89 @@ describe("native-reference refinements", () => {
         assert.equal(shared.blurKey(one), shared.blurKey({ ...one }));
     });
 
+    it("checks paint strokes rather than trusting them, and clamps what survives", () => {
+        const good = { strokes: [{ r: 0.1, c: "#aabbcc", a: 0.5, pts: [[0.2, 0.3], [0.4, 0.5]] }] };
+        assert.deepEqual(shared.normalizePaint(good), good);
+        const stroke = good.strokes[0];
+        const without = (key) => Object.fromEntries(Object.entries(stroke).filter(([k]) => k !== key));
+        for (const junk of [null, 5, {}, { strokes: "no" }, { strokes: [5] },
+            { strokes: [{ ...stroke, c: "red" }] }, { strokes: [{ ...stroke, c: "#fff" }] },
+            { strokes: [{ ...stroke, c: "#gggggg" }] }, { strokes: [{ ...stroke, c: null }] },
+            { strokes: [without("c")] }, { strokes: [without("a")] }, { strokes: [without("r")] },
+            { strokes: [{ ...stroke, a: 0 }] }, { strokes: [{ ...stroke, a: "x" }] },
+            { strokes: [{ ...stroke, a: NaN }] }, { strokes: [{ ...stroke, r: 0 }] },
+            { strokes: [{ ...stroke, pts: [[0, "x"], [null, 1]] }] }]) {
+            assert.equal(shared.normalizePaint(junk), null, JSON.stringify(junk));
+        }
+        // Clamped, not refused — and to the numbers the server clamps to; the
+        // colour comes out in lower case, as it does there.
+        const wild = shared.normalizePaint({ strokes: [{ r: 9, c: "#AABBCC", a: 7, pts: [[-40, 40]] }] });
+        assert.deepEqual(wild.strokes[0], { r: shared.MAX_PAINT_RADIUS, pts: [[-0.5, 1.5]], c: "#aabbcc", a: 1 });
+        const crowded = shared.normalizePaint({ strokes: Array.from({ length: shared.MAX_PAINT_STROKES + 30 }, () => ({ ...stroke, pts: [[0.5, 0.5]] })) });
+        assert.equal(crowded.strokes.length, shared.MAX_PAINT_STROKES);
+        const many = shared.normalizePaint({ strokes: Array.from({ length: 4 }, () => ({ ...stroke, pts: Array.from({ length: 9000 }, () => [0.5, 0.5]) })) });
+        assert.equal(many.strokes.reduce((total, s) => total + s.pts.length, 0), shared.MAX_PAINT_POINTS);
+        // One bad stroke does not take the good ones with it.
+        assert.equal(shared.normalizePaint({ strokes: [{ ...stroke, c: "red" }, stroke] }).strokes.length, 1);
+        assert.equal(shared.isPainted({ paint: good }), true);
+        assert.equal(shared.isPainted({ paint: { strokes: [] } }), false);
+        assert.equal(shared.isPainted({}), false);
+        assert.equal(shared.hasPixelEdits({ paint: good }), true);
+        assert.equal(shared.hasPixelEdits({ rotation: 0 }), false);
+    });
+
+    it("carries paint strokes through a rotation exactly as it carries a crop, colour and all", () => {
+        const transform = { rotation: 90, flip_h: true, flip_v: false };
+        const paint = { strokes: [{ r: 0.1, c: "#ff0000", a: 0.4, pts: [[0.25, 0.75], [1, 0]] }] };
+        const viewed = shared.paintSourceToView(paint, transform);
+        const corner = shared.cropSourceToView({ x: 0.25, y: 0.75, w: 0, h: 0 }, transform);
+        assert.deepEqual(viewed.strokes[0].pts[0], [corner.x, corner.y]);
+        assert.deepEqual([viewed.strokes[0].c, viewed.strokes[0].a, viewed.strokes[0].r], ["#ff0000", 0.4, 0.1]);
+        const back = shared.paintViewToSource(viewed, transform);
+        const round = back.strokes[0].pts.map(([x, y]) => [Math.round(x * 1e6) / 1e6, Math.round(y * 1e6) / 1e6]);
+        assert.deepEqual(round, paint.strokes[0].pts);
+        assert.equal(shared.paintSourceToView(null, transform), null);
+    });
+
+    it("renders a painted thumbnail rather than reusing the untouched one", () => {
+        const source = { width: 40, height: 20, naturalWidth: 40, naturalHeight: 20 };
+        const stroke = { r: 0.1, c: "#808080", pts: [[0.4, 0.4], [0.6, 0.6]] };
+        const opaque = { strokes: [{ ...stroke, a: 1 }] };
+        const faint = { strokes: [{ ...stroke, a: 0.4 }] };
+        // An opaque stroke is drawn straight on; a translucent one goes on
+        // through a layer of its own, which is one more image drawn.
+        assert.equal(shared.renderTransformedImage(source, { rotation: 0, paint: opaque }).draws, 1);
+        assert.equal(shared.renderTransformedImage(source, { rotation: 0, paint: faint }).draws, 2);
+        // Two translucent strokes are two layers: they build up.
+        assert.equal(shared.renderTransformedImage(source, { rotation: 0, paint: { strokes: [...faint.strokes, ...faint.strokes] } }).draws, 3);
+        // A stroke wholly off the picture draws nothing at all.
+        const away = { strokes: [{ ...stroke, a: 0.4, r: 0.02, pts: [[1.4, 1.4]] }] };
+        assert.equal(shared.renderTransformedImage(source, { rotation: 0, paint: away }).draws, 1);
+        // The crop editor passes a transform on its own and paints live.
+        assert.equal(shared.renderTransformedImage(source, shared.normalizeTransform({ rotation: 90, paint: faint })).draws, 1);
+    });
+
+    it("badges a canvas card with what was painted on it, the blur and the paint sharing one box", () => {
+        const node = plainNode(nodeType);
+        const blur = { strength: 0.02, strokes: [{ r: 0.1, pts: [[0.4, 0.4]] }] };
+        const paint = { strokes: [{ r: 0.1, c: "#808080", a: 1, pts: [[0.4, 0.4]] }] };
+        setImages(node, [item("a.png"), item("b.png", { blur }), item("c.png", { paint }), item("d.png", { blur, paint })]);
+        const marks = paintedText(nodeType, node).filter((text) => /[◍✎]/.test(text));
+        assert.deepEqual(marks, ["◍", "✎", "◍✎"], "none, blur, paint, then both together");
+    });
+
+    it("gives a paint cache key that any change to a stroke changes", () => {
+        const base = { strokes: [{ r: 0.1, c: "#ff0000", a: 0.5, pts: [[0.2, 0.3], [0.5, 0.5], [0.9, 0.9]] }] };
+        const edit = (change) => ({ strokes: [{ ...base.strokes[0], ...change }] });
+        assert.equal(shared.paintKey(null), "");
+        assert.equal(shared.paintKey(base), shared.paintKey(JSON.parse(JSON.stringify(base))));
+        for (const change of [{ c: "#00ff00" }, { a: 0.6 }, { r: 0.2 }, { pts: [[0.2, 0.3], [0.5, 0.6], [0.9, 0.9]] },
+            { pts: [[0.2, 0.3], [0.5, 0.5]] }]) {
+            assert.notEqual(shared.paintKey(base), shared.paintKey(edit(change)), JSON.stringify(change));
+        }
+        assert.notEqual(shared.paintKey(base), shared.paintKey({ strokes: [...base.strokes, ...base.strokes] }));
+    });
+
     it("shows one numbered socket per image, and only when the cells are asked for", async () => {
         const node = plainNode(nodeType);
         for (let i = 0; i < 8; i++) dom.imageSizes.set(`${i}.png`, [40, 20]);

@@ -2,6 +2,20 @@
 
 All notable changes to **Multi Stitch Images**. The version is the one in `pyproject.toml`; each release is tagged `v<version>` on `main`.
 
+## 1.14.0 — 2026-10-20
+
+### Added
+- **A paint brush in the image editor.** `✎ Paint` sits beside `◍ Blur`: drag to lay a colour over part of the picture. Opaque, it covers — a face, a plate, the part of a picture a model should replace; faint, it marks — a circle round what an edit should change. The row has `Brush` (width), `Opacity`, six colours (grey, white, black, red, green, yellow) and a colour input for any other. `Ctrl+Z` (or `↶ Stroke`) takes back the last stroke — with the crop tool on, of the brush used last — and `Clear paint` removes them all.
+- **Every stroke keeps its own colour and opacity**, so one picture can hold a grey cover and a red circle; what is in hand when a stroke starts is what it keeps, and the editor keeps colour and opacity as it steps to the next picture. A stroke is one shape: a path that crosses itself is not darker where it does, while a second stroke over it builds up as brush strokes do.
+- **Stored as coordinates, like the blur.** An item carries `paint: {strokes: [{r, pts, c, a}]}` — points as fractions of the transformed picture, the radius against its longest side, `c` as `#rrggbb`, `a` from 0 to 1 — so the source file is never touched, a quarter turn in the editor carries the strokes round with the picture, and the cards, the preview, `⧉ Copy`, the gallery and the stitched result (`cells` and `image_N` included) all show it. A ✎ badge marks the card; a picture with a blur as well shows both glyphs in one box, since the card is narrow.
+- **The server paints what the editor paints**, on top of the blur and before the crop's piece is placed: each stroke on a mask drawn at up to four times the resolution and averaged down for a smooth edge (the sampling is lowered for a stroke that would cost more than 32 M samples), blended in a window no bigger than the stroke so a dab on a large picture costs the dab, in the tensor, so a 16-bit file stays 16-bit. What a workflow hands it is checked rather than trusted, as for the blur: a colour that is not `#rrggbb`, an opacity of 0 or less, a missing radius or coordinates that are not numbers drop the stroke; the rest is clamped (at most 200 strokes and 20 000 points, radius at most half the long side).
+
+### Fixed
+Found by testing the paint brush, and each one hit the blur already:
+- **Compositions that differed only by their blur were one gallery entry.** The key that decides whether a composition is one already recorded counted the crop, the rotation and the flips but not the blur, so blurring a face and running again found the unblurred entry, marked it used and kept it — the blurred version was never stored. The blur and the paint count now (key version 3). An entry with a blur is rekeyed from the images it holds the next time it is compared, so none is duplicated; every other entry keeps the key it has, and no file is read to find that out.
+- **Turning or flipping several cards at once left their blur behind.** Strokes are stored against the transformed picture, as the crop is, and the batch rotate and flip carried the crop through the turn but not the strokes, so a blurred face ended up blurred somewhere else. They go with the picture now, the blur and the paint both.
+- **`⧉ Copy` after changing a blur copied the picture from before.** A rendering already made for the same pixels is written straight away on a second click — Firefox only accepts a write while the click is fresh — and the key that says "the same pixels" left the blur out. It includes the blur and the paint now, which also keeps the sharp preview from keeping a stale render.
+
 ## 1.13.1 — 2026-09-30
 
 ### Faster
