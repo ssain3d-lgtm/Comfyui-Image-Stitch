@@ -5,7 +5,7 @@ export const CROPPED_EPSILON = 0.0005;
 export const MAX_IMAGES = 256;
 // Mirrored by _MAX_SEPARATE: how many images can leave on sockets of their
 // own. The node type carries them all; the view shows one per image.
-export const MAX_SEPARATE = 8;
+export const MAX_SEPARATE = 10;
 // image, cells, width, height — the numbered sockets start after these.
 export const NAMED_OUTPUTS = 4;
 // Mirrored by _MAX_IMAGE_INPUTS: the IMAGE inputs are "images", then

@@ -606,7 +606,9 @@ class MultiStitchTests(unittest.TestCase):
             return load
 
         for layout, direction in (("grid", "down"), ("strip", "left"), ("strip", "up")):
-            refs.clear(); order.clear(); alive_at_call.clear()
+            refs.clear()
+            order.clear()
+            alive_at_call.clear()
             with self.subTest(layout=layout, direction=direction):
                 loaders = [loader(i, w, h) for i, (w, h) in enumerate(dims)]
                 streamed, _, _ = ms._compose_from(loaders, dims, layout, direction, True, 3, 1, "white", "#808080")

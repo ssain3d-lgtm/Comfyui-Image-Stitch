@@ -116,7 +116,7 @@ describe("dom view", () => {
         assert.equal(view.domView(node), handle);
         assert.equal(part(handle.root, "status").textContent, "2 images  •  ~800×300");
         assert.deepEqual(buttons(handle.root).filter((b) => !b.hidden).map((b) => b.textContent),
-            ["+ Add", "Clear", "⧉ Copy", "↶", "↷", "Preview ✓", "Options ▸ (2)", "🖼 Gallery", "📐 Size"],
+            ["+ Add", "⧉ Copy", "Preview ✓", "Options ▸ (2)", "⋯", "🖼 Gallery", "📐 Size"],
             "▶ Inputs only while an input is plugged in");
         assert.equal(cards(handle.root).length, 2);
         assert.equal(cards(handle.root)[1].className, "card", "an edited image is outlined like any other; its ✂ badge marks it");
@@ -170,11 +170,30 @@ describe("dom view", () => {
         handle.destroy();
     });
 
+    it("offers the layout presets the canvas does, and lights the matching one", () => {
+        const node = fakeNode([item("a.png")]);
+        const spy = actionSpy();
+        const applied = [];
+        spy.actions.layoutPresets = () => [
+            { name: "row", label: "→ Row", title: "", on: false },
+            { name: "grid3", label: "▦ 3", title: "", on: true },
+            { name: "separate", label: "image_N ⇢", title: "", on: false },
+        ];
+        spy.actions.applyLayoutPreset = (n, name) => applied.push(name);
+        const handle = view.installDomView(node, spy.actions);
+        const row = part(handle.root, "presets").children;
+        assert.deepEqual(row.map((b) => [b.textContent, b.className]), [["→ Row", ""], ["▦ 3", "on"], ["image_N ⇢", "separate"]]);
+        row[0].handlers.click[0]({ stopPropagation() {} });
+        row[2].handlers.click[0]({ stopPropagation() {} });
+        assert.deepEqual(applied, ["row", "separate"]);
+        handle.destroy();
+    });
+
     it("explains itself and offers the box when the list is empty", () => {
         const node = fakeNode();
         const handle = view.installDomView(node, actionSpy().actions);
         assert.equal(part(handle.root, "empty").hidden, false);
-        assert.match(part(handle.root, "empty").textContent, /Drop or add images or a video/);
+        assert.match(part(handle.root, "empty").textContent, /Drop or Add images or a video — then click a card to edit/);
         assert.equal(part(handle.root, "cards").hidden, true);
         assert.equal(part(handle.root, "preview").hidden, true, "nothing to preview");
         handle.destroy();
@@ -184,7 +203,12 @@ describe("dom view", () => {
         const node = fakeNode([item("a.png"), item("b.png")]);
         const spy = actionSpy();
         const handle = view.installDomView(node, spy.actions);
-        for (const label of ["+ Add", "Clear", "⧉ Copy", "↶", "↷", "🖼 Gallery"]) press(handle.root, label);
+        for (const label of ["+ Add", "⧉ Copy", "🖼 Gallery"]) press(handle.root, label);
+        // Undo, redo and Clear are behind ⋯, as on the canvas.
+        press(handle.root, "⋯");
+        const more = dom.overlays.at(-1).children;
+        assert.deepEqual(more.map((e) => e.textContent), ["↶ Undo", "↷ Redo", "Clear all images"]);
+        for (const entry of more) entry.handlers.click[0]({ stopPropagation() {} });
         press(handle.root, "Preview");
         press(handle.root, "Options");
         press(handle.root, "📐");
@@ -198,7 +222,7 @@ describe("dom view", () => {
         for (const entry of entries) entry.handlers.click[0]({ stopPropagation() {} });
         card.children.find((c) => c.className === "thumb").handlers.click[0]();
         assert.deepEqual(spy.calls.filter(([name]) => name !== "drawThumb" && name !== "drawPreview" && name !== "resized"), [
-            ["add"], ["clear"], ["copy"], ["undo"], ["redo"], ["openGallery"],
+            ["add"], ["copy"], ["openGallery"], ["undo"], ["redo"], ["clear"],
             ["togglePreview"], ["toggleOptions"], ["toggleSizePanel"],
             ["edit", 1], ["duplicate", 1], ["copyEdited", 1], ["replace", 1], ["remove", 1], ["edit", 1],
         ]);
@@ -292,7 +316,9 @@ describe("dom view", () => {
         assert.equal(part(handle.root, "preview").hidden, false);
         const byLabel = (label) => buttons(handle.root).find((b) => b.textContent.startsWith(label));
         assert.equal(byLabel("⧉ Copy").disabled, false);
-        assert.equal(byLabel("Clear").disabled, true, "Clear empties the pasted list, which is empty");
+        press(handle.root, "⋯");
+        const clear = dom.overlays.at(-1).children.find((e) => e.textContent === "Clear all images");
+        assert.equal(clear.disabled, true, "Clear empties the pasted list, which is empty");
         handle.destroy();
     });
 
@@ -339,7 +365,8 @@ describe("dom view", () => {
         assert.ok(labels.includes("Preview"), "off, so no tick");
         assert.ok(labels.includes("Options ▾"), "open, so no count");
         assert.ok(labels.includes("📐 Size ✓"));
-        assert.equal(buttons(handle.root).find((b) => b.textContent === "↶").disabled, true, "nothing to undo");
+        press(handle.root, "⋯");
+        assert.equal(dom.overlays.at(-1).children.find((e) => e.textContent === "↶ Undo").disabled, true, "nothing to undo");
         assert.equal(part(handle.root, "preview").hidden, true);
         assert.equal(part(handle.root, "panel").hidden, false);
         handle.destroy();

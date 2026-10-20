@@ -513,6 +513,12 @@ describe("crop editor", () => {
         assert.ok(Math.abs(away(once) - away(base) / 2) <= 4, `half-covered once (${base} → ${once})`);
         assert.ok(away(twice) < away(once) - 20, `a second stroke does build up (${once} → ${twice})`);
 
+        // Mark and Cover are the two uses, a click each.
+        await page.click(".paint-mark");
+        assert.deepEqual([await page.locator(".opacity-value").textContent(), await page.locator(".swatch.active").getAttribute("title")], ["40%", "Red"]);
+        await page.click(".paint-cover");
+        assert.deepEqual([await page.locator(".opacity-value").textContent(), await page.locator(".swatch.active").getAttribute("title")], ["100%", "Grey"]);
+
         // The colour input takes any colour, and lights no swatch.
         await page.locator(".paint-color").fill("#336699");
         assert.equal(await page.locator(".swatch.active").count(), 0);

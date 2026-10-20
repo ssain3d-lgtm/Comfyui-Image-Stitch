@@ -62,7 +62,14 @@ async function waitForThumbs(node) {
 
 const click = (node, [x, y]) => nodeType.prototype.onMouseDown.call(node, pointer(x, y), [x, y], {});
 // A click in the middle of one toolbar pill, wherever toolbarControls puts it.
-const clickControl = (node, name) => click(node, centre(ms.toolbarControls(node)[name]));
+// Clear, undo and redo live behind ⋯, so those run the entry ⋯ offers.
+const MENU_ACTIONS = new Set(["clear", "undo", "redo"]);
+const clickControl = (node, name) => {
+    if (!MENU_ACTIONS.has(name)) return click(node, centre(ms.toolbarControls(node)[name]));
+    const entry = ms.moreMenuEntries(node).find((e) => e?.action === name);
+    if (!entry.disabled) entry.callback();
+    return true;
+};
 // A card carries no buttons any more: its controls are on the right-click
 // menu, so a test runs one the way a user would — through getExtraMenuOptions.
 const cardMenu = (node, index) => {
@@ -706,9 +713,65 @@ describe("toolbar and folded options", () => {
         assert.deepEqual(shown, ["direction", "match_image_size", "spacing_width", "spacing_color", "layout_mode"]);
         assert.deepEqual(node.widgets.filter((w) => w.type === "button").map((w) => w.name), ["custom_color_picker"]);
         const painted = paintedText(nodeType, node);
-        for (const label of ["+ Add", "Clear", "⧉ Copy", "↶", "↷", "Preview ✓", "Options ▸"]) {
+        for (const label of ["+ Add", "⧉ Copy", "Preview ✓", "Options ▸", "⋯"]) {
             assert.ok(painted.includes(label), `${label} is on the toolbar`);
         }
+        for (const label of ["→ Row", "↓ Column", "▦ 2", "▦ 3", "▦ 4", "image_N ⇢"]) {
+            assert.ok(painted.includes(label), `${label} is on the preset row`);
+        }
+        for (const label of ["Clear", "↶", "↷"]) {
+            assert.ok(!painted.includes(label), `${label} moved behind ⋯`);
+        }
+    });
+
+    it("keeps Clear, undo and redo behind ⋯, each enabled only when it would do something", () => {
+        const node = plainNode(nodeType);
+        const opened = [];
+        const previous = globalThis.LiteGraph;
+        globalThis.LiteGraph = { ...previous, ContextMenu: class { constructor(values, options) { opened.push({ values, title: options?.title }); } } };
+        try {
+            assert.equal(clickControl(node, "more"), true);
+        } finally {
+            globalThis.LiteGraph = previous;
+        }
+        assert.equal(opened.length, 1, "a click on ⋯ opens one menu");
+        const state = () => Object.fromEntries(ms.moreMenuEntries(node).filter(Boolean).map((e) => [e.action, !e.disabled]));
+        assert.deepEqual(opened[0].values.map((v) => v?.content ?? null), ["↶ Undo", "↷ Redo", null, "Clear all images"]);
+        assert.deepEqual(state(), { undo: false, redo: false, clear: false }, "nothing to do on an empty node");
+        ms.applyImages(node, [item("a.png"), item("b.png")]);
+        assert.deepEqual(state(), { undo: true, redo: false, clear: true });
+        clickControl(node, "clear");
+        assert.equal(node._msImages.length, 0);
+        assert.deepEqual(state(), { undo: true, redo: false, clear: false });
+        clickControl(node, "undo");
+        assert.equal(node._msImages.length, 2, "and undo brings them back");
+        assert.equal(state().redo, true);
+    });
+
+    it("sets the layout from the preset row and lights the one the widgets match", () => {
+        const node = plainNode(nodeType);
+        const press = (name) => click(node, centre(ms.layoutPresetRects(node).find((chip) => chip.name === name)));
+        const values = () => ["layout_mode", "direction", "grid_columns"].map((name) => widget(node, name).value);
+        assert.equal(ms.activeLayoutPreset(node), "row", "a fresh node is a row");
+        assert.equal(press("grid3"), true);
+        assert.deepEqual(values(), ["grid", "right", 3]);
+        assert.equal(ms.activeLayoutPreset(node), "grid3");
+        assert.equal(widget(node, "grid_columns").options.hidden, false, "the grid's own widget shows, as if picked by hand");
+        press("column");
+        assert.deepEqual(values().slice(0, 2), ["strip", "down"]);
+        assert.equal(widget(node, "grid_columns").options.hidden, true);
+        // A layout no chip describes lights none, and is left as it is.
+        widget(node, "direction").value = "left";
+        assert.equal(ms.activeLayoutPreset(node), null);
+        widget(node, "layout_mode").value = "grid";
+        widget(node, "grid_columns").value = 5;
+        assert.equal(ms.activeLayoutPreset(node), null);
+        // The last chip is the output_cells switch, sockets and all.
+        assert.equal(widget(node, "output_cells").value, false);
+        press("separate");
+        assert.equal(widget(node, "output_cells").value, true);
+        press("separate");
+        assert.equal(widget(node, "output_cells").value, false);
     });
 
     it("keeps a non-default option visible while folded and counts it on the pill", () => {

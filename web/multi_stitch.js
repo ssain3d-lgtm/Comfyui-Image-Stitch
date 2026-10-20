@@ -124,6 +124,21 @@ const titleHeight = () => globalThis.LiteGraph?.NODE_TITLE_HEIGHT || 30;
 // One toolbar row under the status line holds every action, so no widget
 // rows are spent on buttons.
 const TOOLBAR_H = 24;
+// Under it, the layouts most compositions are one of, a click each instead of
+// three widgets, and the switch that hands every image out on its own socket.
+// They only set the widgets: whatever a widget says is what the node does, and
+// a layout none of them matches (a strip to the left, five columns) simply
+// lights none.
+const PRESET_ROW_H = 22;
+const LAYOUT_PRESETS = [
+    { name: "row", label: "→ Row", w: 52, title: "One row, left to right", set: { layout_mode: "strip", direction: "right" } },
+    { name: "column", label: "↓ Column", w: 64, title: "One column, top to bottom", set: { layout_mode: "strip", direction: "down" } },
+    ...[2, 3, 4].map((columns) => ({
+        name: `grid${columns}`, label: `▦ ${columns}`, w: 36, title: `A grid ${columns} columns wide`,
+        set: { layout_mode: "grid", direction: "right", grid_columns: columns, grid_target_aspect: "off" },
+    })),
+];
+const SEPARATE_CHIP = { name: "separate", label: "image_N ⇢", w: 78, title: "Also hand every image out on a socket of its own (output_cells)" };
 // Options most workflows never touch stay folded behind "Options". A widget
 // whose value is not the default stays visible even when folded, so nothing
 // acts on the output without showing on the node.
@@ -163,17 +178,27 @@ function toolbarRect(node) {
     return { x: 8, y: visibleWidgetBottom(node) + 26, w: nodeWidth(node) - 16, h: TOOLBAR_H };
 }
 
+// The layout shortcuts, one row under the toolbar.
+function presetRowRect(node) {
+    const bar = toolbarRect(node);
+    return { x: 8, y: bar.y + bar.h + 2, w: nodeWidth(node) - 16, h: PRESET_ROW_H };
+}
+
+// Where the controls end and the picture begins.
+function controlsBottom(node) {
+    const row = presetRowRect(node);
+    return row.y + row.h;
+}
+
 function previewRect(node) {
     if (!previewEnabled(node) || !stitchItems(node).length) return null;
-    const bar = toolbarRect(node);
-    return { x: 8, y: bar.y + bar.h + 6, w: nodeWidth(node) - 16, h: PREVIEW_HEIGHT };
+    return { x: 8, y: controlsBottom(node) + 6, w: nodeWidth(node) - 16, h: PREVIEW_HEIGHT };
 }
 
 function listTop(node) {
     const preview = previewRect(node);
     if (preview) return preview.y + preview.h + 8;
-    const bar = toolbarRect(node);
-    return bar.y + bar.h + 6;
+    return controlsBottom(node) + 6;
 }
 
 // Cards in the list: the images, then any videos waiting for capture, then
@@ -516,12 +541,14 @@ function emptyBoxRect(node) {
 }
 
 // Toolbar pills, left to right. Widths are fixed so the whole row fits a
-// 420px node: 64+48+56+24+24+70+84 plus six 4px gaps = 394 of 404.
+// 420px node: 64+56+70+84+28 plus four 4px gaps = 318 of 404. Clear, undo and
+// redo are a click further, behind ⋯: they are the least used and the first
+// two the easiest to regret, and the row needs room more than they need a pill.
 function toolbarControls(node) {
     const bar = toolbarRect(node);
     const y = bar.y + 2;
     const h = bar.h - 4;
-    const widths = [["add", 64], ["clear", 48], ["copy", 56], ["undo", 24], ["redo", 24], ["preview", 70], ["options", 84]];
+    const widths = [["add", 64], ["copy", 56], ["preview", 70], ["options", 84], ["more", 28]];
     const rects = {};
     let x = bar.x;
     for (const [name, w] of widths) {
@@ -807,8 +834,6 @@ function drawPill(ctx, rect, label, active = true) {
 }
 
 function drawToolbar(ctx, node) {
-    const count = node._msImages?.length || 0;
-    const history = historyOf(node);
     const controls = toolbarControls(node);
     const run = node._msUpload;
     const advanced = advancedState(node);
@@ -818,19 +843,115 @@ function drawToolbar(ctx, node) {
         ? fittingLabel(ctx, [`Cancel ${run.done}/${run.total}`, `✕ ${run.done}/${run.total}`, `${run.done}/${run.total}`], controls.add.w - 6)
         : "+ Add";
     drawPill(ctx, controls.add, addLabel);
-    // Copy and the preview have the input pictures to work with too; Clear
-    // only ever empties the pasted list.
+    // Copy and the preview have the input pictures to work with too.
     const shown = stitchItems(node).length;
-    drawPill(ctx, controls.clear, "Clear", count > 0 || !!run);
     drawPill(ctx, controls.copy, node._msCopying ? "…" : "⧉ Copy", shown > 0 && !node._msCopying);
-    drawPill(ctx, controls.undo, "↶", history.past.length > 0);
-    drawPill(ctx, controls.redo, "↷", history.future.length > 0);
+    drawPill(ctx, controls.more, "⋯", moreMenuEntries(node).some((entry) => entry && !entry.disabled));
     drawPill(ctx, controls.preview, previewEnabled(node) ? "Preview ✓" : "Preview", shown > 0);
     drawPill(
         ctx,
         controls.options,
         advanced.open ? "Options ▾" : `Options ▸${advanced.active.length ? ` (${advanced.active.length})` : ""}`,
     );
+}
+
+// What ⋯ offers. `action` names an entry for the tests and the Vue view.
+function moreMenuEntries(node) {
+    const history = historyOf(node);
+    const count = node._msImages?.length || 0;
+    return [
+        { content: "↶ Undo", action: "undo", disabled: !history.past.length, callback: () => restoreHistory(node, undoImages) },
+        { content: "↷ Redo", action: "redo", disabled: !history.future.length, callback: () => restoreHistory(node, redoImages) },
+        null,
+        // The pasted list and the videos waiting for capture; during an upload
+        // it also stops the upload. The input cards are not the node's to clear.
+        { content: "Clear all images", action: "clear", disabled: !count && !node._msVideos?.length && !node._msUpload, callback: () => clearAllImages(node) },
+    ];
+}
+
+function openMoreMenu(node, event) {
+    const ContextMenu = globalThis.LiteGraph?.ContextMenu;
+    if (!ContextMenu) {
+        notify("Menu unavailable", "This frontend has no LiteGraph context menu.", "warn");
+        return;
+    }
+    new ContextMenu(moreMenuEntries(node), { event, title: "Images" });
+}
+
+// Which layout chip the widgets match right now, if any.
+function activeLayoutPreset(node) {
+    const values = (name) => getWidget(node, name)?.value;
+    return LAYOUT_PRESETS.find((preset) => Object.entries(preset.set).every(([name, value]) => {
+        const current = values(name);
+        // grid_target_aspect only exists on newer saves; missing is "off".
+        return String(current ?? (name === "grid_target_aspect" ? "off" : "")) === String(value);
+    }))?.name ?? null;
+}
+
+function layoutPresetRects(node) {
+    const row = presetRowRect(node);
+    const y = row.y + 2;
+    const h = row.h - 4;
+    let x = row.x;
+    const chips = LAYOUT_PRESETS.map((preset) => {
+        const chip = { ...preset, x, y, w: preset.w, h };
+        x += preset.w + 4;
+        return chip;
+    });
+    chips.push({ ...SEPARATE_CHIP, x: row.x + row.w - SEPARATE_CHIP.w, y, w: SEPARATE_CHIP.w, h });
+    return chips;
+}
+
+function layoutPresetAt(node, x, y) {
+    return layoutPresetRects(node).find((chip) => inRect(x, y, chip)) || null;
+}
+
+// Sets widgets the way a person would, so ComfyUI's own change handling and
+// the node's conditional widgets both follow.
+function setWidgetValues(node, values) {
+    let changedAny = false;
+    for (const [name, value] of Object.entries(values)) {
+        const widget = getWidget(node, name);
+        if (!widget || widget.value === value) continue;
+        const old = widget.value;
+        widget.value = value;
+        widget.callback?.(value);
+        node.onWidgetChanged?.(name, value, old, widget);
+        changedAny = true;
+    }
+    if (!changedAny) return false;
+    syncConditionalWidgets(node);
+    scheduleNodeLayout(node);
+    refreshDomView(node);
+    node.graph?.setDirtyCanvas(true, true);
+    return true;
+}
+
+function applyLayoutPreset(node, name) {
+    if (name === SEPARATE_CHIP.name) {
+        return setWidgetValues(node, { output_cells: !getWidget(node, "output_cells")?.value });
+    }
+    const preset = LAYOUT_PRESETS.find((p) => p.name === name);
+    return preset ? setWidgetValues(node, preset.set) : false;
+}
+
+function drawLayoutPresets(ctx, node) {
+    const active = activeLayoutPreset(node);
+    const separate = !!getWidget(node, "output_cells")?.value;
+    ctx.save();
+    ctx.font = "11px sans-serif";
+    ctx.textAlign = "center";
+    for (const chip of layoutPresetRects(node)) {
+        const on = chip.name === SEPARATE_CHIP.name ? separate : chip.name === active;
+        ctx.fillStyle = on ? "#2f6b45" : "rgba(255,255,255,.06)";
+        ctx.fillRect(chip.x, chip.y, chip.w, chip.h);
+        ctx.strokeStyle = on ? "#4ade80" : "#3a3a3a";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(chip.x + 0.5, chip.y + 0.5, chip.w - 1, chip.h - 1);
+        ctx.fillStyle = on ? "#c9f7d9" : "#b8b8b8";
+        ctx.fillText(chip.label, chip.x + chip.w / 2, chip.y + 13, chip.w - 4);
+    }
+    ctx.restore();
 }
 
 function drawPreview(ctx, node, rect) {
@@ -1203,6 +1324,14 @@ const DOM_VIEW_ACTIONS = () => (domViewActions ||= {
     togglePreview: (node) => { if (stitchItems(node).length) togglePreview(node); },
     toggleOptions: toggleAdvanced,
     toggleSizePanel,
+    layoutPresets: (node) => {
+        const active = activeLayoutPreset(node);
+        const separate = !!getWidget(node, "output_cells")?.value;
+        return [...LAYOUT_PRESETS, SEPARATE_CHIP].map(({ name, label, title }) => ({
+            name, label, title, on: name === SEPARATE_CHIP.name ? separate : name === active,
+        }));
+    },
+    applyLayoutPreset,
     // The DOM panel is the same drawing at its own origin, so a click on it is
     // laid out for that rect rather than for the node's.
     sizePanelClick: (node, point) => {
@@ -1318,6 +1447,7 @@ function drawThumbs(node, ctx) {
     ctx.fillText(hint ?? statusText(node, (text) => ctx.measureText?.(text)?.width ?? 0, room), 9, top + 12, room);
     ctx.fillStyle = "#b8b8b8";
     drawToolbar(ctx, node);
+    drawLayoutPresets(ctx, node);
 
     if (!listCount(node)) {
         const r = emptyBoxRect(node);
@@ -3343,14 +3473,18 @@ app.registerExtension({
                 if (hit) {
                     if (hit === "add") {
                         if (!cancelUpload(this)) chooseFiles(this);
-                    } else if (hit === "clear") clearAllImages(this);
-                    else if (hit === "copy") {
+                    } else if (hit === "copy") {
                         if (stitchItems(this).length) copyStitchedResult(this);
-                    } else if (hit === "undo") restoreHistory(this, undoImages);
-                    else if (hit === "redo") restoreHistory(this, redoImages);
+                    } else if (hit === "more") openMoreMenu(this, event);
                     else if (hit === "preview") {
                         if (stitchItems(this).length) togglePreview(this);
                     } else if (hit === "options") toggleAdvanced(this);
+                    stopEvent(event);
+                    return true;
+                }
+                const layout = layoutPresetAt(this, x, y);
+                if (layout) {
+                    applyLayoutPreset(this, layout.name);
                     stopEvent(event);
                     return true;
                 }
@@ -3552,7 +3686,12 @@ app.registerExtension({
 // functions the canvas UI uses — geometry helpers included, since the DOM view
 // and the tests must agree with the canvas about where a card is.
 export {
+    activeLayoutPreset,
     addFiles,
+    applyLayoutPreset,
+    layoutPresetRects,
+    moreMenuEntries,
+    presetRowRect,
     advancedOpen,
     advancedState,
     applyImages,

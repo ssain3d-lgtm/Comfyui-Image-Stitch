@@ -72,7 +72,8 @@ class ReferenceQualityTests(unittest.TestCase):
     def test_png_exif_after_pixels_is_read_without_decode(self):
         item = self.write_png('late.png', (255, 0, 0), (20, 30))
         path = self.root / 'late.png'
-        exif = Image.Exif(); exif[274] = 6
+        exif = Image.Exif()
+        exif[274] = 6
         payload = exif.tobytes()[6:]
         chunk = struct.pack('>I', len(payload)) + b'eXIf' + payload + struct.pack('>I', zlib.crc32(b'eXIf' + payload))
         data = path.read_bytes()
@@ -101,7 +102,8 @@ class ReferenceQualityTests(unittest.TestCase):
 
     def test_tiff_orientation_headers_are_respected(self):
         image = Image.new('RGB', (20, 30))
-        exif = Image.Exif(); exif[274] = 6
+        exif = Image.Exif()
+        exif[274] = 6
         image.save(self.root / 'orientation.tiff', exif=exif)
         item = {'filename': 'orientation.tiff'}
         self.assertEqual(ms._item_output_dimensions(item), (30, 20))
@@ -122,7 +124,8 @@ class ReferenceQualityTests(unittest.TestCase):
                 base.putpixel((x, y), (x * 12 % 256, y * 8 % 256, 7))
         crop = {'x': 0.25, 'y': 0.5, 'w': 0.5, 'h': 0.5}
         for orientation in range(1, 9):
-            exif = Image.Exif(); exif[274] = orientation
+            exif = Image.Exif()
+            exif[274] = orientation
             name = f'turned{orientation}.tiff'
             base.save(self.root / name, exif=exif)
             item = {'filename': name}

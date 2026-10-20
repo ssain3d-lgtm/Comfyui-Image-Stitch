@@ -38,7 +38,9 @@ function installStyles() {
 .ms-dom-view [hidden]{display:none!important}
 .ms-dom-view{box-sizing:border-box;width:100%;font:12px/1.3 sans-serif;color:#d0d0d0;display:flex;flex-direction:column;gap:6px;padding:4px 2px;user-select:none}
 .ms-dom-view .status{color:#b8b8b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ms-dom-view .toolbar{display:flex;gap:4px;flex-wrap:wrap}
+.ms-dom-view .toolbar,.ms-dom-view .presets{display:flex;gap:4px;flex-wrap:wrap}
+.ms-dom-view .presets button{padding:2px 7px;font-size:11px}
+.ms-dom-view .presets .separate{margin-left:auto}
 .ms-dom-view button{background:#3a3a3a;border:1px solid #4a4a4a;color:#e6e6e6;border-radius:4px;padding:3px 8px;cursor:pointer;font:inherit;line-height:1.2}
 .ms-dom-view button:hover{background:#474747}
 .ms-dom-view button:disabled{opacity:.45;cursor:default}
@@ -61,6 +63,7 @@ function installStyles() {
 .ms-card-menu{position:fixed;z-index:10000;background:#2b2b2b;border:1px solid #4a4a4a;border-radius:4px;padding:3px;display:flex;flex-direction:column;min-width:150px;box-shadow:0 4px 14px rgba(0,0,0,.5);font:12px sans-serif}
 .ms-card-menu button{background:transparent;border:0;color:#e6e6e6;text-align:left;padding:5px 9px;border-radius:3px;cursor:pointer;font:inherit}
 .ms-card-menu button:hover{background:#3d5a80}
+.ms-card-menu button:disabled{opacity:.4;cursor:default;background:transparent}
 .ms-dom-view .card .size{position:absolute;right:3px;bottom:3px;background:rgba(0,0,0,.72);color:#e8e8e8;font-size:6px;padding:1px 3px;border-radius:2px;white-space:nowrap;pointer-events:none}
 .ms-dom-view .card .size.edited{color:#f6b73c}
 .ms-dom-view .card.input{background:#11191a;border-color:#3f8f8a;cursor:default}
@@ -156,13 +159,15 @@ export function installDomView(node, actions) {
     status.className = "status";
     const toolbar = document.createElement("div");
     toolbar.className = "toolbar";
+    const presets = document.createElement("div");
+    presets.className = "presets";
     const preview = document.createElement("canvas");
     preview.className = "preview";
     const cards = document.createElement("div");
     cards.className = "cards";
     const empty = document.createElement("div");
     empty.className = "empty";
-    empty.textContent = "Drop or add images or a video (paste images with Ctrl+V while the node is selected)";
+    empty.textContent = "Paste images (Ctrl+V with the node selected) · Drop or Add images or a video — then click a card to edit, drag it to reorder, right-click it for more";
     const panel = document.createElement("canvas");
     panel.className = "panel";
     panel.title = "Click a shape to set the width / height outputs";
@@ -179,25 +184,37 @@ export function installDomView(node, actions) {
             h: box.height,
         });
     });
-    root.append(status, toolbar, preview, cards, empty, panel);
+    root.append(status, toolbar, presets, preview, cards, empty, panel);
 
     const view = { node, root, widget: null, timer: null, alive: true, height: 0 };
     node._msDomView = view;
 
+    // Set once the menu helper below exists.
+    let openMore = () => {};
     const buttons = {
         add: button("+ Add", "Add images or a video (files)", () => actions.add(node)),
-        clear: button("Clear", "Remove every image", () => actions.clear(node)),
         copy: button("⧉ Copy", "Copy the stitched result to the clipboard", () => actions.copy(node)),
-        undo: button("↶", "Undo (this node's list)", () => actions.undo(node)),
-        redo: button("↷", "Redo", () => actions.redo(node)),
         preview: button("Preview", "Show the composite preview band", () => actions.togglePreview(node)),
         options: button("Options ▸", "Show the advanced widgets", () => actions.toggleOptions(node)),
+        // Undo, redo and Clear, as on the canvas toolbar.
+        more: button("⋯", "Undo, redo, clear", (event) => openMore(event)),
         gallery: button("🖼 Gallery", "Compositions this node has stitched; load one back", () => actions.openGallery(node)),
         size: button("📐 Size", "Width / height outputs and the size panel", () => actions.toggleSizePanel(node)),
         inputs: button("▶ Inputs", "Run only the nodes feeding the IMAGE inputs — not the ones after this node",
             () => actions.runInputs?.(node)),
     };
     toolbar.append(...Object.values(buttons));
+
+    // The layout shortcuts, built once from what the canvas offers; render()
+    // lights the one the widgets match.
+    const presetButtons = (actions.layoutPresets?.(node) || []).map((preset) => {
+        const el = button(preset.label, preset.title, () => actions.applyLayoutPreset(node, preset.name));
+        el.presetName = preset.name;
+        if (preset.name === "separate") el.className = "separate";
+        return el;
+    });
+    presets.append(...presetButtons);
+    presets.hidden = !presetButtons.length;
 
     empty.addEventListener("click", () => actions.add(node));
     const accept = (event) => {
@@ -242,9 +259,10 @@ export function installDomView(node, actions) {
         menu.className = "ms-card-menu";
         menu.style.left = `${event.clientX ?? 0}px`;
         menu.style.top = `${event.clientY ?? 0}px`;
-        for (const [label, run] of entries) {
+        for (const [label, run, disabled] of entries) {
             const entry = document.createElement("button");
             entry.textContent = label;
+            if (disabled) entry.disabled = true;
             entry.addEventListener("click", (click) => {
                 click.stopPropagation?.();
                 closeMenu();
@@ -260,6 +278,12 @@ export function installDomView(node, actions) {
             if (view.menu === menu) window.addEventListener("pointerdown", closeMenu, { once: true, capture: true });
         }, 0);
     };
+
+    openMore = (event) => openMenu(event, [
+        ["↶ Undo", () => actions.undo(node), !actions.canUndo(node)],
+        ["↷ Redo", () => actions.redo(node), !actions.canRedo(node)],
+        ["Clear all images", () => actions.clear(node), !actions.items(node).length && !actions.videos(node).length],
+    ]);
 
     const cardFor = (item, index) => {
         const el = document.createElement("div");
@@ -440,9 +464,9 @@ export function installDomView(node, actions) {
         const shown = stitchCount(node, actions);
         view.inputKey = actions.inputSignature?.(node);
         status.textContent = actions.status(node);
-        buttons.undo.disabled = !actions.canUndo(node);
-        buttons.redo.disabled = !actions.canRedo(node);
-        buttons.clear.disabled = !items.length && !videos.length;
+        buttons.more.disabled = !actions.canUndo(node) && !actions.canRedo(node) && !items.length && !videos.length;
+        const lit = actions.layoutPresets?.(node) || [];
+        for (const el of presetButtons) el.className = `${el.presetName === "separate" ? "separate" : ""}${lit.find((p) => p.name === el.presetName)?.on ? " on" : ""}`.trim();
         buttons.copy.disabled = !shown;
         buttons.preview.disabled = !shown;
         const previewOn = actions.previewOn(node) && shown > 0;

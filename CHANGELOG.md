@@ -2,6 +2,21 @@
 
 All notable changes to **Multi Stitch Images**. The version is the one in `pyproject.toml`; each release is tagged `v<version>` on `main`.
 
+## 1.15.0 — 2026-10-20
+
+### Added
+- **A layout preset row.** Under the toolbar, `→ Row`, `↓ Column`, `▦ 2`, `▦ 3` and `▦ 4` set `layout_mode`, `direction` and `grid_columns` (and `grid_target_aspect` off) in one click, through the widgets as a person would set them, so ComfyUI's change tracking and the grid's own widgets follow. The chip the widgets match is lit; a layout none of them describes — a strip to the left, five columns, a target shape — lights none and is used exactly as the widgets say. Nothing is hidden or renamed, so a saved workflow is untouched.
+- **`image_N ⇢`**, the chip on the right of that row, switches `output_cells` — every image on a socket of its own — without opening Options.
+- **Ten separate outputs.** `image_1` … `image_10` (from eight), the ten references Qwen-Image 2.1's edit templates wire; MiniMax H3's nine fit inside. New sockets go after the old ones, so no saved link moves.
+- **`■ Cover` and `○ Mark`** in the editor's Paint tab set the colour and the opacity for the two things paint is for: opaque grey to hide what is there, faint red to point at what an edit should change. The controls beside them show what was set and stay adjustable.
+
+### Changed
+- **Clear, undo and redo moved behind `⋯`.** The toolbar is `+ Add · ⧉ Copy · Preview · Options · ⋯` (318 of 404 px, where it used to be full at 394). Clear is the easiest pill to regret and now a click further away; each menu entry is enabled only when it would do something.
+- **The Vue (Nodes 2.0) view follows**: the same preset row (a row of buttons, the matching one lit) and the same `⋯` menu, and its empty-node hint now says how to work the cards, as the canvas one already did.
+
+### Maintenance
+- **One statement per line in the tests.** The registry's publish check flagged five semicolon-joined statements (E702) in `tests/` as soon to be an error; they are split, and `ruff` now selects E702 so a new one fails CI before it can reach a release.
+
 ## 1.14.0 — 2026-10-20
 
 ### Added

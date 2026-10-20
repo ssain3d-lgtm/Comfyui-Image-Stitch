@@ -186,6 +186,8 @@ export async function openCropEditor(node, index) {
             <label>Brush <input type="range" class="brush-size" min="2" max="100" step="1"><span class="value size-value"></span></label>
             <label class="for-blur">Blur <input type="range" class="brush-strength" min="1" max="100" step="1"><span class="value strength-value"></span></label>
             <span class="for-paint" hidden>
+              <button class="paint-cover" title="Opaque grey: hide what is there, for a model to fill">■ Cover</button>
+              <button class="paint-mark" title="Faint red: point at what an edit should change">○ Mark</button>
               <label>Opacity <input type="range" class="paint-opacity" min="5" max="100" step="5"><span class="value opacity-value"></span></label>
               <span class="ms-swatches"></span>
               <input type="color" class="paint-color" title="Any other colour">
@@ -889,6 +891,15 @@ export async function openCropEditor(node, index) {
         for (const [value, swatch] of swatches) swatch.classList.toggle("active", value === paintColour);
     }
     colourInput.oninput = () => chooseColour(colourInput.value);
+    // The two things paint is for, a click each: what they set is what the
+    // controls beside them show, and both stay adjustable.
+    const usePaint = (colour, opacity) => {
+        chooseColour(colour);
+        opacitySlider.value = String(Math.round(opacity * 100));
+        opacitySlider.oninput();
+    };
+    overlay.querySelector(".paint-cover").onclick = () => usePaint("#808080", 1);
+    overlay.querySelector(".paint-mark").onclick = () => usePaint("#ff0000", 0.4);
     opacitySlider.oninput = () => {
         paintOpacity = Number(opacitySlider.value) / 100;
         opacityValue.textContent = `${Math.round(paintOpacity * 100)}%`;

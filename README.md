@@ -24,8 +24,9 @@
 - **동영상에서 장면 캡처** — 프레임 단위로 찾아 원본 해상도 PNG로 목록에 추가, 동영상은 저장 공간을 차지하지 않음. 브라우저가 못 여는 코덱은 서버(PyAV)가 디코딩
 - **기준 이미지 크기 출력** — `width`/`height` 출력 단자와 크기 패널: 기준 이미지 크기를 MP 목표로 조정하고 배수(기본 32)로 맞춤
 - **갤러리** — 실행한 구성(이미지·Crop·순서·설정)이 미리보기와 함께 기록되어 언제든 다시 불러오기, 안 쓰는 파일 정리까지
-- **이미지별 개별 출력 단자** — `output_cells`를 켜면 `image_1`…`image_8`로 한 장씩 따로, 여백 없이
-- 툴바 한 줄 `+ Add · Clear · ⧉ Copy · ↶ ↷ · Preview · Options` — 고급 옵션은 **접혀 있고** 기본값이 아닌 것만 표시
+- **이미지별 개별 출력 단자** — `output_cells`를 켜면 `image_1`…`image_10`로 한 장씩 따로, 여백 없이
+- 툴바 한 줄 `+ Add · ⧉ Copy · Preview · Options · ⋯`(⋯ = 실행 취소·다시 실행·전체 삭제) — 고급 옵션은 **접혀 있고** 기본값이 아닌 것만 표시
+- **배치 프리셋 한 줄** `→ Row · ↓ Column · ▦ 2 · ▦ 3 · ▦ 4` 클릭 한 번, 오른쪽 `image_N ⇢`는 이미지별 개별 출력 켜기/끄기
 - 이미지별 **Crop / 90° Rotate / Flip H / Flip V**
 - Free Crop용 **상/하/좌/우 + 모서리 핸들**
 - **Strip / Grid** 레이아웃
@@ -37,7 +38,7 @@
 - 노드 내부 **최종 합성 미리보기** (Queue 전에 실제 배치 확인)
 - 출력 크기 옵션: **`output_limit`**, Grid **셀 크기 고정**
 - **IMAGE 입력 여러 개**(`images`, `images_2`…) — 들어오는 그림이 노드 안에 카드·미리보기로 보이고, 제목줄 **`▶ Inputs`** 로 앞쪽 노드(Crop Head 등)만 실행해 미리 확인 + 개별 **`cells`** 출력
-- **↶ / ↷ 실행 취소·다시 실행**
+- **실행 취소·다시 실행** (툴바 `⋯`)
 - 이미지 수에 맞춰 **아래로 늘어나는 목록** (스크롤 없음)
 - 파일이 사라진 이미지 **재연결** (Crop·순서 유지)
 - 초대형 결과 생성 전 **Output Size Safety Guard**
@@ -57,12 +58,13 @@
 
 ## 최근 변경
 
-### 1.14에서 달라진 점
+### 1.15에서 달라진 점
 
-- **페인트 브러시** — 편집기의 `◍ Blur` 옆 **`✎ Paint`** 탭에서 사진 위에 색을 칠합니다. **불투명하게 칠하면 가리기**(얼굴, 번호판, 모델이 바꿔야 할 부분), **반투명하게 칠하면 표시**(고칠 곳을 동그라미로 둘러싸기)입니다. 두께·투명도·색(회색, 흰색, 검정, 빨강, 초록, 노랑, 그리고 아무 색)을 고르고, `Ctrl+Z`로 마지막 스트로크를 취소하며 `Clear paint`로 전부 지웁니다.
-- 스트로크마다 **색과 투명도가 따로 저장**되므로 한 장에 회색 덮개와 빨간 동그라미를 함께 둘 수 있습니다. 스트로크 하나는 하나의 모양이라, 자기 자신을 가로질러도 겹친 곳이 더 진해지지 않고 다른 스트로크가 겹칠 때만 진해집니다.
-- 블러처럼 **좌표로 저장되어 원본은 그대로**이고, 카드·미리보기·`⧉ Copy`·갤러리·스티치 결과(`cells`, `image_N` 포함)에 모두 반영됩니다. 카드에는 ✎ 표시가 붙고, 블러와 함께 있으면 블러 위에 칠해집니다.
-- **고쳤습니다 (블러에도 해당)** — ① 블러·페인트만 다른 구성이 갤러리에서 같은 항목 하나로 합쳐져 처음 기록한 쪽만 남았습니다. ② 카드 여러 장을 한꺼번에 회전·뒤집으면 크롭만 따라가고 블러 위치는 제자리에 남았습니다. ③ 블러·페인트를 바꾼 뒤 `⧉ Copy`를 다시 누르면 바꾸기 전에 만든 이미지가 복사됐습니다.
+- **배치 프리셋 줄** — 툴바 아래 `→ Row · ↓ Column · ▦ 2 · ▦ 3 · ▦ 4` 중 하나를 누르면 방향·배치·열 수가 한 번에 맞춰집니다. 지금 설정과 같은 칩은 초록색으로 켜지고, 위젯은 그대로 있어서 세밀한 설정(왼쪽 방향, 5열 이상, 목표 비율)도 전처럼 쓸 수 있습니다.
+- **`image_N ⇢`** — 프리셋 줄 오른쪽 칩으로, 이미지를 한 장씩 따로 내보내는 `output_cells`를 Options를 열지 않고 켜고 끕니다. 개별 출력은 **`image_10`까지** 늘었습니다(Qwen-Image 2.1 편집 템플릿의 참조 10장).
+- **툴바 정리** — `Clear · ↶ · ↷`가 **`⋯`** 메뉴로 들어갔습니다(실수로 누르기 쉬운 전체 삭제가 한 단계 안쪽으로). 툴바는 `+ Add · ⧉ Copy · Preview · Options · ⋯`입니다.
+- **Paint 빠른 버튼** — 편집기 Paint 탭의 **`■ Cover`**(불투명 회색)와 **`○ Mark`**(반투명 빨강)가 색과 투명도를 한 번에 맞춥니다.
+- Vue(Nodes 2.0) 모드에도 같은 프리셋 줄과 `⋯` 메뉴가 있고, 빈 노드 안내에 카드 조작법도 함께 나옵니다.
 
 이전 버전의 변경 내역은 [CHANGELOG.md](CHANGELOG.md)에 있습니다.
 
@@ -166,7 +168,7 @@ git pull
 - **크기 표시**: 헤더가 `1080 × 1920 → 792 × 1411`처럼 **원본 크기와 지금 Crop의 크기**를 드래그하는 동안 계속 보여 줍니다
 - **`‹` `›` 또는 좌우 방향키**: 편집기를 닫지 않고 다음/이전 이미지로. 바꾼 게 있을 때만 저장됩니다
 - **`◍ Blur` 탭**: 드래그해서 블러 칠하기. **Brush**=두께, **Blur**=강도, `Ctrl+Z`=마지막 스트로크 취소, `Clear blur`=전체 삭제. Crop·회전과 마찬가지로 좌표로 저장되어 원본은 그대로입니다
-- **`✎ Paint` 탭**: 드래그해서 색 칠하기. **Brush**=두께, **Opacity**=투명도, 색 견본(회색·흰색·검정·빨강·초록·노랑)과 색 선택기, `Ctrl+Z`=마지막 스트로크 취소, `Clear paint`=전체 삭제. **불투명하게 칠하면 가리기, 반투명하게 칠하면 표시**입니다. 스트로크마다 색과 투명도가 따로 저장되고, 블러와 같은 좌표 방식이라 원본은 그대로이며 블러 위에 칠해집니다
+- **`✎ Paint` 탭**: 드래그해서 색 칠하기. `■ Cover`(불투명 회색)·`○ Mark`(반투명 빨강) 한 번에 설정, **Brush**=두께, **Opacity**=투명도, 색 견본(회색·흰색·검정·빨강·초록·노랑)과 색 선택기, `Ctrl+Z`=마지막 스트로크 취소, `Clear paint`=전체 삭제. **불투명하게 칠하면 가리기, 반투명하게 칠하면 표시**입니다. 스트로크마다 색과 투명도가 따로 저장되고, 블러와 같은 좌표 방식이라 원본은 그대로이며 블러 위에 칠해집니다
 - **우클릭**: `Copy crop to clipboard`(Crop된 부분만 원본 해상도로) / `Copy whole image to clipboard` — 편집기의 격자나 테두리는 복사되지 않습니다
 - **확대 / 이동**: 휠(포인터 기준 확대), `+ / − / Fit` 버튼, 키보드 `+ / - / 0`. 이동은 **휠 버튼 드래그** 또는 **Space + 좌클릭 드래그**. 최대 16배까지 확대되며, 확대하면 핸들이 잡는 범위와 최소 Crop 크기도 함께 작아져 픽셀 단위로 다듬을 수 있습니다.
 
@@ -255,7 +257,7 @@ grid_columns = 3
 
 ## 미리보기 · 목록 · 편집 이력
 
-**툴바와 Options** — 위젯 아래 한 줄에 `+ Add · Clear · ⧉ Copy · ↶ ↷ · Preview · Options`가 있고, 버튼용 위젯 행은 없습니다. 자주 쓰지 않는 옵션(`output_limit` 이후: 출력 제한, Grid 셀 크기, `output_cells`, `cells_resolution`, `minimum_image_side`, `match_reference`)은 **`Options ▸`를 눌러야 보입니다**. 단 **기본값이 아닌 값은 접혀 있어도 항상 표시**되고 `Options ▸ (2)`처럼 개수를 알려 주므로, 숨은 설정이 몰래 결과를 바꾸는 일은 없습니다. 접힘 여부는 워크플로우에 저장됩니다. 기본 상태의 위젯은 `direction`, `match_image_size`, `spacing_width`, `spacing_color`, `layout_mode`(Grid면 `grid_columns`) 다섯 개입니다.
+**툴바와 Options** — 위젯 아래 한 줄에 `+ Add · ⧉ Copy · Preview · Options · ⋯`가 있고, 버튼용 위젯 행은 없습니다. `⋯`에는 실행 취소·다시 실행·`Clear all images`가 들어 있습니다. 그 아래 **프리셋 줄**의 `→ Row · ↓ Column · ▦ 2 · ▦ 3 · ▦ 4`는 `layout_mode`·`direction`·`grid_columns`를 한 번에 맞추고, 지금 위젯 값과 같은 칩이 초록색으로 켜집니다(왼쪽 방향, 5열 등 어느 칩과도 다르면 아무것도 켜지지 않고 위젯 값이 그대로 쓰입니다). 오른쪽 `image_N ⇢`는 `output_cells`를 켜고 끕니다. 자주 쓰지 않는 옵션(`output_limit` 이후: 출력 제한, Grid 셀 크기, `output_cells`, `cells_resolution`, `minimum_image_side`, `match_reference`)은 **`Options ▸`를 눌러야 보입니다**. 단 **기본값이 아닌 값은 접혀 있어도 항상 표시**되고 `Options ▸ (2)`처럼 개수를 알려 주므로, 숨은 설정이 몰래 결과를 바꾸는 일은 없습니다. 접힘 여부는 워크플로우에 저장됩니다. 기본 상태의 위젯은 `direction`, `match_image_size`, `spacing_width`, `spacing_color`, `layout_mode`(Grid면 `grid_columns`) 다섯 개입니다.
 
 **갤러리** — 제목 표시줄의 **`🖼`**(물음표 왼쪽, `📐 Size` 옆)을 누르면 이 노드로 스티치했던 구성이 미리보기와 함께 나옵니다. 한 번 실행할 때마다 이미지 목록·Crop·순서·설정이 한 항목으로 기록되고, 같은 구성을 또 실행하면 항목은 하나로 유지된 채 사용 횟수만 올라갑니다. **같은 구성인지는 파일 이름이 아니라 이미지 내용(크기 + 해시)으로 판단**하므로, 같은 사진을 다시 붙여넣어 새 파일로 올라가도 항목이 두 개로 늘지 않습니다. 대신 중복된 파일이 어느 항목에서도 안 쓰이게 되어 `Clean up unused files…`로 정리할 수 있습니다. (한 구성 안에서 같은 사진을 **일부러 두 장** 쓴 것은 그대로 두 장으로 셉니다.)
 
@@ -277,7 +279,7 @@ grid_columns = 3
 
 **목록 높이** — 썸네일 목록은 이미지 수만큼 노드가 아래로 늘어나 모든 카드가 항상 보입니다. 스크롤바는 없고 높이는 자동으로 정해지며, 노드는 가로 폭만 조절할 수 있습니다.
 
-**실행 취소 / 다시 실행** — 툴바의 **`↶` / `↷`** 버튼이 추가·삭제·순서 변경·Crop/회전 편집·교체·Clear를 되돌립니다(최근 50단계, 노드가 열려 있는 동안 유지, 워크플로우를 다시 열면 초기화). ComfyUI 자체의 Ctrl+Z와는 별개입니다.
+**실행 취소 / 다시 실행** — 툴바 **`⋯`** 메뉴의 `↶ Undo` / `↷ Redo`가 추가·삭제·순서 변경·Crop/회전 편집·교체·Clear를 되돌립니다(최근 50단계, 노드가 열려 있는 동안 유지, 워크플로우를 다시 열면 초기화). ComfyUI 자체의 Ctrl+Z와는 별개입니다.
 
 **누락 이미지 교체** — 워크플로우를 옮겨 원본 파일이 없으면 카드에 `Cannot preview here` 또는 `Missing · click to relink`가 표시됩니다. 30초 안에 로드되지 않으면 `Timed out · click to retry`가 되고, 한 번 더 시도한 뒤에도 실패하면 재연결을 권합니다. 브라우저가 못 읽는 형식(TIFF·PSD·HEIC)은 서버에서는 정상 스티치되므로 그렇게 안내합니다. 카드를 클릭(또는 우클릭 → `Replace image #N…`)해 새 파일을 고르면 **Crop·회전·반전·순서를 유지한 채** 파일만 바뀝니다. 이 교체도 실행 취소할 수 있습니다.
 
@@ -285,7 +287,7 @@ grid_columns = 3
 
 - 선택 입력 **`images`**, **`images_2` … `images_8`** (IMAGE, 하나를 연결하면 다음 단자가 열림): 연결된 배치의 프레임들이 입력 순서대로 붙여넣은 이미지 **뒤에** 추가됩니다. 생성/업스케일 결과를 저장·재업로드 없이 바로 합칠 수 있고, 붙여넣은 이미지 없이 배치만 연결하면 "배치 → 그리드" 노드로도 씁니다. RGBA 프레임은 배경색 위에 합성되고 1채널은 RGB로 확장됩니다. 들어오는 그림은 청록색 입력 카드와 미리보기에 표시됩니다 — Load Image를 바로 연결하면 즉시, 계산이 필요한 노드를 거치면 한 번 실행한 뒤부터(1.12). **`▶ Inputs`** 는 앞쪽 노드와 이 노드만 실행해서 그 그림을 가져옵니다(1.13). 붙여넣은 이미지 + 프레임 합계가 256장 상한이고, 각 프레임에도 원본 1장 크기 한도가 적용됩니다. 프레임은 자기 차례에만 CPU float32로 변환되므로 GPU 배치를 연결해도 한꺼번에 복사되지 않습니다.
 - 출력 **`image`**: 합성 결과. 출력 **`cells`**: `output_cells = true`일 때 이미지마다 한 프레임씩, **같은 크기의 셀** 가운데에 배경색으로 패딩한 배치 `[N, H, W, 3]`입니다. 얼굴 클로즈업처럼 개별 참조를 따로 넘길 때 씁니다. `false`면 `image`와 같은 텐서를 내보내 출력이 비지 않습니다. 셀 배치 전체에도 같은 크기 안전 한도가 적용되며, 이 검사는 디코딩 전에 끝납니다.
-- 출력 **`image_1` … `image_8`** (`output_cells`를 켜면 생깁니다): 이미지를 **한 장씩 따로** 꺼냅니다. 레퍼런스를 한 장씩 받아야 하는 모델에 바로 연결할 수 있습니다. 노드에는 가지고 있는 그림 수만큼만 보이고(들어올 그림이 아직 계산 전이면 8개 전부), **연결된 단자는 절대 사라지지 않습니다.** `cells` 배치와 달리 **여백이 붙지 않아서** `image_2`는 합성 결과에서 가지는 크기 그대로(`cells_resolution = source`면 원본 크기) 나옵니다. 그림 수보다 뒤쪽 단자는 1픽셀 검정 이미지를 냅니다(빈 값이 흘러가면 엉뚱한 노드에서 터지기 때문입니다). 새 단자는 `image`·`cells`·`width`·`height` **뒤**에 붙어서 기존 워크플로우의 연결이 밀리지 않습니다.
+- 출력 **`image_1` … `image_10`** (`output_cells`를 켜면 생깁니다): 이미지를 **한 장씩 따로** 꺼냅니다. 레퍼런스를 한 장씩 받아야 하는 모델에 바로 연결할 수 있습니다. 노드에는 가지고 있는 그림 수만큼만 보이고(들어올 그림이 아직 계산 전이면 10개 전부), **연결된 단자는 절대 사라지지 않습니다.** `cells` 배치와 달리 **여백이 붙지 않아서** `image_2`는 합성 결과에서 가지는 크기 그대로(`cells_resolution = source`면 원본 크기) 나옵니다. 그림 수보다 뒤쪽 단자는 1픽셀 검정 이미지를 냅니다(빈 값이 흘러가면 엉뚱한 노드에서 터지기 때문입니다). 새 단자는 `image`·`cells`·`width`·`height` **뒤**에 붙어서 기존 워크플로우의 연결이 밀리지 않습니다.
 - **`cells_resolution`** (`output_cells`가 켜져 있을 때 표시): `placed`(기본)는 합성 결과에 놓인 크기 그대로, 셀은 가장 큰 배치 크기입니다. `source`는 **리사이즈 전 원본(Crop 적용) 크기**로 넣고 셀은 가장 큰 원본 크기가 됩니다 — 합성본은 작게 만들면서 개별 참조는 원본 해상도로 받고 싶을 때 씁니다. 이미지별 파일이 필요하면 `cells` 배치를 배치 분리 노드로 나누세요.
 
 ## 파라미터
@@ -407,13 +409,14 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 - **`⧉ Copy` button → the stitched result on the clipboard without queueing**
 - **Capture frames from a video** — find the moment frame by frame, add it as a native-resolution PNG; the video takes no storage, and the server (PyAV) decodes codecs the browser cannot
 - **Gallery** — every composition a run stitches is recorded with a preview and can be loaded back into a node; it also shows what the image folder holds and clears what nothing uses
-- **A socket per image** — `output_cells` also fills `image_1`…`image_8`, one picture each, unpadded
+- **A socket per image** — `output_cells` also fills `image_1`…`image_10`, one picture each, unpadded
 - **Duplicate an image** — the card menu adds the same file once more, right after it, croppable and rotatable on its own
 - **Pixel size on every card** — and what a crop leaves of it, counted live in the editor while you drag
 - **Blur brush** — paint over a face or a plate in the editor; adjustable width and strength, stored as coordinates, source untouched
 - **Paint brush** — lay a colour over part of a picture: opaque to cover it, faint to mark it; adjustable width, opacity and colour, each stroke keeps its own, source untouched
 - **Reference-image size outputs** — `width`/`height` outputs and a size panel: the reference image's size rescaled to a megapixel target and snapped to a multiple (32 by default)
-- One toolbar row `+ Add · Clear · ⧉ Copy · ↶ ↷ · Preview · Options` — advanced options stay **folded**, only non-default ones show
+- One toolbar row `+ Add · ⧉ Copy · Preview · Options · ⋯` (⋯ holds undo, redo and Clear) — advanced options stay **folded**, only non-default ones show
+- **A layout preset row** `→ Row · ↓ Column · ▦ 2 · ▦ 3 · ▦ 4`, a click each, and `image_N ⇢` on the right to hand every image out on its own socket
 - Per-image **Crop / 90° Rotate / Flip H / Flip V**
 - **Top / bottom / left / right + corner handles** for Free Crop
 - **Strip / Grid** layouts
@@ -425,7 +428,7 @@ Workflow를 다른 PC로 옮길 경우 참조된 입력 이미지도 같이 옮�
 - **Composite preview** inside the node — the real layout before you queue
 - Output size options: **`output_limit`** and a fixed Grid **cell size**
 - **Several IMAGE inputs** (`images`, `images_2`…) — what arrives shows on the node as cards and in the preview, and **`▶ Inputs`** in the title bar runs just the nodes feeding them (a Crop Head, say) to check ahead — plus a per-image **`cells`** output
-- **↶ / ↷ undo and redo**
+- **Undo and redo** (the toolbar's `⋯`)
 - A list that **grows downward** with the images (no scrolling)
 - **Relink** an image whose file went missing, keeping its crop and order
 - **Output Size Safety Guard** before giant tensors are allocated
@@ -445,12 +448,13 @@ Ready-made examples are under Templates → `Comfyui-Image-Stitch` in the sideba
 
 ## Recent changes
 
-### What changed in 1.14
+### What changed in 1.15
 
-- **Paint brush** — **`✎ Paint`**, beside `◍ Blur` in the editor, lays a colour over part of the picture. **Opaque, it covers** (a face, a plate, the part a model should replace); **faint, it marks** (a circle round what an edit should change). Pick the width, the opacity and the colour (grey, white, black, red, green, yellow, or any other); `Ctrl+Z` takes back a stroke and `Clear paint` removes them all.
-- **Every stroke keeps its own colour and opacity**, so one picture can hold a grey cover and a red circle. A stroke is one shape: a path that crosses itself is not darker where it does, a second stroke over it is.
-- Stored as coordinates like the blur, so **the source file is never modified**, and shown everywhere the picture is: the cards, the preview, `⧉ Copy`, the gallery and the stitched result (`cells` and `image_N` included). The card gets a ✎ badge; with a blur as well, the paint goes on top of it.
-- **Fixed, and it applied to the blur too** — (1) compositions that differed only by their blur or paint were one gallery entry, and only the first recorded was kept; (2) turning or flipping several cards at once moved the crop but left the blur where it was; (3) `⧉ Copy` after changing a blur or paint copied the image made before the change.
+- **A layout preset row** — under the toolbar, `→ Row · ↓ Column · ▦ 2 · ▦ 3 · ▦ 4` set the direction, the layout and the column count in one click. The chip the widgets match is lit, and the widgets stay, so anything finer (a strip to the left, five columns, a target shape) works as before.
+- **`image_N ⇢`** — the chip on the right of that row switches `output_cells`, every image on a socket of its own, without opening Options. The separate outputs now go up to **`image_10`** (the ten references Qwen-Image 2.1's edit templates wire).
+- **A shorter toolbar** — `Clear · ↶ · ↷` moved behind **`⋯`** (the easiest one to regret is a click further away). The row is `+ Add · ⧉ Copy · Preview · Options · ⋯`.
+- **Paint presets** — **`■ Cover`** (opaque grey) and **`○ Mark`** (faint red) in the editor's Paint tab set the colour and the opacity in one click.
+- The Vue (Nodes 2.0) mode has the same preset row and `⋯` menu, and its empty-node hint now also says how to work the cards.
 
 Earlier changes are in [CHANGELOG.md](CHANGELOG.md).
 
@@ -552,7 +556,7 @@ Single-click the thumbnail image area to open the editor.
 - **The size, live**: the header shows the image's size and what the crop leaves of it — `1080 × 1920 → 792 × 1411` — updated while the crop is dragged
 - **`‹` `›` or the arrow keys**: move to the next or previous image without closing the editor; the edit is kept only where you made one
 - **`◍ Blur` tab**: drag to paint a blur. **Brush** is the width, **Blur** the strength, `Ctrl+Z` takes back a stroke, `Clear blur` removes them all. Stored as coordinates like the crop, so the source file is never modified
-- **`✎ Paint` tab**: drag to lay a colour on the picture. **Brush** is the width, **Opacity** how much of the picture shows through, then six colour swatches (grey, white, black, red, green, yellow) and a colour input for any other; `Ctrl+Z` takes back a stroke, `Clear paint` removes them all. **Opaque covers, faint marks.** Every stroke keeps its own colour and opacity; stored as coordinates like the blur, so the source file is never modified, and laid over the blur
+- **`✎ Paint` tab**: drag to lay a colour on the picture. `■ Cover` (opaque grey) and `○ Mark` (faint red) set both in one click; **Brush** is the width, **Opacity** how much of the picture shows through, then six colour swatches (grey, white, black, red, green, yellow) and a colour input for any other; `Ctrl+Z` takes back a stroke, `Clear paint` removes them all. **Opaque covers, faint marks.** Every stroke keeps its own colour and opacity; stored as coordinates like the blur, so the source file is never modified, and laid over the blur
 - **Right-click**: `Copy crop to clipboard` (the crop alone, at full resolution) or `Copy whole image to clipboard` — never the grid and outline drawn over the picture
 - **Zoom and pan**: the wheel zooms around the pointer, `+ / − / Fit` and the keys `+ / - / 0` do the same from the keyboard. Pan with a **middle-button drag** or **space held with the left button**. Up to 16×, and zooming in shrinks the grab areas and the minimum crop with it, so a crop can be trimmed to the pixel.
 
@@ -640,7 +644,7 @@ The outputs are meant for an `Empty Latent Image` or a resize node. The **`📐 
 
 ## Preview · list · edit history
 
-**Toolbar and Options** — one row under the widgets holds `+ Add · Clear · ⧉ Copy · ↶ ↷ · Preview · Options`; no widget rows are spent on buttons. The options most workflows never touch (everything from `output_limit` on: the output cap, Grid cell size, `output_cells`, `cells_resolution`, `minimum_image_side`, `match_reference`) appear only after **`Options ▸`** is clicked. Any of them holding a **non-default value stays visible even when folded**, and the pill counts them (`Options ▸ (2)`), so a hidden setting can never quietly change the output. The fold state is saved with the workflow. A node in its default state shows five widgets: `direction`, `match_image_size`, `spacing_width`, `spacing_color`, `layout_mode` (plus `grid_columns` for Grid).
+**Toolbar and Options** — one row under the widgets holds `+ Add · ⧉ Copy · Preview · Options · ⋯`; no widget rows are spent on buttons. `⋯` holds undo, redo and `Clear all images`. Under it, the **preset row**'s `→ Row · ↓ Column · ▦ 2 · ▦ 3 · ▦ 4` set `layout_mode`, `direction` and `grid_columns` in one click, and the chip the widgets match is lit (a strip to the left or five columns matches none, and the widgets are used as they are). `image_N ⇢` on the right switches `output_cells`. The options most workflows never touch (everything from `output_limit` on: the output cap, Grid cell size, `output_cells`, `cells_resolution`, `minimum_image_side`, `match_reference`) appear only after **`Options ▸`** is clicked. Any of them holding a **non-default value stays visible even when folded**, and the pill counts them (`Options ▸ (2)`), so a hidden setting can never quietly change the output. The fold state is saved with the workflow. A node in its default state shows five widgets: `direction`, `match_image_size`, `spacing_width`, `spacing_color`, `layout_mode` (plus `grid_columns` for Grid).
 
 **Composite preview** — the band above the thumbnails shows the real arrangement (Strip/Grid, direction, spacing, background colour, output cap) scaled down. It uses the **same layout maths** as the backend (`_layout` ↔ `layoutPlacements`), compared pixel for pixel in CI, so what you see before queueing is what you get. The **`Preview`** button in the toolbar toggles it (saved with the workflow); an image that is still loading or missing shows as a `?` placeholder. It normally draws the 512px thumbnails; once the canvas zoom or a HiDPI screen would stretch them, the composite is **redrawn from the original files** (within 2048px on the long side and 4 MP, one cached bitmap per node) so it stays sharp. A layout or image change re-renders it, with the thumbnail version shown meanwhile. Every reduction halves in steps, so thumbnails, the preview and the copied result are free of aliasing.
 
@@ -648,7 +652,7 @@ The outputs are meant for an `Empty Latent Image` or a resize node. The **`📐 
 
 **List height** — the thumbnail list grows the node downward so every card is always visible. There is no scrollbar; the height is automatic and only the width can be resized.
 
-**Undo / redo** — the **`↶` / `↷`** buttons in the toolbar step through adds, removals, reorders, crop/rotation edits, replacements and Clear (the last 50 steps, kept while the node is open, reset when a workflow is reopened). Independent of ComfyUI's own Ctrl+Z.
+**Undo / redo** — `↶ Undo` / `↷ Redo` in the toolbar's **`⋯`** menu step through adds, removals, reorders, crop/rotation edits, replacements and Clear (the last 50 steps, kept while the node is open, reset when a workflow is reopened). Independent of ComfyUI's own Ctrl+Z.
 
 **Relink a missing image** — when a workflow moves and a source file is gone, its card reads `Cannot preview here` or `Missing · click to relink`. A file that does not load within 30 seconds reads `Timed out · click to retry` and is retried once before relinking is offered; a format the browser cannot read (TIFF, PSD, HEIC) says so, since the server stitches it fine. Click the card (or right-click → `Replace image #N…`) and pick a file: only the file changes; **crop, rotation, flip and position are kept**. The replacement is undoable too.
 
@@ -656,7 +660,7 @@ The outputs are meant for an `Empty Latent Image` or a resize node. The **`📐 
 
 - Optional inputs **`images`**, **`images_2` … `images_8`** (IMAGE; connecting one opens the next): frames of each connected batch are appended, input by input, **after** the pasted images, so a generated or upscaled result is stitched without saving and re-adding it — with nothing pasted, the node works as a batch-to-grid tool. RGBA frames are composited onto the background colour; single-channel frames are expanded to RGB. What comes in shows as teal input cards and in the preview — straight away from a Load Image connected directly, after one run from anything that has to compute first (1.12). **`▶ Inputs`** runs just the nodes feeding this one, and this one, to fetch them (1.13). Pasted images plus frames share the 256 cap, and each frame is held to the same per-image size limit. A frame is converted to CPU float32 only when its turn comes, so a GPU batch is not copied wholesale.
 - Output **`image`**: the stitched result. Output **`cells`**: with `output_cells = true`, one frame per image, each centred in a **uniform cell** and padded with the background colour, as a batch `[N, H, W, 3]` — for passing individual references, such as a face close-up, on their own. With it off, `cells` is the same tensor as `image`, so the output is never empty. The cells batch is subject to the same size safety limit, checked before anything is decoded.
-- Outputs **`image_1` … `image_8`** (they appear when `output_cells` is on): every picture **on a socket of its own**, for a model that wants its references one at a time. The node shows as many as it holds pictures (all eight while an input's pictures are not known yet), and **a wired socket never disappears**. Unlike the `cells` batch they carry **no padding**: `image_2` is image 2 at the size it has in the stitched result (its own size with `cells_resolution = source`). A socket past the end of the list answers with one black pixel, since a `None` travelling down a link fails far from here. The new sockets come **after** `image`, `cells`, `width` and `height`, so no saved workflow's links shift.
+- Outputs **`image_1` … `image_10`** (they appear when `output_cells` is on): every picture **on a socket of its own**, for a model that wants its references one at a time. The node shows as many as it holds pictures (all ten while an input's pictures are not known yet), and **a wired socket never disappears**. Unlike the `cells` batch they carry **no padding**: `image_2` is image 2 at the size it has in the stitched result (its own size with `cells_resolution = source`). A socket past the end of the list answers with one black pixel, since a `None` travelling down a link fails far from here. The new sockets come **after** `image`, `cells`, `width` and `height`, so no saved workflow's links shift.
 - **`cells_resolution`** (shown while `output_cells` is on): `placed` (default) uses each image at the size it occupies in the composite, in a cell of the largest placed size. `source` uses the **cropped original before any resize**, in a cell of the largest source size — for a small composite alongside full-resolution individual references. For one file per image, split the `cells` batch with a batch-splitting node.
 
 ## Parameters

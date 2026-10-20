@@ -64,9 +64,9 @@ _COLOR_MAP = {
 # How many images can come out on their own sockets. A node cannot grow its
 # outputs per workflow — RETURN_TYPES is read once, for the node type — so the
 # sockets exist up to here and the frontend shows only as many as there are
-# images. Nine is what MiniMax H3 accepts as references; eight plus the
-# stitched image is the same handful.
-_MAX_SEPARATE = 8
+# images. Ten is what Qwen-Image 2.1's edit templates wire as references
+# (image_1 … image_10); MiniMax H3's nine fit inside it.
+_MAX_SEPARATE = 10
 # How many IMAGE inputs the node can take. The first keeps its old name,
 # "images", so saved links still land; the rest are images_2, images_3… and
 # the UI shows one spare socket past the last one connected.
